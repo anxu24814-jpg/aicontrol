@@ -1,0 +1,20 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#000000"
+    },
+    {
+      "name": "chat_bubble_user",
+      "value": "#3A5A94"
+    },
+    {
+      "name": "page_bg",
+      "value": "#121212"
+    },
+    {
+      "name": "comp_fallback_gray",
+      "value": "#3A3A3C"
+    }
+  ]
+}

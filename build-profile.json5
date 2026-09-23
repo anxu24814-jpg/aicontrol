@@ -1,0 +1,46 @@
+{
+  "app": {
+    // 公开版占位：本仓库不包含任何签名材料。
+    // 请用 DevEco Studio 打开工程后，在 File → Project Structure → Signing Configs
+    // 勾选「Automatically generate signature」生成自己的调试签名（需登录华为开发者账号），
+    // 发布签名请在 AGC 申请证书与 Profile 后自行配置。
+    // ★ 替代件来源：scripts/public-overrides/build-profile.json5（该目录不进公开仓）。
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "targetSdkVersion": "26.0.0",
+        "compatibleSdkVersion": "26.0.0",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

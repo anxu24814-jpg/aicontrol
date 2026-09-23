@@ -1,0 +1,11 @@
+{
+  "app": {
+    "bundleName": "com.jueming.aicontrol.chat",
+    "vendor": "jueming",
+    "versionCode": 1006000,
+    "versionName": "1.6.0",
+    "buildVersion": "1",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "apiType": "stageMode",
+  "buildOption": {
+    "resOptions": {
+      "copyCodeResource": {
+        "enable": false
+      }
+    },
+    // 双渲染 so 去重（2026-09-02 自试验副本移植，副本两轮真机实证）：markdown_hybrid@1.3.6
+    // 与 @lidary 传递依赖 formula_hybrid@1.3.2 各带仓颉 runtime so——五对同名不同版
+    //（libcangjie-runtime/std-core/ohos.ark_interop/ohos.base + liblatex，md5 实证），
+    // 00306049 规格违例。★ 一轮教训（真机 hilog 实锤）：排除「runtime 整目录」误杀
+    // markdown 侧独有依赖（libohos.component + std-sync/regex/collection/convert/sort/math
+    // 整套仓颉标准库）→ libmarkdown.so 装载失败 → 正文空白。二轮收窄 = 只排五对真重名
+    // 文件，独有 so 全保留；正文空白排查锚 = hilog 搜 `CJ-RUNTIME: load cj library failed`
+    "nativeLib": {
+      "filter": {
+        "select": [
+          {
+            "package": "@cangjie-tpc/markdown_hybrid",
+            "excludePattern": [
+              "**/runtime/libcangjie-runtime.so",
+              "**/runtime/libcangjie-std-core.so",
+              "**/runtime/libohos.ark_interop.so",
+              "**/runtime/libohos.base.so",
+              "**/liblatex.so"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "buildOptionSet": [
+    {
+      "name": "release",
+      "arkOptions": {
+        "obfuscation": {
+          "ruleOptions": {
+            "enable": false,
+            "files": [
+              "./obfuscation-rules.txt"
+            ]
+          }
+        }
+      }
+    },
+  ],
+  "targets": [
+    {
+      "name": "default"
+    },
+    {
+      "name": "ohosTest",
+    }
+  ]
+}

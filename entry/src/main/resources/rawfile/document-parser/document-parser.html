@@ -1,0 +1,516 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Document Parser</title>
+  <script src="./jszip.min.js"></script>
+  <script src="./xlsx.full.min.js"></script>
+  <script src="./mammoth.browser.min.js"></script>
+  <script src="./pdf.min.js"></script>
+</head>
+<body>
+<script>
+  (function () {
+    const MAX_PDF_PAGES = 200;
+    const MAX_OFD_XML_FILES = 500;
+    // ── PDF 页渲染（2026-09-15 附件 PDF 页渲染一期）──
+    // 页图长边（px）：与 ArkTS 侧 DocumentParse.PAGE_IMAGE_LONG_EDGE_PX 同值（两处各一份，
+    // 注释互指）——本处只作渲染参数，扫描件判据不看它；页数上限由 ArkTS 传入（renderPages
+    // 的 maxPages 入参），桥页不另设第二常量（防两处漂移）
+    const PAGE_IMAGE_LONG_EDGE_PX = 1600;
+    // 页图 JPEG 质量（canvas.toDataURL 口径 0~1）
+    const PAGE_IMAGE_JPEG_QUALITY = 0.8;
+    let currentTask = null;
+    let chunks = [];
+    let currentResult = "";
+    let isParsing = false;
+    let parseToken = 0;
+    // 解析期留存的 PDF 文档句柄（渲染复用；start / cancel / clearPages 三处收口销毁）
+    let pdfDoc = null;
+    // 已渲染页图（裸 base64，元素 = 页序；不跨任务留存）
+    let renderedPages = [];
+    let renderDone = false;
+    let renderError = "";
+
+    function extensionOf(fileName) {
+      const index = fileName.lastIndexOf(".");
+      return index >= 0 ? fileName.substring(index).toLowerCase() : "";
+    }
+
+    function bytesFromBase64(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function truncateText(text, maxChars) {
+      if (!text) {
+        return { text: "", truncated: false };
+      }
+      if (text.length <= maxChars) {
+        return { text, truncated: false };
+      }
+      return {
+        text: text.substring(0, maxChars) + "\n\n[内容已截断，仅包含前 " + maxChars + " 个字符]",
+        truncated: true
+      };
+    }
+
+    function success(engine, text, task, warning, pageStats) {
+      const truncated = truncateText(text, task.maxChars || 120000);
+      const payload = {
+        success: true,
+        engine,
+        text: truncated.text,
+        warning: warning || "",
+        truncated: truncated.truncated
+      };
+      // 页统计（仅 PDF 引擎产出；docx/xlsx/ofd 不带这三字段——缺省不炸，ArkTS 侧 ?? 0 兜底）
+      // pageCount = pdf.numPages 全量页数（非 MAX_PDF_PAGES 抽取上限）；
+      // textChars = 纯正文长度（逐行 line.length 求和，不含 "---\nPage N:\n" 页标记——
+      // 标记每页约 12 字符固定开销，吃 text.length 会把扫描件判据顶穿）；
+      // textPages = 实际抽取页数（= min(numPages, MAX_PDF_PAGES)）——★ 扫描件判据的分母
+      //（2026-09-15 收口笔：判据原拿全量页数当分母，>200 页文档的正文只累加了前 200 页，
+      // 计算页均被摊薄 → 文字型长文档误判扫描件、白渲 30 页图）
+      if (pageStats) {
+        payload.pageCount = pageStats.pageCount;
+        payload.textChars = pageStats.textChars;
+        payload.textPages = pageStats.textPages;
+      }
+      return JSON.stringify(payload);
+    }
+
+    function failure(engine, error) {
+      const message = error && error.message ? error.message : String(error || "unknown_error");
+      return JSON.stringify({
+        success: false,
+        engine,
+        error: message
+      });
+    }
+
+    function normalizeCellValue(value) {
+      if (value === undefined || value === null) {
+        return "";
+      }
+      return String(value).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    }
+
+    function worksheetToMarkdown(name, worksheet) {
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, blankrows: false });
+      const lines = ["## Sheet: " + name, ""];
+      const maxRows = Math.min(rows.length, 10000);
+      for (let r = 0; r < maxRows; r++) {
+        const row = rows[r] || [];
+        const values = [];
+        for (let c = 0; c < row.length; c++) {
+          values.push(normalizeCellValue(row[c]).replace(/\|/g, "\\|"));
+        }
+        if (values.join("").trim() !== "") {
+          lines.push("| " + values.join(" | ") + " |");
+        }
+      }
+      if (rows.length > maxRows) {
+        lines.push("");
+        lines.push("[Sheet 行数过多，仅解析前 " + maxRows + " 行]");
+      }
+      return lines.join("\n");
+    }
+
+    function ensureActive(token) {
+      if (token !== parseToken) {
+        throw new Error("canceled");
+      }
+    }
+
+    function parseWorkbook(bytes, task, token) {
+      ensureActive(token);
+      const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
+      ensureActive(token);
+      const sheetNames = workbook.SheetNames || [];
+      const maxSheets = Math.min(sheetNames.length, 20);
+      const sections = [];
+      for (let i = 0; i < maxSheets; i++) {
+        ensureActive(token);
+        const name = sheetNames[i];
+        sections.push(worksheetToMarkdown(name, workbook.Sheets[name]));
+      }
+      let warning = "";
+      if (sheetNames.length > maxSheets) {
+        warning = "工作表数量过多，仅解析前 " + maxSheets + " 个";
+      }
+      return success("sheetjs", sections.join("\n\n"), task, warning);
+    }
+
+    async function parseDocx(bytes, task, token) {
+      ensureActive(token);
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+      ensureActive(token);
+      const warning = (result.messages || []).map(item => item.message || "").filter(Boolean).join("\n");
+      return success("mammoth", result.value || "", task, warning);
+    }
+
+    async function parsePdf(bytes, task, token) {
+      ensureActive(token);
+      if (typeof pdfjsLib === "undefined") {
+        return failure("pdfjs", "pdfjs_not_loaded");
+      }
+      if (pdfjsLib.GlobalWorkerOptions) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
+      }
+      const loadingTask = pdfjsLib.getDocument({
+        data: bytes,
+        disableWorker: true,
+        useWorkerFetch: false,
+        isEvalSupported: false
+      });
+      const pdf = await loadingTask.promise;
+      // 留存文档句柄供页渲染复用（先销毁上一任务的残留句柄——destroyPdfDoc 幂等；
+      // 句柄销毁点 = start / cancel / clearPages 三处收口）
+      destroyPdfDoc();
+      pdfDoc = pdf;
+      ensureActive(token);
+      const maxPages = Math.min(pdf.numPages, MAX_PDF_PAGES);
+      const sections = [];
+      // 纯正文长度累加（判据输入——不含页标记；见 success() 注释）
+      let textChars = 0;
+      for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+        ensureActive(token);
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        ensureActive(token);
+        const line = (textContent.items || []).map(item => item.str || "").join(" ").replace(/\s+/g, " ").trim();
+        textChars += line.length;
+        sections.push("---\nPage " + pageNumber + ":\n" + line);
+      }
+      let warning = "";
+      if (pdf.numPages > maxPages) {
+        warning = "PDF 页数过多，仅解析前 " + maxPages + " 页";
+      }
+      return success("pdfjs", sections.join("\n\n"), task, warning,
+        { pageCount: pdf.numPages, textChars: textChars, textPages: maxPages });
+    }
+
+    // ── PDF 页渲染（2026-09-15 附件 PDF 页渲染一期；接口见 window.DocumentParserBridge）──
+
+    // 销毁留存文档句柄（幂等；异常静默——句柄失效 = 目标状态，资源随页面卸载回收）
+    function destroyPdfDoc() {
+      const doc = pdfDoc;
+      pdfDoc = null;
+      if (!doc) {
+        return;
+      }
+      try {
+        const task = doc.destroy();
+        if (task && typeof task.catch === "function") {
+          task.catch(function () {
+          });
+        }
+      } catch (e) {
+        // 句柄已失效/已销毁 = 目标状态
+      }
+    }
+
+    // 渲染态复位（start / cancel / clearPages / 新一轮渲染 四处同口径）
+    function resetRenderState() {
+      renderedPages = [];
+      renderDone = false;
+      renderError = "";
+    }
+
+    // 逐页渲染（单 canvas 复用——渲下一页前重置 width/height 释放上一页位图；30 页 ×
+    // 1600×2263 RGBA ≈ 每页 14MB 位图，N 页 N 个 canvas 并存必爆）。返回页图裸 base64 数组
+    // （元素 = 页序）；异常上抛由调用侧整批降级
+    async function renderPageImages(doc, maxPages, token) {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      const limit = Math.min(doc.numPages, maxPages);
+      const pages = [];
+      try {
+        for (let pageNumber = 1; pageNumber <= limit; pageNumber++) {
+          ensureActive(token);
+          const page = await doc.getPage(pageNumber);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const scale = PAGE_IMAGE_LONG_EDGE_PX / Math.max(baseViewport.width, baseViewport.height);
+          const viewport = page.getViewport({ scale: scale });
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
+          page.cleanup();
+          const dataUrl = canvas.toDataURL("image/jpeg", PAGE_IMAGE_JPEG_QUALITY);
+          // ★ 单点剥 data: 前缀（AiImagePart.data 契约 = 裸 base64、ArkTS 侧零加工；禁两处
+          // 都剥——双剥即 base64 被截、图全废）
+          pages.push(dataUrl.substring(dataUrl.indexOf(",") + 1));
+        }
+        return pages;
+      } finally {
+        // 画布释放（单 canvas 复用下显式清零收尾）
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+
+    // 起异步渲染任务（照 finish 的「返回 pending + 轮询取」范式——本函数非 async：脚本求值
+    // 结果须同步可序列化，Promise 回不去 ArkTS）
+    function renderPages(maxPages) {
+      if (!pdfDoc) {
+        return "error:no_pdf_document";
+      }
+      const doc = pdfDoc;
+      const token = parseToken;
+      const limit = Math.max(0, Math.floor(Number(maxPages) || 0));
+      resetRenderState();
+      renderPageImages(doc, limit, token)
+        .then(function (pages) {
+          if (token === parseToken) {
+            renderedPages = pages;
+          }
+        })
+        .catch(function (error) {
+          // 渲染失败：整批标错、不留半批（半本页图对模型是误导，比纯文本更糟）；
+          // 取消路径（token 变更）静默不写回
+          if (token === parseToken) {
+            renderedPages = [];
+            renderError = error && error.message ? error.message : String(error || "render_failed");
+          }
+        })
+        .finally(function () {
+          if (token === parseToken) {
+            renderDone = true;
+          }
+        });
+      return "pending";
+    }
+
+    function getRenderState() {
+      return JSON.stringify({ done: renderDone, count: renderedPages.length, error: renderError });
+    }
+
+    function getPageImage(index) {
+      if (typeof index !== "number" || !isFinite(index) ||
+        index < 0 || index >= renderedPages.length) {
+        return "";
+      }
+      return renderedPages[index];
+    }
+
+    function clearPages() {
+      resetRenderState();
+      destroyPdfDoc();
+      return "ok";
+    }
+
+    function naturalPathKey(path) {
+      return String(path || "").toLowerCase().replace(/\d+/g, function (match) {
+        return match.padStart(10, "0");
+      });
+    }
+
+    function compareNaturalPath(left, right) {
+      const leftKey = naturalPathKey(left);
+      const rightKey = naturalPathKey(right);
+      if (leftKey < rightKey) {
+        return -1;
+      }
+      if (leftKey > rightKey) {
+        return 1;
+      }
+      return 0;
+    }
+
+    function getElementsByLocalName(root, localName) {
+      if (root.getElementsByTagNameNS) {
+        const elements = root.getElementsByTagNameNS("*", localName);
+        if (elements && elements.length > 0) {
+          return Array.prototype.slice.call(elements);
+        }
+      }
+      const allElements = root.getElementsByTagName("*");
+      const matched = [];
+      for (let i = 0; i < allElements.length; i++) {
+        const element = allElements[i];
+        if (element.localName === localName || element.tagName === localName ||
+          String(element.tagName || "").endsWith(":" + localName)) {
+          matched.push(element);
+        }
+      }
+      return matched;
+    }
+
+    function normalizeOfdText(text) {
+      return String(text || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/[ \t\f\v]+/g, " ")
+        .trim();
+    }
+
+    function extractOfdTextCodes(xmlText) {
+      const xml = new DOMParser().parseFromString(xmlText, "application/xml");
+      const parseErrors = getElementsByLocalName(xml, "parsererror");
+      if (parseErrors.length > 0) {
+        return [];
+      }
+      const textCodes = getElementsByLocalName(xml, "TextCode");
+      const lines = [];
+      for (let i = 0; i < textCodes.length; i++) {
+        const text = normalizeOfdText(textCodes[i].textContent || "");
+        if (text !== "") {
+          lines.push(text);
+        }
+      }
+      return lines;
+    }
+
+    async function parseOfd(bytes, task, token) {
+      ensureActive(token);
+      if (typeof JSZip === "undefined") {
+        return failure("ofd-jszip", "jszip_not_loaded");
+      }
+      const zip = await JSZip.loadAsync(bytes);
+      ensureActive(token);
+      const fileNames = Object.keys(zip.files || {})
+        .filter(function (name) {
+          const file = zip.files[name];
+          return file && !file.dir && /\.xml$/i.test(name);
+        })
+        .sort(compareNaturalPath);
+      const maxFiles = Math.min(fileNames.length, MAX_OFD_XML_FILES);
+      const sections = [];
+      for (let i = 0; i < maxFiles; i++) {
+        ensureActive(token);
+        const fileName = fileNames[i];
+        const xmlText = await zip.files[fileName].async("text");
+        ensureActive(token);
+        const lines = extractOfdTextCodes(xmlText);
+        if (lines.length > 0) {
+          sections.push("## OFD: " + fileName + "\n\n" + lines.join("\n"));
+        }
+      }
+      if (sections.length === 0) {
+        return failure("ofd-jszip", "no_text_code_found");
+      }
+      let warning = "";
+      if (fileNames.length > maxFiles) {
+        warning = "OFD XML 文件数量过多，仅解析前 " + maxFiles + " 个";
+      }
+      return success("ofd-jszip", sections.join("\n\n"), task, warning);
+    }
+
+    async function parseCurrentTask(task, taskChunks, token) {
+      ensureActive(token);
+      const base64 = taskChunks.join("");
+      const bytes = bytesFromBase64(base64);
+      ensureActive(token);
+      const ext = extensionOf(task.fileName || "");
+      const mime = (task.mimeType || "").toLowerCase();
+      if (ext === ".xlsx" || ext === ".xls" ||
+        mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+        mime === "application/vnd.ms-excel") {
+        return parseWorkbook(bytes, task, token);
+      }
+      if (ext === ".docx" ||
+        mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+        return parseDocx(bytes, task, token);
+      }
+      if (ext === ".pdf" || mime === "application/pdf") {
+        return parsePdf(bytes, task, token);
+      }
+      if (ext === ".ofd" || mime === "application/ofd" || mime === "application/vnd.ofd") {
+        return parseOfd(bytes, task, token);
+      }
+      return failure("document-parser", "unsupported_file_type");
+    }
+
+
+    window.DocumentParserBridge = {
+      start: function (task) {
+        currentTask = task || {};
+        chunks = [];
+        currentResult = "";
+        isParsing = false;
+        // 页渲染收口：新任务即弃旧文档句柄与旧页图（不跨任务留页图）
+        resetRenderState();
+        destroyPdfDoc();
+        return "ok";
+      },
+      append: function (chunk) {
+        chunks.push(chunk || "");
+        return "ok";
+      },
+      finish: function () {
+        try {
+          if (!currentTask) {
+            currentResult = failure("document-parser", "task_not_started");
+            return currentResult;
+          }
+          const task = currentTask;
+          const taskChunks = chunks;
+          currentTask = null;
+          chunks = [];
+          currentResult = "";
+          isParsing = true;
+          const token = ++parseToken;
+          parseCurrentTask(task, taskChunks, token)
+            .then(function (result) {
+              if (token === parseToken) {
+                currentResult = result;
+              }
+            })
+            .catch(function (error) {
+              if (token === parseToken) {
+                currentResult = failure("document-parser", error);
+              }
+            })
+            .finally(function () {
+              if (token === parseToken) {
+                isParsing = false;
+              }
+            });
+          return "pending";
+        } catch (error) {
+          currentResult = failure("document-parser", error);
+          isParsing = false;
+          currentTask = null;
+          chunks = [];
+          return currentResult;
+        }
+      },
+      getResult: function () {
+        if (currentResult) {
+          return currentResult;
+        }
+        return isParsing ? "pending" : "";
+      },
+      cancel: function () {
+        parseToken++;
+        currentTask = null;
+        chunks = [];
+        currentResult = failure("document-parser", "canceled");
+        isParsing = false;
+        // 页渲染收口：取消即弃文档句柄与页图（renderPages 的 token 守卫随 parseToken 递增失效）。
+        // renderDone 置真 = 「本批已收束、无页图」——在途渲染轮询据此立即收束，不必空等到
+        // ArkTS 侧 45s 上限（P1-3 零冗余等待；解析侧无此行，因其结果以 currentResult 的
+        // canceled 态即刻可读）
+        resetRenderState();
+        renderDone = true;
+        destroyPdfDoc();
+        return "ok";
+      },
+      // ── PDF 页渲染四接口（2026-09-15 附件 PDF 页渲染一期）──
+      // 渲染页数入参 maxPages 由 ArkTS 传入（DocumentParse.RENDER_MAX_PAGES），桥页不设第二常量
+      renderPages: renderPages,
+      getRenderState: getRenderState,
+      getPageImage: getPageImage,
+      clearPages: clearPages
+    };
+  })();
+</script>
+</body>
+</html>
