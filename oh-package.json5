@@ -1,6 +1,6 @@
 {
   "modelVersion": "26.0.0",
-  "description": "Please describe the basic information.",
+  "description": "自备密钥的多模型 AI 对话客户端（HarmonyOS 应用工程，ArkTS）",
   "dependencies": {
     "@cangjie-tpc/markdown_hybrid": "^1.3.6"
   },

@@ -1,10 +1,10 @@
 {
   "name": "entry",
   "version": "1.0.0",
-  "description": "Please describe the basic information.",
+  "description": "应用主模块，含 ArkTS 源码、资源与随包第三方资产",
   "main": "",
-  "author": "",
-  "license": "",
+  "author": "jueming",
+  "license": "Apache-2.0",
   "dependencies": {
     "@lidary/markdown": "^3.0.5"
   },

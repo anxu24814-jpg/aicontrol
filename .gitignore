@@ -10,9 +10,9 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
-# SSE 断言脚本运行期生成的 .ets→.ts 临时副本（scripts/sse-assert.mjs 产出）
+# 本地脚本运行期生成的源码临时副本（工具链产出，不入库）
 /scripts/.tmp
-# HAP 回滚备份（宪法：不进打包、不入库）
+# HAP 回滚备份（不进打包、不入库）
 /backups
 # ZCode 客户端工作区产物（会话计划 / 工作流草稿与运行记录 / 客户端排除表；同型先例 = dshinhm 亦忽略 /.zcode/）
 /.zcode/
