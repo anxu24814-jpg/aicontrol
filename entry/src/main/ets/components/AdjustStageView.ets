@@ -49,7 +49,7 @@ export struct AdjustStageView {
   @State maskPct: number = 0; // 遮罩 0~100（无级）
   // 沉浸光感档位（AppStorage 自订阅，驱动按钮材质——2026-08-22 光感化新增；SliderRow 有
   // 同款双键，本组件按钮用）
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
+  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
   // 内容区回退开关（2026-09-03）：true = 本键官方实底（新规范下内容区材质不生效）；
   // false = 原材质光感；AppStorage 订阅式切换即刷（坑16 正解，同档位键契约）
   @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;

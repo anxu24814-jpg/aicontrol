@@ -12,6 +12,7 @@ import { http } from '@kit.NetworkKit';
 import { httpKitErrorText, httpStatusFailureText, BingResultItem, HtmlContent, isValidUrl,
   parseBingSearchResults, parseHtmlContent } from './WebSearchParse';
 import { SEARCH_RESULT_COUNT_DEFAULT } from '../search/SearchLimits';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from '../ReqLog';
 
 // 请求超时（Cube 319-321 注释：境外 API 国内连通差统一抬 20s——Bing 主域国内可达，
 // 沿用 20s 保守值；P1-3 零冗余等待口径 = 兜底上限非固定延时）。★ 多引擎一期起导出：
@@ -59,8 +60,17 @@ export interface WebFetchOutcome {
 // FeedbackMeow）。不关的两重代价：①搜索结果与网页抓取正文必须现取，命中进程缓存会返旧
 // 内容；②该缓存落点官方未公开（cacheSize 官方口径只含 cacheDir），若落在 cacheDir 之外
 // 即成存储页统计不到、也清理不到的隐性占用，破坏存储页「清理范围 = 统计范围」不变量
-async function httpGet(url: string, headers: Record<string, string>): Promise<string> {
+// ★ 请求日志（2026-09-24 扩面笔）：落点 = 本函数一处，覆盖两条链（Bing local 搜索 /
+// scrape_web 网页抓取），由 source 形参区分来源标签。终态收敛用一个 logged 位：非 2xx 与
+// 网络异常两条路都各记**恰一次**（reqLogEnd 是按 id 覆写，漏分家会把已记的状态码覆写成 -1）
+async function httpGet(url: string, headers: Record<string, string>,
+  source: string): Promise<string> {
   const req: http.HttpRequest = http.createHttp();
+  const startedAt: number = Date.now();
+  const logId: string = reqLogBegin({
+    source: source, model: '', method: 'GET', url: url, headers: headers, body: ''
+  });
+  let logged: boolean = false;
   try {
     const options: http.HttpRequestOptions = {
       method: http.RequestMethod.GET,
@@ -71,14 +81,35 @@ async function httpGet(url: string, headers: Record<string, string>): Promise<st
       expectDataType: http.HttpDataType.STRING
     };
     const resp: http.HttpResponse = await req.request(url, options);
+    // 响应头回填须在 reqLogEnd 之前（凭据明细在 end 时即删）
+    reqLogSetResponseHeaders(logId, resp.header);
     const body: string = typeof resp.result === 'string' ? resp.result : String(resp.result);
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
       // 非 2xx 带状态码与错误页正文片段（原文案只有 'HTTP 403'，正文里的原因被丢掉）
-      throw new Error(httpStatusFailureText(resp.responseCode, body));
+      const failText: string = httpStatusFailureText(resp.responseCode, body);
+      reqLogEnd(logId, resp.responseCode, Date.now() - startedAt, failText, body);
+      logged = true;
+      throw new Error(failText);
     }
+    reqLogEnd(logId, resp.responseCode, Date.now() - startedAt, '', '');
+    logged = true;
     return body;
+  } catch (e) {
+    if (!logged) {
+      // 未走到响应（网络层/超时）——记传输层失败；已记过的那条走上面自己的终态
+      reqLogEnd(logId, -1, Date.now() - startedAt,
+        httpKitErrorText(e, SEARCH_TIMEOUT_SECONDS), '');
+    }
+    // 原样上抛（ArkTS 严格模式：throw 不接受任意类型值，须断言——arkts-limited-throw）
+    throw e as Error;
   } finally {
-    req.destroy();
+    // destroy 包 try（2026-09-24 自检轮补，同 ModelListApi / TitleApi / KeyConnectTester /
+    // WebDavApi 四处先例）：裸 destroy 抛错会从 finally 穿出，把已拿到的搜索结果 / 网页正文
+    // 改写成一次失败（调用方 catch 到的是 destroy 的错，与真实成败无关）
+    try {
+      req.destroy();
+    } catch (e) {
+    }
   }
 }
 
@@ -152,7 +183,7 @@ async function bingSearchByUrl(searchUrl: string, query: string,
   maxCount: number): Promise<WebSearchOutcome> {
   let html: string = '';
   try {
-    html = await httpGet(searchUrl, bingHeaders());
+    html = await httpGet(searchUrl, bingHeaders(), '联网搜索');
   } catch (e) {
     return failedSearch(query, httpKitErrorText(e, SEARCH_TIMEOUT_SECONDS));
   }
@@ -182,7 +213,7 @@ export async function fetchUrlContent(rawUrl: string): Promise<WebFetchOutcome> 
     //   .replace(/%25/g, '%') 还原——对既有 %20 段 / 裸 % / 字面 %25 三形态实测零改写，
     //   等价于「仅对非 ASCII 段编码」；与 providers/ToolHttp 同口径（两域注释互指，改则同改）
     const requestUrl: string = /[^\x00-\x7F]/.test(url) ? encodeURI(url).replace(/%25/g, '%') : url;
-    html = await httpGet(requestUrl, {});
+    html = await httpGet(requestUrl, {}, '网页抓取');
   } catch (e) {
     return { success: false, url: url, title: '', content: '',
       errorMessage: httpKitErrorText(e, SEARCH_TIMEOUT_SECONDS) + FETCH_FALLBACK_HINT };

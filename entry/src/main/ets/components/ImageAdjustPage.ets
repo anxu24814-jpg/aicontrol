@@ -69,7 +69,7 @@ export struct ImageAdjustPage {
   // popToName 退出编辑
   pathStack: NavPathStack = new NavPathStack();
   // 沉浸光感整体档位（驱动 Toast/滑轨材质，同 ImageEditPage）
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
+  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
 
   // ── 编辑状态 ──
   // 裁剪结果基准图（**本页自持**：aboutToAppear 按 srcUri 自解码 + 按 region 裁剪的产物——

@@ -10,6 +10,7 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { HeaderPair } from './AiTypes';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from '../ReqLog';
 
 const CONNECT_TIMEOUT_MS: number = 10000;
 const READ_TIMEOUT_MS: number = 15000;
@@ -107,6 +108,10 @@ function readJsonPath(root: Record<string, Object>, path: string): string {
 
 // 查询账户余额：GET → 200 校验 → JSON 解析 → 点路径取值；失败 reject Error（中文提示，
 // 调用方 toast 呈现，P0-1 不静默）
+// ★ 请求日志（2026-09-24 扩面笔）：本函数五条返回路径（非 200 / 非 JSON / 路径取空 / 成功 /
+// 网络异常）逐条手写收尾必漏（ModelListApi F1 同族），故收敛到 settleOk / settleFail 两处
+// ——收尾函数之外**零裸 resolve/reject**（本域断言守此形态）。model 恒空串：余额查询不针
+// 对任何 AI 模型（同拉模型清单口径）
 export function fetchBalance(query: BalanceQuery): Promise<BalanceResult> {
   return new Promise<BalanceResult>((resolve, reject) => {
     // 拼接：去尾斜杠 + 保证路径以 / 起头（模板路径已带，用户手填漏扛也能拼对）
@@ -132,6 +137,25 @@ export function fetchBalance(query: BalanceQuery): Promise<BalanceResult> {
       connectTimeout: CONNECT_TIMEOUT_MS,
       readTimeout: READ_TIMEOUT_MS
     };
+    const startedAt: number = Date.now();
+    const logId: string = reqLogBegin({
+      source: '余额查询', model: '', method: 'GET', url: url, headers: header, body: ''
+    });
+    // 失败单点（header 非 null 时先回填响应头——须在 reqLogEnd 之前，凭据明细在 end 时即删）
+    const settleFail = (message: string, code: number, respHeader: Object | null,
+      tail: string): void => {
+      if (respHeader !== null) {
+        reqLogSetResponseHeaders(logId, respHeader);
+      }
+      reqLogEnd(logId, code, Date.now() - startedAt, message, tail);
+      reject(new Error(message));
+    };
+    // 成功单点（本函数只在 200 分支走到，故状态码恒 200）
+    const settleOk = (result: BalanceResult, respHeader: Object): void => {
+      reqLogSetResponseHeaders(logId, respHeader);
+      reqLogEnd(logId, 200, Date.now() - startedAt, '', '');
+      resolve(result);
+    };
     request.request(url, options)
       .then((resp: http.HttpResponse): void => {
         if (resp.responseCode !== 200) {
@@ -139,28 +163,36 @@ export function fetchBalance(query: BalanceQuery): Promise<BalanceResult> {
           const detail: string = extractApiError(body);
           const suffix: string = detail !== '' ? '：' + detail :
             (body !== '' ? '：' + body.slice(0, 200) : '，响应无内容');
-          reject(new Error('余额查询失败(HTTP ' + resp.responseCode + ')' + suffix));
+          settleFail('余额查询失败(HTTP ' + resp.responseCode + ')' + suffix,
+            resp.responseCode, resp.header, body);
           return;
         }
         const text: string = typeof resp.result === 'string' ? resp.result : '';
+        let parsed: Record<string, Object>;
         try {
-          const parsed: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
-          const balance: string = readJsonPath(parsed, query.resultPath.trim());
-          if (balance === '') {
-            reject(new Error('未取到余额：检查「结果 JSON 路径」是否匹配响应结构'));
-            return;
-          }
-          const result: BalanceResult = { text: balance, currency: readJsonPath(parsed, query.currencyPath.trim()) };
-          resolve(result);
+          parsed = JSON.parse(text) as Record<string, Object>;
         } catch (e) {
-          reject(new Error('余额查询失败：响应不是有效 JSON'));
+          settleFail('余额查询失败：响应不是有效 JSON', 200, resp.header, text);
+          return;
         }
+        const balance: string = readJsonPath(parsed, query.resultPath.trim());
+        if (balance === '') {
+          settleFail('未取到余额：检查「结果 JSON 路径」是否匹配响应结构', 200, resp.header, text);
+          return;
+        }
+        settleOk({ text: balance, currency: readJsonPath(parsed, query.currencyPath.trim()) },
+          resp.header);
       })
       .catch((e: Object): void => {
-        reject(new Error('余额查询失败：' + describeNetError(e)));
+        settleFail('余额查询失败：' + describeNetError(e), -1, null, '');
       })
       .finally((): void => {
-        request.destroy();
+        // destroy 包 try（同 ModelListApi / TitleApi / KeyConnectTester 先例）：裸 destroy 抛错
+        // 会从 finally 穿出成未捕获的 promise 拒绝——本层无日志设施，故静默忽略
+        try {
+          request.destroy();
+        } catch (e) {
+        }
       });
   });
 }

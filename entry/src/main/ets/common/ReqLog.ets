@@ -47,13 +47,29 @@
 // ★ 该分家**只作用于日志**：ChatStreamBase.fail 透给 handlers.onError 的状态码仍是 -1——
 // 自动重试域的判据挂在那个 -1 上（见 ChatSendCtrl / ChatAutoRetryCtrl），勿牵连。
 //
-// 埋点四处（都选「一处覆盖多条链」的落点，全链清单见变更记录本笔条目）：
+// 埋点十一处（都选「一处覆盖多条链」的落点，全链清单见变更记录对应笔条目）：
 // · ChatStreamBase.start / complete / fail / disposeSilent —— 聊天流式四协议全链，含连接
 //   能力三项测试的 T2 / T3 流式探针（经 start 的 source 形参区分来源）；
 // · TitleApi.requestTitleText —— 标题 / 记忆 / 记忆优化 / 记忆导入 / 压缩 / 推荐问题 /
 //   主动消息七条小任务链，来源标签复用其 taskLabel 形参；
 // · KeyConnectTester.probeText —— 连接能力 T1 非流式探针；
 // · ModelListApi.fetchModelIds / probeAnthropicMessages —— 拉模型清单与 anthropic 探针。
+// ★ 2026-09-24 扩面笔（七处新落点，至此**全部出站 HTTP 链**在册）：
+// · ToolHttp.httpRequestRaw —— 控制台 http_request 工具的全部调用（含掐断路径的「已取消」
+//   终态与「destroy 结算不得覆写」守卫，见该件 canceledLogIds）；
+// · WebSearch.httpGet —— Bing local 搜索与 scrape_web 网页抓取（source 形参区分来源）；
+// · ApiSearchEngines.httpPostJson —— 博查 / 秘塔 / Serper 三家 API 引擎（三家仅 URL 与请求
+//   体不同，列表行以 URL 区分）；
+// · OcrVisionApi.requestOcrBatch —— 文字识别（多图分批时**每批一条**）；
+// · BalanceApi.fetchBalance —— 服务商余额查询；
+// · WebDavApi.davRequest / ensureDir —— 网盘备份（PUT 上传 / GET 恢复 / DELETE 清理 /
+//   OPTIONS 探测四方法 + MKCOL 逐段建目录，后者的 405「已存在」如实记 405）；
+// · FeedbackMeow.sendFeedbackPush —— 应用内反馈推送。
+// ★ 状态码仍是 HTTP 码（本笔不改这条不变量）：业务层失败只进 error 文案，列表不标红——**四处**
+// 登记在册（2026-09-24 自检轮据实补全，原写两处）：反馈推送的业务码（HTTP 恒 200）、秘塔的
+// HTTP 200 + 内嵌 errCode、余额查询的「响应非 JSON / 结果路径取空」、文字识别的「响应非 JSON /
+// 缺正文」——后两处是本笔新接入的链自己在 200 上判失败。反方向一处同族 = MKCOL 405 是正常
+// 流程却按非 2xx 标红。完整口径见变更记录技术债务清单同条。
 //
 // ★ 本件刻意零 import（同 AppPreferences 的叶子姿态）：全部导出函数被
 // scripts/assert-reqlog-domain.mjs 剥 TS 后由 node 直跑（**线上同一实现**，不断言副本），

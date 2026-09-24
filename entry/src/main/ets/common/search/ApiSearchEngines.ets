@@ -14,6 +14,7 @@ import { SEARCH_TIMEOUT_MS, SEARCH_TIMEOUT_SECONDS, WebSearchOutcome,
   buildSearchContentForAI, searchBing } from '../providers/WebSearch';
 import { BingResultItem, httpKitErrorText, httpStatusFailureText, metasoErrorMessage,
   parseBochaResults, parseMetasoResults, parseSerperResults } from '../providers/WebSearchParse';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from '../ReqLog';
 
 // 引擎运行时入参（由注册表编排层组装）：apiKey = Asset 明文（免 key 引擎恒 ''）；
 // baseUrl = 用户自定义入口（'' = 官方默认）；resultCount = 本次返回条数上限（2026-09-10
@@ -38,9 +39,17 @@ export type SearchHandler =
 // ★ 2026-09-21 执行笔补 extraData（全工程统一姿势，不跟 API 26 新字段 body）：原实现把
 // 请求体算出并传参、options 里却漏设 extraData ⇒ 三家 POST 恒为空体（query 从未离开设备、
 // 成功路径从未真正可用）；形参改 reqBody 与响应体局部名 body 区分（禁同名遮蔽）
+// ★ 请求日志（2026-09-24 扩面笔）：落点 = 本函数一处，覆盖三家 API 引擎（博查 / 秘塔 /
+// Serper）——三家仅 URL 与请求体不同，列表行以 URL 区分；来源标签固定「联网搜索」。终态
+// 收敛用 logged 位（同 WebSearch.httpGet：非 2xx 与网络异常各记恰一次，防覆写）
 async function httpPostJson(url: string, reqBody: string,
   headers: Record<string, string>): Promise<string> {
   const req: http.HttpRequest = http.createHttp();
+  const startedAt: number = Date.now();
+  const logId: string = reqLogBegin({
+    source: '联网搜索', model: '', method: 'POST', url: url, headers: headers, body: reqBody
+  });
+  let logged: boolean = false;
   try {
     const options: http.HttpRequestOptions = {
       method: http.RequestMethod.POST,
@@ -52,14 +61,33 @@ async function httpPostJson(url: string, reqBody: string,
       expectDataType: http.HttpDataType.STRING
     };
     const resp: http.HttpResponse = await req.request(url, options);
+    // 响应头回填须在 reqLogEnd 之前（凭据明细在 end 时即删）
+    reqLogSetResponseHeaders(logId, resp.header);
     const body: string = typeof resp.result === 'string' ? resp.result : String(resp.result);
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
       // 非 2xx 带状态码与错误页正文片段（原文案只有 'HTTP 403'，正文里的原因被丢掉）
-      throw new Error(httpStatusFailureText(resp.responseCode, body));
+      const failText: string = httpStatusFailureText(resp.responseCode, body);
+      reqLogEnd(logId, resp.responseCode, Date.now() - startedAt, failText, body);
+      logged = true;
+      throw new Error(failText);
     }
+    reqLogEnd(logId, resp.responseCode, Date.now() - startedAt, '', '');
+    logged = true;
     return body;
+  } catch (e) {
+    if (!logged) {
+      reqLogEnd(logId, -1, Date.now() - startedAt,
+        httpKitErrorText(e, SEARCH_TIMEOUT_SECONDS), '');
+    }
+    // 原样上抛（ArkTS 严格模式：throw 不接受任意类型值，须断言——arkts-limited-throw）
+    throw e as Error;
   } finally {
-    req.destroy();
+    // destroy 包 try（2026-09-24 自检轮补，同 ModelListApi / TitleApi / KeyConnectTester /
+    // WebDavApi 四处先例）：裸 destroy 抛错会从 finally 穿出，把已拿到的搜索结果改写成失败
+    try {
+      req.destroy();
+    } catch (e) {
+    }
   }
 }
 

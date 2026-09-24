@@ -33,12 +33,35 @@
 - 本仓库不包含任何签名材料。`build-profile.json5` 的 `signingConfigs` 为空数组，需按上一步自行生成。
 - 工程未随附 hvigor 命令行 wrapper（`hvigorw`），构建请在 DevEco Studio 内进行。
 
+## 自检
+
+`tools/verify/` 下是一组零第三方依赖的纯 node 检查件，不需要安装 DevEco Studio 与 HarmonyOS SDK，克隆下来即可运行，覆盖与平台无关的纯逻辑：协议解析与请求体组装、用量统计、价格折算、跨会话检索、Markdown 复制文本、网络与文档解析、凭据存储不变量。
+
+需要 Node.js **22.18 或更高**——其中数件把 ArkTS 源码复制为 `.ts` 后靠 Node 的类型剥离直接执行，断言的就是应用里跑的同一份实现。
+
+```bash
+for f in sse-assert usage-stats-calc-check assert-price-template assert-chat-search-domain assert-msg-copy assert-net-parse assert-security-store; do node tools/verify/$f.mjs || exit 1; done
+```
+
+| 检查件 | 覆盖 | 期望输出末行 |
+| --- | --- | --- |
+| `sse-assert.mjs` | SSE 帧解析，OpenAI 兼容 / Anthropic / Gemini / Responses 四协议请求体组装，提示词注入与变量替换，附件多模态，思考透传，采样参数与缓存控制，工具调用底层，模型匹配，联网搜索解析 | `结果：496 过 / 0 败（契约 0 / 形态 496）` |
+| `usage-stats-calc-check.mjs` | 用量统计纯函数：热力图周列与日历网格、连续活跃、月度聚合、数值格式化 | `用量统计纯函数断言 结果：64 过 / 0 败` |
+| `assert-price-template.mjs` | 价格配置解析与序列化、费用折算与聚合、价格模板数据层不变量 | `结果：29 过 / 0 败（契约 0 / 形态 29）` |
+| `assert-chat-search-domain.mjs` | 跨会话检索与清单纯函数：查询切分、敏感内容闸、片段开窗、分页窗口 | `结果：67 过 / 0 败（契约 0 / 形态 67）` |
+| `assert-msg-copy.mjs` | Markdown 复制文本：剥标记、去表格块、复制面板文本拼装 | `结果：31 过 / 0 败（契约 0 / 形态 31）` |
+| `assert-net-parse.mjs` | HTTP 请求缓存与建销成对、WebDAV 备份恢复链、文档解析器就绪时序 | `结果：35 过 / 0 败（契约 0 / 形态 35）` |
+| `assert-security-store.mjs` | 凭据与安全域不变量：密钥只入系统安全存储、跨卸载持久标记、安全存储与数据库行写序成对、生物识别门禁契约 | `结果：48 过 / 0 败（契约 0 / 形态 48）` |
+
+同一组检查在 CI 上逐件运行，见 `.github/workflows/verify.yml`。这些检查件是作者开发仓中断言的公开副本，只覆盖纯逻辑面；依赖 SDK 的编译、UI 形态与真机行为不在本仓库内验证。
+
 ## 目录结构
 
 | 路径 | 内容 |
 | --- | --- |
 | `entry/` | 应用主模块，ArkTS 源码、资源与随包第三方资产 |
 | `AppScope/` | 应用级配置与图标 |
+| `tools/verify/` | 免 SDK 的纯逻辑检查件（见上节「自检」） |
 | `docs/` | 部分设计规范文档 |
 
 ## 第三方组件与许可

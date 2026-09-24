@@ -1,0 +1,28 @@
+# 公开面纯逻辑检查（2026-09-24 公开仓可验证性笔）
+# 不装 DevEco Studio、HarmonyOS SDK 与 ohpm——只跑 tools/verify/ 下零第三方依赖的 node 检查件。
+# ★ Node 版本须 ≥ 22.18：其中数件把 ArkTS 源码复制成 .ts 后，靠 Node 的类型剥离直接 import
+#   执行（断言的就是应用里跑的同一份实现），而类型剥离自 22.18 起才默认可用。
+# ★ 失败即红：不加 continue-on-error，任一检查件非零退出，本工作流即失败。
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: 逐件运行检查
+        run: |
+          node tools/verify/sse-assert.mjs
+          node tools/verify/usage-stats-calc-check.mjs
+          node tools/verify/assert-price-template.mjs
+          node tools/verify/assert-chat-search-domain.mjs
+          node tools/verify/assert-msg-copy.mjs
+          node tools/verify/assert-net-parse.mjs
+          node tools/verify/assert-security-store.mjs

@@ -62,7 +62,7 @@ export struct ImageEditPage {
   // 空背景/解码失败时 pop 返回（系统返回键自动 pop，零代码）
   pathStack: NavPathStack = new NavPathStack();
   // 沉浸光感整体档位（驱动 Toast/滑轨材质，同 BackgroundPanel）
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
+  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
 
   // ── 编辑状态 ──
   // 原图（@State——解码异步完成后赋值需触发 UI 渲染，同时驱动子组件 if 守卫：非空

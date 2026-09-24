@@ -1,0 +1,7 @@
+# 语言统计覆盖（GitHub linguist 属性；git 自身不消费这些行，只影响仓库页的语言标签）
+# 随包 vendored 的 pdf.worker.min.js / xlsx.full.min.js / OCR 模型会把本仓标签带成 HTML，
+# 而 ArkTS 不在 linguist 的 languages.yml 内（无 ArkTS 语言可写）——故 rawfile 记 vendored、
+# .ets 显式映射到 TypeScript，标签才反映真实工程构成。详见公开仓 README 与变更记录。
+entry/src/main/resources/rawfile/** linguist-vendored
+*.ets linguist-language=TypeScript
+*.json5 linguist-language=JSON5

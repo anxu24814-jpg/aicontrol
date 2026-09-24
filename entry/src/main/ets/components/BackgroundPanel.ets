@@ -30,7 +30,7 @@ import { EditImageParam } from './ImageEditPage';
 export struct BackgroundPanel {
   // 沉浸光感整体档位（2026-08-20 弹窗/按钮/标题栏三键合并；驱动提示
   // Toast 材质，迁自 ChangeBgPage）
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
+  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
   // 系统颜色模式（EntryAbility 写入 AppStorage，深浅色切换时自动刷新卡片配色）
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   // 路由栈（AppearancePage 透传 PageMap 入参）：「选择图片/编辑图片」卡片 push 编辑二级页

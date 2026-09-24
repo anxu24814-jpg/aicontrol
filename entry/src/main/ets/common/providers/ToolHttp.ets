@@ -29,6 +29,10 @@
 // P3-3）；请求体走 extraData string（全工程 12 处存量统一姿势）。
 // 掐断（任务书 §2.5）：模块级在途登记 httpInFlight + httpAbortAll——ChatSendCtrl.abort 与
 // disposeSilent 各调一行，在途 request 被 destroy 即以错误结算，停止键自最长 30s 等待缩至即时。
+// ★ 请求日志（2026-09-24 扩面笔）：落点 = 传输层 httpRequestRaw 一处，覆盖本工具的全部调用
+// ——掐断路径按 REQ_LOG_STATUS_CANCELED 记「已取消」终态，且**先记终态再 destroy**：destroy
+// 引发的 promise 结算不得把它二次改写成「网络失败」（坑75 家族——用户主动中止不是故障，
+// 误归因会把排查引向网络）。取消 id 由 canceledLogIds 传递，见 httpAbortAll 注释。
 // 结果自控 ≤8192（自实现回缩循环——禁引 ToolBrowse.fitResultBudget，它只认 text/nodes 两键，
 // 本域载荷键 body 不命中会原样超限；回缩按溢出量 +512 余量吸收转义膨胀，照 ToolBrowse
 // 「\n→\\n 使预算失真」同源教训）。
@@ -37,6 +41,8 @@ import { ConfirmPrompt, CONFIRM_LEVEL_WRITE, ToolExecutor } from './ToolContract
 import { isHttpWriteAutoApproveEnabled } from '../AppPreferences';
 import { isHttpUrl } from './ToolBrowse';
 import { httpKitErrorText } from './WebSearchParse';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders,
+  REQ_LOG_STATUS_CANCELED } from '../ReqLog';
 
 // ── 常量（全大写 ArkTS 规范；模型可见数字与 desc/schema 单源）──
 // 方法集白名单（7 种 = schema enum 同源；集外一律 throw——见文件头安全口径）
@@ -69,17 +75,44 @@ const HTTP_BUDGET_ROUNDS_MAX: number = 64;
 const HTTP_CONFIRM_URL_MAX: number = 200;
 
 // ── 在途登记与掐断（任务书 §2.1-3 / §2.5）──
+// 在途项 = 请求句柄 + 该请求的日志条目 id（2026-09-24 请求日志扩面笔）：掐断时按 id 记
+// 「已取消」终态，故 id 必须与句柄同行登记（分作两个数组必漂移）
+interface HttpInFlight {
+  req: http.HttpRequest;
+  logId: string;
+}
+
 // 模块级在途请求表：请求发出前 push、finally 移除（与 destroy 同点，成对释放）
-const httpInFlight: http.HttpRequest[] = [];
+const httpInFlight: HttpInFlight[] = [];
+// 掐断已按取消收尾的日志 id（httpRequestRaw 的 catch 据此**跳过二次改写**；该处消费即删，
+// 无清理遗漏即无增长）。成对性：push 在 httpAbortAll、splice 在 catch 的取消分支
+const canceledLogIds: string[] = [];
 
 // 掐断全部在途请求（ChatSendCtrl.abort / disposeSilent 消费）：destroy 在途 request →
 // promise 以错误结算 → lane 收尾守卫把卡转「已中止」。若真机实测 destroy 在途不结算
 // promise，30s readTimeout 是终态兜底（任务书 §2.5 兜底口径）
+// ★ 请求日志（2026-09-24 扩面笔）：**先记「已取消」终态再 destroy**（顺序不可换——destroy
+// 触发结算，晚记会被 catch 的 -1 抢先覆写成「网络失败」）
+// ★ 循环内两处各自包 try（2026-09-24 自检轮补）：条目已 pop 出表，循环体内任何一处抛错都会
+// **静默放弃剩余在途请求**（停止键看着按了、剩下几条照跑满超时）——日志侧与 destroy 侧同为
+// 傍路，任何异常都不得吃掉主职责；destroy 包 try 的理由见 httpRequestRaw 的同名注释
 export function httpAbortAll(): void {
   while (httpInFlight.length > 0) {
-    const req: http.HttpRequest | undefined = httpInFlight.pop();
-    if (req !== undefined) {
-      req.destroy();
+    const item: HttpInFlight | undefined = httpInFlight.pop();
+    if (item !== undefined) {
+      try {
+        if (item.logId !== '') {
+          // 先记终态、再登记分家凭据（顺序对用户可见结果无影响——catch 在微任务里才跑；
+          // 但记失败时前者留一条终态（catch 补 -1），后者会把条目钉死在「进行中」）
+          reqLogEnd(item.logId, REQ_LOG_STATUS_CANCELED, 0, '', '');
+          canceledLogIds.push(item.logId);
+        }
+      } catch (e) {
+      }
+      try {
+        item.req.destroy();
+      } catch (e) {
+      }
     }
   }
 }
@@ -89,10 +122,19 @@ export function httpAbortAll(): void {
 // WebSearchParse.httpKitErrorText 统一取句（码表见该件 httpKitErrorMessage，与联网抓取
 // 共用一份，单一来源）。
 // body = null 表示不带请求体（GET/HEAD/OPTIONS 与未提供 body 的写方法）
-async function httpRequestRaw(method: http.RequestMethod, url: string,
+// methodName 形参 = 方法名字符串（日志用）：枚举 → 名字的第二套判据不做（toRequestMethod
+// 的反查必与白名单漂移），由调用方把它已有的字符串一并传入
+async function httpRequestRaw(method: http.RequestMethod, methodName: string, url: string,
   headers: Record<string, string>, body: string | null): Promise<http.HttpResponse> {
   const req: http.HttpRequest = http.createHttp();
-  httpInFlight.push(req);
+  const startedAt: number = Date.now();
+  // 日志条目在**请求发出前**建（排障要看到「发出了什么」，含最终会超时的那些）；model 恒空串
+  // ——本链是模型发起的工具调用，但请求本身不针对任何 AI 模型（同 ModelListApi 拉清单口径）
+  const logId: string = reqLogBegin({
+    source: 'HTTP 请求', model: '', method: methodName, url: url, headers: headers,
+    body: body === null ? '' : body
+  });
+  httpInFlight.push({ req: req, logId: logId });
   try {
     const options: http.HttpRequestOptions = {
       method: method,
@@ -106,20 +148,46 @@ async function httpRequestRaw(method: http.RequestMethod, url: string,
     if (body !== null) {
       options.extraData = body;
     }
-    return await req.request(url, options);
+    const resp: http.HttpResponse = await req.request(url, options);
+    // 响应头回填须在 reqLogEnd 之前（凭据明细在 end 时即删，顺序颠倒少一层值级替换）
+    reqLogSetResponseHeaders(logId, resp.header);
+    // 终态：任何 HTTP 码都走这里（本层不抛非 2xx——由 execute 层按 status 组织回执）。
+    // 成功不记响应正文（本功能边界：只记错误侧响应体），错误侧记尾部供归因
+    const okCode: boolean = resp.responseCode >= 200 && resp.responseCode < 300;
+    const tail: string = okCode ? '' :
+      (typeof resp.result === 'string' ? resp.result : '');
+    reqLogEnd(logId, resp.responseCode, Date.now() - startedAt, '', tail);
+    return resp;
   } catch (e) {
     // 网络层异常 → 中文原因（叶子纯函数 httpKitErrorText）：旧实现
     // `throw e instanceof Error ? e : new Error(String(e))` 对 BusinessError（接口非类）
     // 落到 String(e)，真机实证产出 {"error":"[object Object]"}——本行即该缺陷的收口点
     // ★ 零秒防御（2026-09-21 八百三十八节，与 BrowseWeb 笔 B 同形）：常量若降到 500 ms 以下，
     // Math.round 得 0 ⇒ 码表 2300028 报「请求超时（0 秒）」；下限钳 1 秒。
-    throw new Error(httpKitErrorText(e, Math.max(1, Math.round(HTTP_TIMEOUT_MS / 1000))));
+    const netMsg: string = httpKitErrorText(e, Math.max(1, Math.round(HTTP_TIMEOUT_MS / 1000)));
+    // 取消与真网络错分家（2026-09-24 请求日志扩面笔，坑75 家族）：掐断路径已在 httpAbortAll
+    // 记过「已取消」终态，此处**跳过**（reqLogEnd 是按 id 覆写，再记就把取消改写成网络失败）；
+    // 该 id 消费即删（成对，见 canceledLogIds 声明处）
+    const cancelIdx: number = canceledLogIds.indexOf(logId);
+    if (logId !== '' && cancelIdx >= 0) {
+      canceledLogIds.splice(cancelIdx, 1);
+    } else {
+      reqLogEnd(logId, -1, Date.now() - startedAt, netMsg, '');
+    }
+    throw new Error(netMsg);
   } finally {
-    const idx: number = httpInFlight.indexOf(req);
+    const idx: number = httpInFlight.findIndex((item: HttpInFlight): boolean =>
+      item.req === req);
     if (idx >= 0) {
       httpInFlight.splice(idx, 1);
     }
-    req.destroy();
+    // destroy 包 try（2026-09-24 自检轮补，同 ModelListApi / TitleApi / KeyConnectTester /
+    // WebDavApi 四处先例）：裸 destroy 抛错会从 finally 穿出，把**已拿到的响应**改写成失败
+    // （本仓 KeyConnectTester 与 ModelListApi 两处自检轮实锤过同类；本工具是调用最密的一条链）
+    try {
+      req.destroy();
+    } catch (e) {
+    }
   }
 }
 
@@ -308,7 +376,7 @@ export class HttpRequestExecutor implements ToolExecutor {
       requestUrl = encodeURI(requestUrl).replace(/%25/g, '%');
     }
     const enumMethod: http.RequestMethod = toRequestMethod(method);
-    return httpRequestRaw(enumMethod, requestUrl, headers,
+    return httpRequestRaw(enumMethod, method, requestUrl, headers,
       body !== '' ? body : null)
       .then((resp: http.HttpResponse): string => {
         const status: number = resp.responseCode;

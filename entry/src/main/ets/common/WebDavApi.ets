@@ -20,10 +20,14 @@
 //   「误传毁掉唯一好备份」的威胁已消除。
 // http 一建一销成对释放 + 每处 options 显式 usingCache: false（WebSearch 同款；同源说明
 // 见坑33——http kit 默认 true，不显式关即静默走响应缓存）；凭据不进日志/错误信息（安全
-// 红线——错误只透状态码与阶段，不回显 URL 账号）。
+// 红线——错误只透状态码与阶段，不回显 URL 账号）。★ 2026-09-24 请求日志扩面笔后口径精确化：
+// 凭据仍不进**明文**，日志侧由 ReqLog 两层脱敏承接（按名掩码 + 值级替换；Authorization 的
+// Basic base64 串属值级清单，见 davRequest 注释）。
 import { http } from '@kit.NetworkKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from './ReqLog';
 
 const TIMEOUT_MS: number = 60000; // 备份 zip 可达数 MB——超时放宽（兜底上限，P1-3 口径）
 const BACKUP_NAME_PREFIX: string = 'aicontrol_backup_'; // 日期档名前缀
@@ -88,16 +92,26 @@ function authError(e: Object): Error | null {
   return null;
 }
 
-async function davRequest(method: http.RequestMethod, url: string, cfg: WebDavConfig,
-  extraHeaders: Record<string, string>,
+async function davRequest(method: http.RequestMethod, methodName: string, url: string,
+  cfg: WebDavConfig, extraHeaders: Record<string, string>,
   body?: ArrayBuffer): Promise<http.HttpResponse> {
+  // 头先于句柄构造（成对释放：authHeader 抛错时尚未 createHttp，无句柄可泄——顺序不可换）
+  const headers: Record<string, string> = {};
+  headers['Authorization'] = authHeader(cfg.username, cfg.password);
+  for (const key of Object.keys(extraHeaders)) {
+    headers[key] = extraHeaders[key];
+  }
   const req: http.HttpRequest = http.createHttp();
+  const startedAt: number = Date.now();
+  // 请求日志（2026-09-24 扩面笔）：本层是备份链的唯一传输出口（PUT 上传 / GET 恢复 /
+  // DELETE 清理 / OPTIONS 探测四方法共用）；methodName 形参 = 方法名字符串（枚举 → 名字的
+  // 反查不做，防与调用点漂移）。凭据面：Authorization 是 Basic base64——按名判据命中即掩，
+  // 值级脱敏清单再从该值拆段，两层与其余链同规格（安全红线见本件头注释）
+  const logId: string = reqLogBegin({
+    source: '网盘备份', model: '', method: methodName, url: url, headers: headers, body: ''
+  });
+  let logged: boolean = false;
   try {
-    const headers: Record<string, string> = {};
-    headers['Authorization'] = authHeader(cfg.username, cfg.password);
-    for (const key of Object.keys(extraHeaders)) {
-      headers[key] = extraHeaders[key];
-    }
     const options: http.HttpRequestOptions = {
       method: method,
       header: headers,
@@ -113,12 +127,36 @@ async function davRequest(method: http.RequestMethod, url: string, cfg: WebDavCo
       options.extraData = body;
     }
     const resp: http.HttpResponse = await req.request(url, options);
+    reqLogSetResponseHeaders(logId, resp.header);
+    // 非 2xx 的错误体只在 STRING 型可取（GET 是 ARRAY_BUFFER——zip 二进制无文本语义，
+    // 据型判空即可，不必另立「哪些方法能记正文」的清单）
+    const failTail: string = typeof resp.result === 'string' ? resp.result : '';
+    reqLogEnd(logId, resp.responseCode, Date.now() - startedAt,
+      resp.responseCode < 200 || resp.responseCode >= 300 ? 'HTTP ' + resp.responseCode : '',
+      resp.responseCode < 200 || resp.responseCode >= 300 ? failTail : '');
+    logged = true;
     if (resp.responseCode < 200 || resp.responseCode >= 300) {
       throw new DavStatusError(resp.responseCode);
     }
     return resp;
+  } catch (e) {
+    if (!logged) {
+      // 未走到响应（网络层/超时）：状态码记 -1；文案取错误码便于对码表（BusinessError 是
+      // 接口非类，instanceof Error 不成立——同 ToolHttp 的实锤，故按 code 字段判）
+      const biz = e as BusinessError;
+      const netMsg: string = typeof biz.code === 'number' ?
+        '无法连接服务器(code ' + biz.code + ')' : '网络错误';
+      reqLogEnd(logId, -1, Date.now() - startedAt, netMsg, '');
+    }
+    // 原样上抛（ArkTS 严格模式：throw 不接受任意类型值，须断言——arkts-limited-throw）
+    throw e as Error;
   } finally {
-    req.destroy();
+    // destroy 包 try（同 ModelListApi / TitleApi / KeyConnectTester 先例）：裸 destroy 抛错
+    // 会从 finally 穿出，把已成功的上传/下载改写成失败
+    try {
+      req.destroy();
+    } catch (e) {
+    }
   }
 }
 
@@ -132,10 +170,18 @@ export async function ensureDir(cfg: WebDavConfig): Promise<void> {
   let current: string = base;
   for (const seg of segments) {
     current = current + '/' + encodeURIComponent(seg);
+    // 头先于句柄构造（成对释放，同 davRequest）
+    const headers: Record<string, string> = {};
+    headers['Authorization'] = authHeader(cfg.username, cfg.password);
     const req: http.HttpRequest = http.createHttp();
+    const startedAt: number = Date.now();
+    // 请求日志（2026-09-24 扩面笔）：每段目录一条——排障要看的是「第几段挂了」（401/403 常
+    // 在建目录这一步就暴露，是凭据错误的第一个现场）
+    const logId: string = reqLogBegin({
+      source: '网盘备份', model: '', method: 'MKCOL', url: current, headers: headers, body: ''
+    });
+    let logged: boolean = false;
     try {
-      const headers: Record<string, string> = {};
-      headers['Authorization'] = authHeader(cfg.username, cfg.password);
       const options: http.HttpRequestOptions = {
         method: 'MKCOL' as ESObject as http.RequestMethod,
         header: headers,
@@ -146,16 +192,37 @@ export async function ensureDir(cfg: WebDavConfig): Promise<void> {
         usingCache: false
       };
       const resp: http.HttpResponse = await req.request(current, options);
-      if (resp.responseCode >= 200 && resp.responseCode < 300) {
+      reqLogSetResponseHeaders(logId, resp.header);
+      const ok: boolean = resp.responseCode >= 200 && resp.responseCode < 300;
+      const exists: boolean = resp.responseCode === 405; // 405 = 目录已存在，正常
+      const failTail: string = typeof resp.result === 'string' ? resp.result : '';
+      // ★ 405 如实记 405（列表按 HTTP 非 2xx 着色会标红，而它实为正常）：不另立「哪些链的
+      // 哪些码算成功」的第二套判据——记的是实际发生的传输层事实，同 Anthropic 探针 404 形态
+      reqLogEnd(logId, resp.responseCode, Date.now() - startedAt,
+        ok || exists ? '' : 'HTTP ' + resp.responseCode, ok ? '' : failTail);
+      logged = true;
+      if (ok) {
         continue;
       }
-      if (resp.responseCode !== 405) { // 405 = 目录已存在，正常
+      if (!exists) {
         // ★ 2026-09-03 401 翻译（上传前凭据错误即在此暴露——与 probe 同文案）
         throw resp.responseCode === 401 ? new Error('账号或密码（应用密码）不正确') :
           new Error(`创建远端目录失败（HTTP ${resp.responseCode}）`);
       }
+    } catch (e) {
+      if (!logged) {
+        const biz = e as BusinessError;
+        const netMsg: string = typeof biz.code === 'number' ?
+          '无法连接服务器(code ' + biz.code + ')' : '网络错误';
+        reqLogEnd(logId, -1, Date.now() - startedAt, netMsg, '');
+      }
+      // 原样上抛（ArkTS 严格模式：throw 不接受任意类型值，须断言——arkts-limited-throw）
+      throw e as Error;
     } finally {
-      req.destroy();
+      try {
+        req.destroy();
+      } catch (e) {
+      }
     }
   }
 }
@@ -168,7 +235,7 @@ export async function uploadBackup(cfg: WebDavConfig, localPath: string): Promis
   const data: ArrayBuffer = await readLocalFile(localPath);
   const name: string = remoteBackupName(0);
   try {
-    await davRequest(http.RequestMethod.PUT, remoteUrl(cfg, name), cfg,
+    await davRequest(http.RequestMethod.PUT, 'PUT', remoteUrl(cfg, name), cfg,
       { 'Content-Type': 'application/zip' }, data);
     return name;
   } catch (e) {
@@ -185,7 +252,8 @@ export async function uploadBackup(cfg: WebDavConfig, localPath: string): Promis
 // 清理失败只影响远端多占空间，不判整链失败；404 = 档不存在 = 目标状态已达。
 async function deleteRemoteFile(cfg: WebDavConfig, name: string): Promise<void> {
   try {
-    await davRequest('DELETE' as ESObject as http.RequestMethod, remoteUrl(cfg, name), cfg, {});
+    await davRequest('DELETE' as ESObject as http.RequestMethod, 'DELETE',
+      remoteUrl(cfg, name), cfg, {});
   } catch (e) {
     // 尽力而为：吞（理由见函数头注释）
   }
@@ -233,7 +301,7 @@ export async function downloadLatestBackup(cfg: WebDavConfig, localPath: string,
 async function tryGetBackup(cfg: WebDavConfig, localPath: string,
   name: string): Promise<string | null> {
   try {
-    const resp: http.HttpResponse = await davRequest(http.RequestMethod.GET,
+    const resp: http.HttpResponse = await davRequest(http.RequestMethod.GET, 'GET',
       remoteUrl(cfg, name), cfg, {});
     writeLocalFile(localPath, resp.result as ArrayBuffer);
     return name;
@@ -252,7 +320,7 @@ async function tryGetBackup(cfg: WebDavConfig, localPath: string,
 // 远端可达性探测（OPTIONS 带 Basic 头——401 = 账号或密码错误；2xx/405 = 可达）
 export async function probe(cfg: WebDavConfig): Promise<void> {
   try {
-    await davRequest(http.RequestMethod.OPTIONS, trimSlash(cfg.baseUrl), cfg, {});
+    await davRequest(http.RequestMethod.OPTIONS, 'OPTIONS', trimSlash(cfg.baseUrl), cfg, {});
   } catch (e) {
     if (e instanceof DavStatusError) {
       const status: number = (e as DavStatusError).status;

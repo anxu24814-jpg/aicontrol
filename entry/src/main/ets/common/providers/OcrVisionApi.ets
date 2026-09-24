@@ -27,6 +27,7 @@ import { extractTitleText, extractTitleUsage, NonStreamEndpoint, resolveNonStrea
 import { resolveTitleEndpoint } from '../TitleGen';
 import { loadPoolKey } from '../store/KeyStore';
 import { logTaskUsage } from '../store/UsageStatsDb';
+import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from '../ReqLog';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 // 分批上限（§7.3，本件常量单源）
@@ -99,10 +100,29 @@ function buildOcrBody(protocol: string, endpoint: string, model: string,
 }
 
 // 单批请求（非流式一次响应；失败不抛错——ok=false + 中文 errorMessage + status 事实返回）
-function requestOcrBatch(auth: NonStreamEndpoint, body: string, protocol: string,
+// ★ 请求日志（2026-09-24 扩面笔）：本批**五条**返回路径（非 200 / JSON 解析失败 / 缺正文 /
+// 成功 / 网络异常）逐条手写收尾必漏（ModelListApi F1 同族：六条 reject 出口漏一条 ⇒ 该条
+// 永远停在「进行中」），故收敛到 settle 一处。多图分批时**每批一条**日志（每批是独立请求，
+// 排障要看的是「第几批挂了」）。model = 视觉引擎模型名（本链针对具体模型，同标题链口径）
+function requestOcrBatch(auth: NonStreamEndpoint, model: string, body: string, protocol: string,
   endpoint: string): Promise<OcrVisionResult> {
   return new Promise<OcrVisionResult>((resolve) => {
     const request: http.HttpRequest = http.createHttp();
+    const startedAt: number = Date.now();
+    const logId: string = reqLogBegin({
+      source: '文字识别', model: model, method: 'POST', url: auth.url, headers: auth.header,
+      body: body
+    });
+    // 收尾单点（结果与日志同出）：header 非 null 时先回填响应头（须在 reqLogEnd 之前——
+    // 凭据明细在 end 时即删）；tail = 错误侧响应体（成功不记正文，见 ReqLog.ets 头注释边界）
+    const settle = (result: OcrVisionResult, header: Object | null, tail: string): void => {
+      if (header !== null) {
+        reqLogSetResponseHeaders(logId, header);
+      }
+      reqLogEnd(logId, result.status, Date.now() - startedAt,
+        result.ok ? '' : result.errorMessage, tail);
+      resolve(result);
+    };
     const options: http.HttpRequestOptions = {
       method: http.RequestMethod.POST,
       header: auth.header,
@@ -119,9 +139,10 @@ function requestOcrBatch(auth: NonStreamEndpoint, body: string, protocol: string
           const detail: string = extractApiError(raw);
           const suffix: string = detail !== '' ? '：' + detail :
             (raw !== '' ? '：' + raw.slice(0, 200) : '，响应无内容');
-          resolve({ ok: false, text: '',
+          settle({ ok: false, text: '',
             errorMessage: '识别请求失败(HTTP ' + resp.responseCode + ')' + suffix,
-            status: resp.responseCode, promptTokens: 0, completionTokens: 0, cachedTokens: 0 });
+            status: resp.responseCode, promptTokens: 0, completionTokens: 0, cachedTokens: 0 },
+            resp.header, raw);
           return;
         }
         const raw: string = typeof resp.result === 'string' ? resp.result : '';
@@ -131,27 +152,32 @@ function requestOcrBatch(auth: NonStreamEndpoint, body: string, protocol: string
           text = extractTitleText(protocol, endpoint, raw);
           usage = extractTitleUsage(protocol, endpoint, raw);
         } catch (e) {
-          resolve({ ok: false, text: '', errorMessage: '识别响应不是有效 JSON', status: 200,
-            promptTokens: 0, completionTokens: 0, cachedTokens: 0 });
+          settle({ ok: false, text: '', errorMessage: '识别响应不是有效 JSON', status: 200,
+            promptTokens: 0, completionTokens: 0, cachedTokens: 0 }, resp.header, raw);
           return;
         }
         if (text === '') {
           // 缺正文但 token 可能已消耗——用量如实带回（200 形态，TitleApi 同口径）
-          resolve({ ok: false, text: '', errorMessage: '识别响应缺少正文', status: 200,
+          settle({ ok: false, text: '', errorMessage: '识别响应缺少正文', status: 200,
             promptTokens: usage.promptTokens, completionTokens: usage.completionTokens,
-            cachedTokens: usage.cachedTokens });
+            cachedTokens: usage.cachedTokens }, resp.header, raw);
           return;
         }
-        resolve({ ok: true, text: text, errorMessage: '', status: 200,
+        settle({ ok: true, text: text, errorMessage: '', status: 200,
           promptTokens: usage.promptTokens, completionTokens: usage.completionTokens,
-          cachedTokens: usage.cachedTokens });
+          cachedTokens: usage.cachedTokens }, resp.header, '');
       })
       .catch((e: Object): void => {
-        resolve({ ok: false, text: '', errorMessage: '网络错误：' + describeNetError(e),
-          status: -1, promptTokens: 0, completionTokens: 0, cachedTokens: 0 });
+        settle({ ok: false, text: '', errorMessage: '网络错误：' + describeNetError(e),
+          status: -1, promptTokens: 0, completionTokens: 0, cachedTokens: 0 }, null, '');
       })
       .finally((): void => {
-        request.destroy();
+        // destroy 包 try（同 ModelListApi / TitleApi / KeyConnectTester 先例）：裸 destroy 抛错
+        // 会从 finally 穿出成未捕获的 promise 拒绝——本层无日志设施，故静默忽略
+        try {
+          request.destroy();
+        } catch (e) {
+        }
       });
   });
 }
@@ -183,7 +209,7 @@ export async function requestOcrText(providerId: string, modelId: string,
   let cachedTokens: number = 0;
   for (let i = 0; i < images.length; i += OCR_VISION_BATCH) {
     const batch: AiImagePart[] = images.slice(i, i + OCR_VISION_BATCH);
-    const result: OcrVisionResult = await requestOcrBatch(auth,
+    const result: OcrVisionResult = await requestOcrBatch(auth, resolved.modelId,
       buildOcrBody(resolved.protocol, resolved.endpoint, resolved.modelId, batch),
       resolved.protocol, resolved.endpoint);
     if (!result.ok) {
