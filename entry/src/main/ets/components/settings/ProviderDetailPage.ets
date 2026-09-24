@@ -30,13 +30,14 @@ import {
   PROTOCOL_OPENAI, serializeHeaderPairs
 } from '../../common/providers/AiTypes';
 import { describeMismatch, MismatchHint } from '../../common/providers/ProviderCatalog';
+import { isPublicCleartextEndpoint } from '../../common/providers/EndpointPolicy';
 // 余额查询链（2026-09-11 反馈修正笔：查询键自余额页移入入口卡——取数只读库态 + 专用 Key
 // 回退池首启用；落库仅 balance_last_text）
 import { BalanceQuery, BalanceResult, fetchBalance } from '../../common/providers/BalanceApi';
 import { BalanceState, queryBalanceState, saveBalanceText } from '../../common/store/ProviderBalanceDb';
 import { firstEnabledPoolKey, KEY_PICK_RANDOM, KEY_PICK_ROTATE } from '../../common/store/ProviderKeyDb';
 import {
-  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect
+  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect, overlayMaterial
 } from '../../common/ImmersiveLevel';
 import { CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor, SEGMENT_BAR_HEIGHT } from '../../common/Theme';
 import { SegmentBar } from '../SegmentBar';
@@ -253,6 +254,46 @@ export struct ProviderDetailPage {
         return;
       }
     }
+    // ── 端点加密闸（2026-09-24 明文放行治理笔 P0-1；判据单源 = EndpointPolicy）──
+    // 公网明文地址（http + 主机既非回环也非私网）新增一次确认：密钥与整轮对话会以明文
+    // 出网。回环与私网放行（自建网关 one-api / LM Studio / Ollama 的主场景），https 与
+    // 不成形地址不进此闸（后者由上方前缀校验拦）。存量已保存的公网明文配置不追溯拦截
+    // （本闸只在改动本次配置时过），可见性由服务商管理页卡片的「明文」徽章常驻承担
+    if (isPublicCleartextEndpoint(baseUrl)) {
+      this.confirmCleartextThenSave(name, baseUrl, bodyJson);
+      return;
+    }
+    this.persistProvider(name, baseUrl, bodyJson);
+  }
+
+  // 公网明文确认后继续保存（2026-09-24 P0-1）：确认走**同一条落库链** persistProvider
+  // （禁在确认支内另抄一份保存逻辑——两处实现必漂移）；取消或关闭（-1 防御）= 不保存且
+  // 静默（属正常取消路径）；对话框自身失败 = 显式提示（P0-1 不静默，且不落库）
+  private async confirmCleartextThenSave(name: string, baseUrl: string,
+    bodyJson: string): Promise<void> {
+    try {
+      const choice = await this.getUIContext().getPromptAction().showDialog({
+        systemMaterial: overlayMaterial(),
+        title: '地址未加密',
+        message: '这个地址在公网且未启用加密连接。API 密钥与对话内容会以明文发送，同一网络中的他人可能看到。仍要保存吗？',
+        buttons: [
+          { text: '取消', color: $r('sys.color.font_secondary') },
+          { text: '仍要保存', color: $r('sys.color.font_primary') }
+        ]
+      });
+      if (choice.index !== 1) {
+        return; // 取消或关闭（-1）——不落库
+      }
+      this.persistProvider(name, baseUrl, bodyJson);
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: '确认框未弹出，请重试保存' });
+    }
+  }
+
+  // 落库链（原 save 尾段逐字搬迁，2026-09-24 P0-1 笔——确认支与直存支共用本实现）：
+  // 提示缓存 → 取钥方式 → 启停草稿 flush → toast + pop；新建 insertProvider（成功后回写
+  // providerId 与编辑对象广播键），编辑 updateProvider + 启用开关
+  private persistProvider(name: string, baseUrl: string, bodyJson: string): void {
     const headersJson: string = serializeHeaderPairs(this.headerPairs);
     // ★ 2026-09-11 方案 v3（P0-1 双证点）：保存链头原为 updateBalanceConfig（恒写
     // balance_* 八列不判空，而余额表单值已随迁页删除——残留调用会把空配置写回库、

@@ -25,6 +25,7 @@ import {
 import { BalanceState, queryBalanceState } from '../../common/store/ProviderBalanceDb';
 import { ENDPOINT_CHAT, PROTOCOL_OPENAI, protocolLabel } from '../../common/providers/AiTypes';
 import { KEY_PICK_ROTATE } from '../../common/store/ProviderKeyDb';
+import { CLEARTEXT_BADGE_TEXT, isPublicCleartextEndpoint } from '../../common/providers/EndpointPolicy';
 import { badgeBg, cardBg, cardDescColor, cardTitleColor, LIST_CARD_TITLE_FONTSIZE } from '../../common/Theme';
 
 // （坑16·2026-08-30：PROVIDER_CARD_REFRESH_KEY tick 广播已删——push 页内
@@ -109,9 +110,15 @@ export struct ProviderCardItem {
       .backgroundColor(badgeBg(this.appColorMode))
   }
 
-  // 徽章文本清单（ForEach 数据源；顺序 = 协议/模型计数/余额；余额启用且查得时入列）
+  // 徽章文本清单（ForEach 数据源；顺序 = 协议/模型计数/明文标记/余额；余额启用且查得时入列）
+  // ★ 「明文」标记（2026-09-24 明文放行治理笔 P0-1）：端点属「公网 + 明文」时常驻——存量
+  // 配置不追溯拦截，可见性由本徽章承担（判据单源 = EndpointPolicy，文案单源 = 其
+  // CLEARTEXT_BADGE_TEXT）；地址取行数据 row.baseUrl（父列表页构造，改地址必伴 reload 重建）
   private badges(): string[] {
     const list: string[] = [protocolLabel(this.protocol), this.modelCountState + ' 模型'];
+    if (isPublicCleartextEndpoint(this.row.baseUrl)) {
+      list.push(CLEARTEXT_BADGE_TEXT);
+    }
     if (this.balanceOn && this.balanceText !== '') {
       list.push(this.balanceText);
     }

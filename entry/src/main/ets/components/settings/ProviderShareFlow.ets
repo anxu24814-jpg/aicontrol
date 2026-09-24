@@ -33,6 +33,7 @@ import {
   writeShareFile
 } from '../../common/store/ProviderShare';
 import { ProviderRow, queryProviders } from '../../common/store/ProviderDb';
+import { isPublicCleartextEndpoint } from '../../common/providers/EndpointPolicy';
 import { overlayMaterial } from '../../common/ImmersiveLevel';
 
 // ═══ 单家导出编排（服务商卡片菜单「分享」项唯一实现）═══
@@ -231,12 +232,21 @@ export async function importShareConfig(uiContext: UIContext,
     });
     const lines: string[] = payloads.map((p: ShareProvider): string =>
       '· ' + p.name + '（' + p.models.length + ' 个模型，' + p.keys.length + ' 支密钥）');
+    // 明文端点提示（2026-09-24 明文放行治理笔 P0-1）：导入即接受「密钥与对话内容经公网明文
+    // 地址外发」这一后果，故提示**并进同一次确认**（不另开第二张卡——确认疲劳会把提示变成
+    // 无脑过卡；判据单源 = EndpointPolicy）。零命中时不加尾段（存量与合规配置零回归）
+    const cleartextNames: string[] = payloads
+      .filter((p: ShareProvider): boolean => isPublicCleartextEndpoint(p.baseUrl))
+      .map((p: ShareProvider): string => p.name);
+    const cleartextWarn: string = cleartextNames.length === 0 ? '' :
+      '\n\n其中 ' + cleartextNames.length + ' 家使用公网明文地址，' +
+        cleartextNames.join('、') + '。密钥与对话内容会以明文发送。';
     // 确认弹窗统一豁免：两键确认但模块级函数宿主（坑 7），见任务书 §3.5
     const confirm = await uiContext.getPromptAction().showDialog({
       systemMaterial: overlayMaterial(),
       title: '导入服务商配置',
       message: '将导入 ' + payloads.length + ' 家服务商：\n' + lines.join('\n') +
-        '\n\n导入后均为新增副本，不会覆盖现有内容。',
+        '\n\n导入后均为新增副本，不会覆盖现有内容。' + cleartextWarn,
       buttons: [
         { text: '取消', color: $r('sys.color.font_secondary') },
         { text: '开始导入', color: $r('sys.color.font_primary') }
