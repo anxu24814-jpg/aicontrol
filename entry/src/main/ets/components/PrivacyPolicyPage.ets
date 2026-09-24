@@ -35,8 +35,8 @@
 //   事实 = 「对话内容可经搜索关键词与网页回灌两条路径离开设备，第三方 = 用户所选或默认
 //   的搜索服务提供者」——★ 此前第四节的绝对句「除上述外不外传」未覆盖该路径（三百零二
 //   节自检 P1 观察项，本条即其收口）。
-// · CONTACT_EMAIL = 开发者真实联系方式（2026-09-07 定稿，现行值见下方常量），正文与
-//   HTML 版同步。
+// · 联系方式 = 应用内反馈功能（公开仓版不含个人邮箱——本件由导出层登记替换改写，见
+//   scripts/public-sync.include 的 [scrub] 段）。
 import { common } from '@kit.AbilityKit';
 import { uiMaterial } from '@kit.ArkUI';
 import { CARD_PANEL_WIDTH } from '../common/Theme';
@@ -44,8 +44,8 @@ import { SETTING_TITLE_PRIVACY_POLICY } from '../common/SettingSearch';
 import { PageShell } from '../common/PageShell';
 import { IMMERSIVE_LEVEL_KEY, resolvedUiMaterial } from '../common/ImmersiveLevel';
 
-// 开发者联系方式（正文与注释两处同步；2026-09-07 决明换号）
-const CONTACT_EMAIL: string = '335164137@qq.com';
+// 开发者联系方式（公开仓版不含个人邮箱）
+// 公开仓版：个人邮箱经导出层登记替换移除，用户经应用内反馈功能联系开发者
 // 政策更新日期（文案修订时同步；2026-09-11 第五节补齐三条声明权限的用途、第八节补访问
 // 密钥卸载不清除的例外口径——权限披露面与卸载口径两处政策级变更，日期随之更新）
 const POLICY_DATE: string = '2026-09-11';
@@ -106,7 +106,7 @@ const POLICY_SECTIONS: PolicySection[] = [
   },
   {
     title: '十二、联系我们',
-    body: '如您对本政策或本应用的数据处理有任何疑问，请通过邮箱 ' + CONTACT_EMAIL + ' 与我们联系。'
+    body: '如您对本政策或本应用的数据处理有任何疑问，请通过应用内反馈功能与我们联系。'
   }
 ];
 
