@@ -1,5 +1,6 @@
-// 预置服务商卡 seed 执行器（2026-08-31 二期任务书，清单单源 = ProviderCatalog.PROVIDER_
-// PRESETS）：首启把 12 家主流服务商一次性落库（3 启 9 停），用户点开填 Key 即用。
+// 预置服务商卡 seed 执行器（清单单源 = ProviderCatalog.PROVIDER_
+// PRESETS）：首启把 7 家境内服务商一次性落库（3 启 4 停），用户点开填 Key 即用。
+// ★ 合规整改后家数由 12 降为 7（境外 5 条预置移除，见 ProviderCatalog 头注释）。
 // 域拆说明：任务书原文「ProviderDb.ets 加 seedProviderPresets」，但该文件 396 行 +
 // 本域必超 400 红线，照 ProviderBalanceDb/ProviderKeyDb 先例独立域件。
 // ★ 幂等与硬语义（任务书 a~d 条）：
@@ -7,7 +8,7 @@
 //   loadContent 回调既有 persistProp 区——坑17 时机，本文件只读写值，不建 preferences）；
 // · 标记已 '1' 直接 return——用户删除的预置卡**永不回填**；
 // · 未标记时逐家处理：按 name+baseUrl 双等查重（queryProviders 快照比对，已存在跳过
-//   该家），不存在则 insertProvider 一步插入并随行带 enabled 初值（2026-09-21 B-3 由
+//   该家），不存在则 insertProvider 一步插入并随行带 enabled 初值（B-3 由
 //   两步法改一步：两步法第二步失败后重跑会被查重 continue 跳过，停用位永久补不上）；
 // · 单家失败 hilog.error 不阻断后续家；**只要有失败家就不写标记**（下次启动重跑，查重
 //   保证不重复、只补失败家——兑现「seed 失败不阻断启动，hilog 留痕下次补齐」）；
@@ -60,7 +61,7 @@ export async function seedProviderPresets(): Promise<void> {
         continue; // 已在库（含用户手建同名家）——跳过不覆盖，用户配置优先
       }
       await insertProvider(preset.shortName, preset.baseUrl, preset.protocol, preset.endpoint,
-        '', '', preset.enabled);
+        '', '', preset.enabled, true);
     } catch (e) {
       allSeeded = false;
       hilog.error(DOMAIN, TAG, '预置家落库失败（下次启动补齐）：%{public}s %{public}s',

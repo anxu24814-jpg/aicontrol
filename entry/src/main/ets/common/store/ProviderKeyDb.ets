@@ -1,18 +1,17 @@
-// 服务商 Key 池域存储层（2026-08-30 多 Key 池新建）：provider_keys 表行读写 + Asset 明文
-// 成对编排 + 轮询指针。自 ProviderDb.ets 域级拆出（宪法 400 行红线——ProviderDb 347 行 +
-// 池 CRUD 必超线；照 ProviderBalanceDb 先例，表结构/迁移在 ChatDbMigrate.ets，本文件复用
-// sharedRdbStore 同一 DB 句柄，红线同源：ResultSet 用完 close / 行级查询天然有界）。
+// 服务商 Key 池域存储层：provider_keys 表行读写 + Asset 明文成对编排 + 轮询指针。自
+// ProviderDb.ets 域级拆出（照 ProviderBalanceDb 先例；表结构/迁移在 ChatDbMigrate.ets，
+// 本文件复用 sharedRdbStore 同一 DB 句柄，红线同源：ResultSet 用完 close / 行级查询天然
+// 有界）。
 // ★ 安全红线：key 明文禁落 DB/日志/toast——表只存元数据（label 掩码显示名/启停/排序），
 // 明文经 KeyStore 进 Asset（条目名 providerId+'/'+keyId，与本表行一一对应）。
 // 语义：label 新建自动编号「Key N」（N = 现存末号最大值 + 1，删除后不重号；非「Key N」
-// 形态的自定名不参与取号）；2026-08-31 起 label 可重命名（行内「更多」菜单 → InputDialog，
-// renameProviderKey 单列 UPDATE 覆盖——每 key 恒只存一个名称无历史堆积；即时落库不经
-// 详情页保存键，领导明示「命名改动不需要点保存也能记住」；启停自同日起改草稿态经保存键，
-// 两语义不同源并存）；写序 = 先 Asset 后 DB 行（行插失败
-// 时资产残留可被下次迁移幂等覆盖，反序会留「行在明文无」的假条目）；删序 = 先 Asset 后行。
-// 轮询指针内存态（Map，重启从头——业界常态，拍板不持久化）。★ 2026-09-17 取钥方式：
-// 指针只服务 rotate 模式；模式列 providers.key_pick_mode（DB v32）由 ProviderDb 读写，
-// 起始位分派收口在本文件 nextPickStart（发送链唯一入口）
+// 形态的自定名不参与取号）；label 可重命名（单列 UPDATE 覆盖，每 key 恒只存一个名称，
+// 即时落库不经详情页保存键——拍板「命名改动不需要点保存也能记住」；启停为草稿态经保存键，
+// 两语义不同源并存）；写序 = 先 Asset 后 DB 行（行插失败时资产残留可被下次迁移幂等覆盖，
+// 反序会留「行在明文无」的假条目）；删序 = 先 Asset 后行。
+// 轮询指针内存态（Map，重启从头——拍板不持久化）；指针只服务 rotate 模式，模式列
+// providers.key_pick_mode 由 ProviderDb 读写，起始位分派收口在本文件 nextPickStart
+//（发送链唯一入口）。
 import { relationalStore } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { nextMessageId, sharedRdbStore } from './ChatDb';
@@ -31,8 +30,7 @@ export interface ProviderKeyRow {
   createdAt: number;
 }
 
-// 池条目全量查询（含停用行——Keys 面板全量展示带开关；sortOrder 升序、同序按创建先后，
-// 与取钥顺序一致）
+// 池条目全量查询（含停用行——Keys 面板全量展示带开关；sortOrder 升序、同序按创建先后，与取钥顺序一致）
 export async function queryProviderKeys(providerId: string): Promise<ProviderKeyRow[]> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('provider_keys');
   predicates.equalTo('providerId', providerId);
@@ -89,9 +87,9 @@ function maxLabelNumber(rows: ProviderKeyRow[]): number {
 }
 
 // 添加 key（面板「添加 Key」链）：Asset 明文 + DB 行成对；label 自动「Key N」、排序追加
-// 尾部、恒启用。返回新行（UI 重拉消费）。★ 2026-08-31 领导指令：池内禁止相同 key——
-// 写入前逐支明文比对（加重复守卫；查重须读明文，属添加路径的必要读取面——低频用户
-// 操作 + 池有界；缺明文支 '' 跳过；trim 后等值防空格差异漏判）
+// 尾部、恒启用，返回新行。★ 池内禁止相同 key（拍板）——写入前逐支明文比对（查重须读
+// 明文，属添加路径必要读取面：低频用户操作 + 池有界；缺明文支 '' 跳过；trim 后等值防
+// 空格差异漏判）
 export async function insertProviderKey(providerId: string, plaintext: string): Promise<ProviderKeyRow> {
   const rows: ProviderKeyRow[] = await queryProviderKeys(providerId);
   const target: string = plaintext.trim();
@@ -130,11 +128,11 @@ export async function insertProviderKey(providerId: string, plaintext: string): 
   return row;
 }
 
-// 导入链专用（2026-09-02 配置导出导入域）：按导出包内元数据建行（label/启停/排序原样
-// 保真——不走 insertProviderKey 的自动编号与恒启用语义，否则恢复出的池与备份不符）；
-// plaintext 传 null/'' = 只建行不写 Asset——导出「不含密钥」档的合法承接，行落「明文缺失」
-// 态由既有重填链兜底（2026-08-31 明文最小化交付，UI 已支持）。写序同 insertProviderKey：
-// 先 Asset 后行（行插失败回滚资产防孤儿明文；Asset 写失败上抛中止——行未插，无残留）
+// 导入链专用：按导出包内元数据建行（label/启停/排序原样保真——不走 insertProviderKey 的
+// 自动编号与恒启用语义，否则恢复出的池与备份不符）；plaintext 传 null/'' = 只建行不写
+// Asset——导出「不含密钥」档的合法承接，行落「明文缺失」态由既有重填链兜底。写序同
+// insertProviderKey：先 Asset 后行（行插失败回滚资产防孤儿明文；Asset 写失败上抛中止
+//——行未插，无残留）
 export async function importPoolKeyRow(providerId: string, label: string, enabled: boolean,
   sortOrder: number, plaintext: string | null): Promise<void> {
   const keyId: string = nextMessageId('pkey');
@@ -156,8 +154,8 @@ export async function importPoolKeyRow(providerId: string, label: string, enable
   }
 }
 
-// 启停（即时落库；停用 = 不参与轮询与兜底取钥；2026-08-31 起面板侧改草稿态经详情页
-// 保存键统一落库——本函数消费方 = ProviderToggleDraft.flush 与本文件内语义不变）
+// 启停（即时落库；停用 = 不参与轮询与兜底取钥；消费方 = ProviderToggleDraft.flush，面板
+// 侧草稿态经详情页保存键统一落库后到本函数）
 export async function setProviderKeyEnabled(keyId: string, enabled: boolean): Promise<void> {
   const bucket: relationalStore.ValuesBucket = { 'enabled': enabled ? 1 : 0 };
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('provider_keys');
@@ -165,11 +163,41 @@ export async function setProviderKeyEnabled(keyId: string, enabled: boolean): Pr
   await sharedRdbStore().update(bucket, predicates);
 }
 
-// 重命名（2026-08-31 新增）：label 单列 UPDATE 覆盖——每 key 恒只存一个名称，改名即
-// 覆盖旧名，无历史行/历史列堆积；即时落库（资源元数据，不经详情页保存键——领导明示
-// 「命名改动不需要点保存也能记住」）；0 行更新抛错（行已删的「已重命名」假成功拦截，
-// P0-1——updateTemplate 先例）；Asset 明文与名称无关零触碰。调用方改后 reload 重拉
-//（ForEach 键含 label → 行重建显示新名）。
+// 建「明文缺失」占位行（AI 配置工具 create / add_key 承接）：只建行**不写 Asset**（明文由
+// 用户在安全输入面板或设置页重填链填入，AI 工具读不到也写不了密钥明文 = 任务书硬边界）。
+// label：显式给且未重名 → 原样用；缺省或重名 → 自动编号「Key N」（重名降级编号而非驳回
+//——驳回会让半成品卡在条目缺失，降级零损失）。排序追加尾部、恒启用；返回新行（回执带
+// id/label）
+export async function insertKeyPlaceholder(providerId: string,
+  label: string): Promise<ProviderKeyRow> {
+  const rows: ProviderKeyRow[] = await queryProviderKeys(providerId);
+  const taken: boolean = rows.some((row: ProviderKeyRow): boolean => row.label === label);
+  const finalLabel: string = label !== '' && !taken ? label : 'Key ' + (maxLabelNumber(rows) + 1);
+  let maxOrder: number = 0;
+  for (const row of rows) {
+    if (row.sortOrder > maxOrder) {
+      maxOrder = row.sortOrder;
+    }
+  }
+  const row: ProviderKeyRow = {
+    id: nextMessageId('pkey'),
+    providerId: providerId,
+    label: finalLabel,
+    enabled: true,
+    sortOrder: maxOrder + 1,
+    createdAt: Date.now()
+  };
+  const bucket: relationalStore.ValuesBucket = {
+    'id': row.id, 'providerId': row.providerId, 'label': row.label,
+    'enabled': 1, 'sortOrder': row.sortOrder, 'createdAt': row.createdAt
+  };
+  await sharedRdbStore().insert('provider_keys', bucket);
+  return row;
+}
+
+// 重命名：label 单列 UPDATE 覆盖（每 key 恒一名，无历史堆积）；即时落库（拍板「命名改动
+// 不需要点保存也能记住」）；0 行更新抛错（假成功拦截，P0-1——updateTemplate 先例）；Asset
+// 明文与名称无关零触碰。调用方改后 reload 重拉（ForEach 键含 label → 行重建显示新名）
 export async function renameProviderKey(keyId: string, label: string): Promise<void> {
   const bucket: relationalStore.ValuesBucket = { 'label': label };
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('provider_keys');
@@ -203,10 +231,10 @@ export function nextRotationStart(providerId: string, enabledCount: number): num
   return ptr % enabledCount;
 }
 
-// ── 取钥方式（2026-09-17；DB v32 providers.key_pick_mode）──
+// ── 取钥方式（DB v32 providers.key_pick_mode）──
 
-// 模式值域（单一来源：列 DEFAULT / 读侧钳位 / UI 两项标签 / 发送链分派四处共用，禁散写字面量；
-// 迁移 SQL 里的一处 DEFAULT 字面量是 SQL 文本内的唯一例外）
+// 模式值域（单一来源：列 DEFAULT / 读侧钳位 / UI 两项标签 / 发送链分派四处共用，禁散写
+// 字面量；迁移 SQL 里的 DEFAULT 字面量是唯一例外）
 export const KEY_PICK_ROTATE: string = 'rotate';
 export const KEY_PICK_RANDOM: string = 'random';
 
@@ -252,9 +280,9 @@ export async function seedPoolKey(providerId: string, plaintext: string): Promis
   return true;
 }
 
-// v2 单 key 资产 → 池首条目搬运（逐服务商：池无行且旧资产在才搬，迁后删旧条目——任务书
-// 拍板幂等形态）。失败按家打日志不阻断启动（下次启动重试；资产删失败残留 = 无消费方的
-// 无害孤儿）。provider 清单走 querySql 直查（避免回引 ProviderDb 成环）
+// v2 单 key 资产 → 池首条目搬运（逐服务商：池无行且旧资产在才搬，迁后删旧条目——拍板
+// 幂等形态）。失败打日志不阻断启动（下次启动重试；资产删失败残留 = 无消费方的无害孤儿）。
+// provider 清单走 querySql 直查（避免回引 ProviderDb 成环）
 export async function migrateProviderKeyPools(): Promise<void> {
   try {
     const result: relationalStore.ResultSet = await sharedRdbStore()

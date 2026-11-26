@@ -46,7 +46,8 @@ export function judgeToolProbe(httpCode: number, toolCallCount: number): string 
 }
 
 // 工具名两型聚合（值域与语义见 SseParser.SseToolDelta 的 name / nameFull 两字段注释；
-// 口径取自既有聚合先例 ToolTypes.ToolCallAccumulator.feed 的同名分支）：
+// 口径取自既有聚合先例 ToolStream.ToolCallAccumulator.feed 的同名分支〔2026-10-06 拆分后
+// 位置；原 ToolTypes〕）：
 // · nameFull 非空 = 全量替换式（Responses 的 added/done 两事件各携带完整名）——直接覆盖；
 // · 否则 name 为分片拼接式（OpenAI chat 事实形态，首帧片段 + 续片）——累加。
 // ★ 漏判一型的后果（2026-09-06 真机实锤 bug 家族）：拼接式误当替换式 = 名字残缺；替换式误

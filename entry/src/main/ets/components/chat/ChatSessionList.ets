@@ -1,717 +1,576 @@
-// 会话列表页（2026-08-29 M2a 领导指令：对话页签 = 历史会话列表，点卡片经官方路由 push
-// 对话页——输入栏随对话页全屏覆盖页签，输入框与悬浮页签的底部避让冲突从结构上消除，
-// dshinhm ChatTab/KimiSessionList 同款架构不搬本体）。数据 = ChatDb conversations 表
-//（每次收发 touch updatedAt，列表时间序即真实最近使用序）。
-// ★ 2026-09-04 二级修正（决明两点）：①一级页 HdsNavigation 下 List 兼容坑（dshinhm
-// 2026-08-20 真机实锤「顶蒙层点不了滑不动」）——一级页禁 List 沉淀，容器回 Scroll+Column
-// +ForEach；②本地 RDB 全量查询拍板——删 QUERY_TAIL_LIMIT 50 上限与滚动加载分页链
-//（SessionDataSource/游标查询/onReachEnd/到底闸全撤——本地库一次查全量毫秒级，dshinhm
-// 服务端分页是远程协议必然，无此约束）。此前 List 化的两真机回归（卡片偏左/标题栏分割线
-// 无光感，坑9 族）随回退一并消除，备忘见 SessionCardItem 卡宽注释。
-// ★ 2026-09-01 会话绑定助手：列表 = 当前助手名下（reload 读 ACTIVE_ASSISTANT_KEY 过滤，
-// 切换助手后经 SESSION_LIST_RELOAD_KEY 广播重拉即变）。
-// 空态卡（2026-08-31 任务 C）：列表空（首拉完成 loaded 且 rows 空、无失败提示）→ 全高
-// 居中「该助手暂无会话」次要色（dshinhm 同款形态；细则见 build 内注释）。
-// 刷新通道：Tab 内容无 onShown 生命周期（dshinhm 同款结论）——对话页 pop 后由宿主
-// NavDestination.onDisappear 自增 reloadTick（@Prop @Watch 消费）重拉列表。
-// ★ 多选模式（2026-08-29 会话多选删除，交互与 dshinhm KimiSessionList 二二一改同款——
-// 官方 Checkbox 右侧勾选圈/点击卡片切换勾选/底部批量条悬浮 HitTestMode.Transparent 容器
-// 空白区触摸穿透）：「对话」页签更多菜单「多选」进入（AppStorage 一次性指令计数器下发，
-// HomeNavigation→本组件零透传——坑3 口径；键常量本文件导出）；勾选后「删除 N」→ 确认
-// 弹窗（彻底删除不可恢复，CustomDialogController + ConfirmDialog——机制选型根因见
-// ConfirmDialog.ets 文件头：TabContent 槽内 showAlertDialog 真机不弹，坑64 族；取消左/
-// 删除右通讯红）→ ChatDb.deleteConversations 事务级联删消息+会话行 → 成功本地
-// 移除 + toast + 退出多选；失败 toast 且保留选择可重试（P0-1）。多选中点击卡片不再进
-// 会话；ForEach 键含选中态后缀（dshinhm 归档页同款——键变即重建刷新勾选圈）。
-// 多选中广播 SESSION_SELECT_MODE_KEY（持续状态非一次性）——宿主 HomeNavigation 消费收起
-// 悬浮页签（dshinhm 二二二改/二二四改：避免页签与批量条重叠，HdsTabs barBottomMargin
-// 巨值推出视口，退出恢复定稿值）。
-// ★ 卡片菜单（2026-08-31 领导指令：长按弹菜单改卡片右侧更多键点击，功能不变——服务商卡
-// 四点键同款）：卡片右缘四点键点击 → 官方 openMenu（SessionCardMenu 域件——自 dshinhm
-// KimiSessionMenu 同处改写，bindContextMenu 真机不弹的回归教训在案）；菜单项 = 删除/重命名。
-// 删除 = 确认弹窗 + deleteConversations 事务级联（同多选删除链路，机制选型见 ConfirmDialog.ets
-// 文件头）；重命名 = InputDialog 弹窗（dshinhm 一八二改同款，verbatim 迁入）+ renameConversation
-// 直写（不动 updatedAt 时间序）→ 重拉列表；多选中菜单键隐藏（原长按禁用守卫语义）。
-// ★ 2026-09-01 反碎片并回：SessionCardItem.ets（会话卡片）+ SessionCardMenu.ets（卡片
-// 菜单）并入——两件均本文件单消费方、同域「会话列表卡片」，原拆分动因 = 本文件当年触
-// 400 旧红线，宪法修订（600 软引导 / 1000 硬线 + 反碎片下限）后按「并入既有同域文件
-// 优先」复归（卡片与菜单域内单消费方，动作执行仍归本页回调）。
-// ★ 加密会话（2026-09-04 决明指令）：卡片更多菜单「加密会话/解除加密」→ 官方生物识别
-//（userAuth.getUserAuthInstance——封装在 common/BiometricGate.ets，接口/权限/信任级
-// 查证依据见其头注释）→ 通过落 conversations.locked（DB v16，ChatDb.setConversationLocked，
-// 不动 updatedAt 时间序）；带锁卡片点击进入前同样需通过认证（每次进入都验证，不维持
-// 解锁态）。只改进入门禁，会话产生/消息读写/存储链路零改动；锁标在卡片时间左侧
-//（sys.symbol.lock）；ForEach 键含锁定态后缀——开关锁即键变重建刷标。
-// ★ 会话搜索与收藏（2026-09-08 任务书-会话搜索与收藏-20260907 执行；同日改版：决明指令
-// 「会话搜索要同设置搜索一样点击 push 二级页，之前全都放一级页了改」——搜索功能全量迁
-// 独立二级页 SessionSearchPage.ets，本页只留收藏）：
-// ①收藏 = DB v19 favorite 列——卡片菜单「收藏/取消收藏」（追加于加密项后）+ 卡片星标
-//（锁标同区、仅收藏卡显示）+ 标题栏下「全部/收藏」分段过滤（ProviderPage 悬浮吸顶形制逐
-// 参数同款）；收藏不改时间排序（updatedAt 零新写点）。
-// ②搜索 = 对话页签标题栏搜索键（三键最左）→ push SessionSearchPage（HomeNavigation.
-// newSessionSearch——搜索范围 = 当前助手名下全部会话标题，与分段叠加语义随迁页作废）。
-// 本页搜索域（一级页内嵌搜索态：展开指令 SESSION_SEARCH_CMD_KEY/搜索框行/记录区/query
-// 过滤/顶让位/焦点管理）全量退役，明细见 git diff 与变更记录一百零九节。焦点结论（官方
-// 查证 2026-09-08）留档备查：defaultFocus 仅对路由页/模态容器「新进入首次」生效（d.ts:
-// 18823 限定 Page/NavDestination/Dialog 族 + FAQ faqs-arkui-1501 场景一），TabContent 内
-// 动态挂载不适用——搜索迁路由二级页后 defaultFocus 语义直接可用，原 requestFocus hack
-//（FAQ 场景二）随迁退役。最近进入记录点保留于本页 handleOpenCard（列表页点卡进入仍记
-// ——键/上限/函数见 common/SessionSearch.ets，另一记录点 = SessionSearchPage.openConv）。
-import { ComponentContent, LengthMetrics, SegmentButtonV2Items, uiMaterial, SymbolGlyphModifier } from '@kit.ArkUI';
-import {
-  HdsListItemCard, PrefixIcon, SuffixCustomBuilder
-} from '@kit.UIDesignKit';
+// 会话列表页（M2a：对话页签 = 历史会话列表，点卡片经官方路由 push 对话页——输入栏随对话页
+// 全屏覆盖页签，底部避让冲突从结构上消除，dshinhm 同款架构不搬本体）。数据 = ChatDb
+// conversations 表（每次收发 touch updatedAt，列表时间序即真实最近使用序）。
+// ★ 2026-09-25 首页 Repeat 试迁（决明指定）：渲染域（List 容器 + Repeat + 行卡 + 提示行）
+// 已拆出至 components/chat/ChatSessionRows.ets，本壳只留数据与业务（读取/分段过滤/菜单/
+// 弹窗/删除/多选状态）与事件接线；机制实读（Repeat 懒加载须配 V2 / RepeatItem 须整体
+// 传参 / 键只写身份、禁键变重建）与红线见该件头注释。前史两点结论：①「一级页禁 List 沉淀」
+//（2026-09-04，坑50）系当年结论——2026-09-25 实验分支真机三验已过（切段/滚动/状态六项
+// 全对），List 骨架在本页重新可用，本轮按官方选型换 Repeat（官方指南「建议开发者优先使用
+// Repeat」）；②本地 RDB 全量查询拍板不动——QUERY_TAIL_LIMIT 50 上限与滚动加载分页链已全撤
+//（本地库一次查全量毫秒级，dshinhm 服务端分页是远程协议必然，无此约束）。
+// ★ 列表 = 当前助手名下（读取链单源 HomeListWarmup 内读 ACTIVE_ASSISTANT_KEY 过滤，切换
+// 助手后经 SESSION_LIST_RELOAD_KEY 广播重拉即变）。
+// 空态卡：列表空（首拉完成 loaded 且 rows 空、无失败提示）→ 全高居中「该助手暂无会话」
+// 次要色（细则见 build 内注释）。
+// 刷新通道：Tab 内容无 onShown 生命周期——对话页 pop 后由 ChatPageLifecycle.leave 尾沿去抖
+// 自增 SESSION_LIST_RELOAD_KEY（本组件 @StorageProp @Watch 消费）重拉列表；重拉与回包落屏
+// 再受滚动空闲闸约束（R2-c，见字段注释），滑动中不在同一帧替换整表数据源。
+// ★ U9 会话列表 loading：退页不断流后生成在运行时继续——reload 行合成读运行时生成中标记
+//（reconcileSessionRows 内 isGenerating），行卡渲染生成中转圈；生成收尾在
+// 离页期由运行时收尾钩子自增 SESSION_LIST_RELOAD_KEY（ChatSessionRuntime.onRoundSettled）
+// 驱动重拉清退标记（一次性计数器通道，坑3 口径白名单纪律；R2-a 比对吞掉无变化重拉）。
+// ★ 多选模式（dshinhm 二二一改同款——官方 Checkbox 右侧勾选圈/点卡片切换勾选/底部批量条
+// 悬浮 HitTestMode.Transparent 空白区触摸穿透）：「对话」页签更多菜单「多选」进入
+//（AppStorage 一次性指令计数器下发，HomeNavigation→本组件零透传——坑3 口径；键常量本文件
+// 导出）；勾选后「删除 N」→ 确认弹窗（彻底删除不可恢复，CustomDialogController +
+// ConfirmDialog——TabContent 槽内 showAlertDialog 真机不弹，坑64 族，机制选型见
+// ConfirmDialog.ets 文件头；取消左/删除右通讯红）→ deleteConversations 事务级联删消息+会话
+// 行 → 成功本地移除 + toast + 退出多选；失败 toast 保留选择可重试（P0-1）。多选中点卡片
+// 不再进会话；勾选圈显隐与选中回显走卡片 @Param（迁 Repeat 后不再用「键含选中态后缀」的
+// 键变重建机制，见 ChatSessionRows.ets 头注释机制③）。多选中广播 SESSION_SELECT_MODE_KEY
+//（bool 持续状态非一次性）——宿主收起悬浮页签（避免页签与批量条重叠，barBottomMargin 巨值
+// 推出视口，退出恢复定稿值）。
+// ★ 卡片菜单（2026-10-30 两千零一十节定稿：长按卡片 → 标准官方上下文菜单，无预览浮起、
+// 无蒙层；触发方式与参数全在拆件 SessionCardMenu.ets——原「卡片右缘四点键 + 官方 openMenu」
+// 形制已退役，勿按旧形制补回可见入口）：删除 =
+// 确认弹窗 + deleteConversations 事务级联（同多选删除链路）；重命名 = InputDialog 弹窗
+//（dshinhm 一八二改同款）+ renameConversation 直写（不动 updatedAt 时间序）→ 重拉列表；
+// 多选态不挂长按菜单（勾选中误弹会与批量语义打架）。
+// ★ 2026-11-17 整体退役加密会话笔：原「加密会话」菜单项/侧滑键/锁标/进入生物识别守卫
+// 全链撤除（含 common/BiometricGate.ets 整件与 conversations.locked 读写；v66 迁移已清零
+// 存量标记）。本页进入卡片一律直通，动作面 = 重命名/移动/收藏/删除四项。
+// ★ 会话收藏（2026-09-08 任务书；同日改版：搜索功能全量迁独立二级页 SessionSearchPage.ets，
+// 本页只留收藏）：收藏 = DB v19 favorite 列——卡片菜单「收藏/取消收藏」+ 卡片星标（仅收藏
+// 卡显示）+ 「全部/收藏」分段过滤（ProviderPage 悬浮吸顶形制逐参数同款）；
+// 收藏不改时间排序（updatedAt 零新写点）。★ 2026-10-29 标题栏内嵌分段笔：HDS 路径承载位
+// 自「标题栏下方带」迁入「标题栏覆盖层中央」（ChatTabTitleBar 内嵌，96~120vp 定宽），下方
+// 带整条取消、列表首卡让位 48→8；本件消费面不变（@Link favSegment 与宿主标题栏承载件
+// 共用同一份状态）。搜索入口 = ⋯ 菜单「搜索会话」项（2026-10-29：原标题栏搜索圆键
+// 退役，入口下沉菜单首项，动作与二级页契约不动）→ push SessionSearchPage（搜索范围 = 当前
+// 助手名下全部会话标题）。本页搜索域（一级页内嵌搜索态）全量退役；焦点结论留档备查：
+// defaultFocus 仅对路由页/模态容器「新进入首次」生效（d.ts 限定 Page/NavDestination/Dialog
+// 族 + FAQ faqs-arkui-1501），TabContent 内动态挂载不适用——搜索迁路由二级页后 defaultFocus
+// 语义直接可用，原 requestFocus hack 随迁退役。最近进入记录点保留于本页 handleOpenCard
+//（列表页点卡进入仍记——键/上限/函数见 common/SessionSearch.ets，另一记录点 =
+// SessionSearchPage.openConv）。
+// ★ 2026-10-27 闲时治理 C3（除雷笔）：行派生纯函数族（conversationRowsEqual /
+// applyDraftRows / reconcileSessionRows / repinDraftTop）并入会话行模型件
+// ChatSessionRowModel.ets（类型属主即函数属主，SessionListRow 定义在彼件；2026-11-16 P0
+// 再自 ChatSessionRows.ets 域级拆出；断言装载读点见 assert-chat-runtime 351/403/2185 组）。
+import { SegmentButtonV2Items, UIUtils } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigurationConstant } from '@kit.AbilityKit';
-import { ConversationRow, deleteConversations, queryConversations,
-  renameConversation, setConversationFavorite, setConversationLocked, whenReady } from '../../common/store/ChatDb';
+import { ConversationRow, countWorkspaceTmpFiles, deleteConversations,
+  listWorkspaceTmpGroups, renameConversation,
+  setConversationFavorite } from '../../common/store/ChatDb';
 import { CONV_TITLE_TICK_KEY } from '../../common/TitleGen';
-import { biometricGate, BiometricGateOutcome, BiometricGateResult, gateOutcomeMessage } from '../../common/BiometricGate';
-import { PREF_SESSION_ICON_KEY, PREF_SESSION_TIME_KEY } from '../../common/AppPreferences';
-import {
-  ACTIVE_ASSISTANT_KEY, ASSISTANT_DEFAULT_ID, historyFilterIds
-} from '../../common/store/AssistantDb';
-import { CARD_PANEL_WIDTH, CARD_SPACING, cardBg, cardDescColor,
-  menuDividerColor } from '../../common/Theme';
-import { IMMERSIVE_LEVEL_KEY, overlayMaterial, resolvedUiMaterial } from '../../common/ImmersiveLevel';
+import { PREF_SESSION_CARD_GRID_KEY,
+  PREF_NEW_SESSION_ENTRY_KEY, NEW_SESSION_ENTRY_TAB_BAR, NEW_SESSION_ENTRY_FLOAT,
+  PREF_CARD_ALPHA_LEVEL_KEY, CARD_ALPHA_DEFAULT,
+  resolveNewSessionEntry }
+  from '../../common/AppPreferences';
+import { cardDescColor } from '../../common/Theme';
+import { IMMERSIVE_LEVEL_KEY, overlayMaterial } from '../../common/ImmersiveLevel';
 import { recordSessionRecentConv } from '../../common/SessionSearch';
-import { PROACTIVE_UNREAD_CONV_KEY } from '../../common/ProactiveGen';
-import { formatConvTime } from './SessionSearchPanels';
-import { SegmentBar } from '../SegmentBar';
-import { AppMenuHost } from '../../common/AppMenuHost';
-import { SessionMultiselectBar } from './SessionMultiselectBar';
+import { PROACTIVE_UNREAD_CONV_KEY, SESSION_LIST_RELOAD_KEY }
+  from '../../common/AppBroadcastKeys';
+// ★ C3：行派生纯函数族随族并入行模型件（ChatSessionRowModel.ets，2026-11-16 P0 域级拆出）；
+// 本壳只引 P0 重拉单点 reconcileSessionRows（按 id 逐行复用旧行，未变行零 new）
+import { SessionRows } from './ChatSessionRows';
+import { SessionListRow, reconcileSessionRows } from './ChatSessionRowModel';
+// 方块档渲染域（2026-11-11 新增）：与 List 档并列的两列 WaterFlow 容器，由偏好整页切换
+import { SessionGridRows } from './SessionGridRows';
+// ★ 2026-10-16 进会话性能回归修复笔随施工打点（方案 §五「随笔打点」——观测面，见彼件）
+import { markEnterProbe } from './ChatEnterProbe';
+// 右下悬浮新建键（2026-10-25 复活笔；握姿订阅与几何在彼件，本页只挂载与回调上行）
+import { SessionNewFab } from './SessionNewFab';
+import {
+  hasHiddenSelection, isAllSelectedIn, nextSelectAllIds, SessionMultiselectActionBar
+} from './SessionMultiselectBar';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InputDialog } from './InputDialog';
+import { sheetPanelOptions, SheetDetents } from './KimiSheetCommon';
+import { SessionMovePanel } from './SessionMovePanel';
+// 会话草稿仓库（列表合成打标/合成行/删除级联单源在彼件；★ C3：合成族已并入
+// ChatSessionRows，本件只余 NEW_DRAFT_KEY 判据与删除级联）
+import { NEW_DRAFT_KEY, removeDraftsWithFiles } from './ChatDraftStore';
+// 一级页签列表首查预热（首切闪修复笔）：读取链单源（whenReady + 列表/摘要两读并行）+
+// 冷启动预热快照，机制与规范偏离申报见彼件头注释
+import { homeListWarmup, SessionListSnapshot } from '../../common/store/HomeListWarmup';
 
-// 会话列表刷新广播键（一次性计数器，勿持久化）：写点 = 对话页离页（ChatPage.aboutToDisappear
-// ——新建/改行后广播）、本组件两条删除链成功支（deleteOne / deleteSelected——★ 2026-09-20
-// 复验轮补：删行发生在对话页签列表内、不经对话页，此侧原零写点）、助手页切/删助手、备份恢复
-// （DataSyncPage）、主动消息落库（ProactiveGen）；消费方 = 本组件 + 助手页卡面「会话 N」chip
-// + 会话搜索页，各自 @Watch 重拉。走 AppStorage 广播而非 @Prop 透传——2026-08-29 真机实测
-// @Prop 计数器经 HdsTabs/TabContent 多层未传导（返回后时间序不刷新，冷启动数据正确），
-// dshinhm 多选指令同款 AppStorage 姿势与组件树层级无关
-export const SESSION_LIST_RELOAD_KEY: string = 'sessionListReloadTick';
-// 多选进入指令键（一次性计数器，勿持久化——计数器形态防同值不触发，@Watch 只在值变化
-// 时回调）：发布方 = HomeNavigation（更多菜单「多选」项），消费方 = 本组件 @StorageProp
-// @Watch
+// ★ 本组键已迁零 import 叶子 common/AppBroadcastKeys.ets——与 common 侧 ProactiveGen 写点
+// 共享，留在本件构成 common→components 反向依赖（模块环一条边）。
+// 多选进入指令键（一次性计数器，勿持久化——防同值不触发 @Watch）：发布方 = HomeNavigation，
+// 消费方 = 本组件 @StorageProp @Watch
 export const SESSION_MULTISELECT_CMD_KEY: string = 'sessionMultiselectCmd';
-// 多选状态广播键（bool，持续状态非一次性——勿 persistProp）：本组件写入，宿主
-// HomeNavigation 消费收起悬浮页签（HDS 路径 barBottomMargin 巨值/回退路径隐藏 BottomTabBar）
+// 多选状态广播键（bool 持续状态——勿 persistProp）：本组件写入，宿主消费收起悬浮页签
+//（barBottomMargin 巨值推出视口）
 export const SESSION_SELECT_MODE_KEY: string = 'sessionSelectMode';
+// 多选已选计数广播键（number 持续状态——勿 persistProp）：selectedIds @Watch 写入，
+// 宿主消费拼「已选 N 项」
+export const SESSION_SELECT_COUNT_KEY: string = 'sessionSelectCount';
 
-// 滚动内容顶部让位常量（vp）：分段悬浮层 = 官方背板高 40（SegmentBar 头注释 resources
-// 实锤 segment_button_v2_singleline_background_height）+ 上间隙 8（margin 已含 topPad-8，
-// 此处补带高与下间隙）= 48。微调以真机首卡不遮挡为准（任务书 §2.3），微调值记变更记录
-const SEGMENT_TOP_CLEARANCE: number = 48;
+// 标题栏内嵌分段后的首卡呼吸间距（vp）：分段胶囊迁入标题栏覆盖层后 HDS 路径无带可让，
+// 列表首卡只留 8vp（延续原带内 inset 观感）。真值归本壳，渲染域只收参数
+const TITLE_BAR_ROWS_GAP: number = 8;
 
-// ═══ 会话卡片（2026-08-30 自本页拆出、2026-09-01 反碎片并回；★ 2026-09-08 卡形统一）═══
-// 形态 = 与「会话搜索」二级页（SessionSearchPage.ResultCard / SessionRecentSection.RecentCard
-// 同款——决明指令「历史卡统一为搜索页卡形」，搜索页真机已验收「卡形合适」）：官方
-// HdsListItemCard（HDSComponent.Full 可用时）= 前缀 message 符号 + 标题/时间两行 + C 区
-// 自绘功能键；无 Full 回退自制卡同构（搜索页回退卡 + 右缘键）。骨架换官方行卡后行高/字级/
-// 按压蒙层/深浅色随官方内建（即搜索页已验收形态），卡宽不挂 .width（官方姿势 = 容器 100%
-// − 内部 16vp×2 = CARD_PANEL_WIDTH 三线对齐——搜索页同口径，旧「Scroll+Column 下挂
-// CARD_PANEL_WIDTH」注释随之退役）。
-// 功能矩阵（与旧自制卡逐项对齐，零削减）：
-//   · 点击 = 进会话（多选中 = 切换勾选；加密守卫/记最近进入在宿主 handleOpenCard，上行
-//     onOpen 不变）；
-//   · 星标（favorite）/锁标（locked）等状态标记 = 副行（时间）**后**（★ 定稿位置三改——
-//     决明「改回显示在副标题时间后」：111 版键坐标为锚——官方行卡 C 区左锚 + 内容自适应
-//     宽，标记进 C 区必推键（112 反馈）/固定宽右推（113 反馈）/边距非目标（114 澄清），
-//     定稿 = C 区只放键（=111 版键位置原样）；星/锁符号位历程 = 副行前缀（111→被否）/标题
-//     行尾（115）/标题首位（116）/**副行后缀即现行**（118，决明拍板）：secondarySuffixSymbol
-//     /secondarySuffixSubSymbol（时间文本右侧、官方排版不推键、与时间显隐开关独立——副行
-//     条件副行存在性见回退分支）；★ SubSymbol 依赖修复沿用（117 节决明反馈实锤）：官方
-//     语义 = 第 2 符号位仅在第 1 符号位存在时才显示——第 1 位动态填充（星优先、无星有锁
-//     则锁占第 1 位）、第 2 位 = 仅星锁并存放锁，组合全覆盖且顺序（星、锁）不变（脚本
-//     断言 4 组合 PASS——117 节）；后续同类标记追加点 = 本行符号位（仅两盏且第 2 位依赖
-//     第 1 位——再增标记须优先考虑回退分支同构的自绘方案或 B 区 customBuilder，勿在
-//     符号位堆叠）；
-//   · C 区（右缘）= 只放键（普通态更多键 TEXTUAL 无显式高〔2026-09-12 UI 同形异构归一
-//     笔 1 对齐 ProviderCardItem 基准〕+ 锚点 id 前缀
-//     SESSION_CARD_MENU_ID_PREFIX——SessionCardMenuHost.open 拼接同源，旧锚点语义不变 /
-//     多选态勾选圈：官方 Checkbox + hitTestBehavior(None) 纯视觉——坑5：Checkbox 自带
-//     点击处理会消费事件与 selectedIds 脱钩；40vp 占位 = 两态统一基准【2026-09-06 决明
-//     拍板，圈 20vp 曾把卡压矮】）。★ 不走官方 SuffixIcon/SuffixButton = SuffixIconOptions
-//     无 id（openMenu 锚点须键自身 id——ProviderCardMenu 轮 8 先例「勿锚整卡，菜单偏低
-//     ≈30vp」）、SuffixButton 仅文字钮无符号——故经 SuffixCustomBuilder 自绘（形制/锚点/
-//     点击穿透与旧自制卡零变化，宿主组件仅换官方骨架，无项目先例 = 官方文档 API 参考
-//     查证 + 真机验证项）；
-//   · 标题 16fp 官方行卡默认（primaryText 内建单行省略/截断，官方无 maxLines/overflow
-//     配置项——TextOptions 仅 text+modifier【d.ts 核实】，「标题过长，调整字数截断」=
-//     行卡内建行为 + 真机验证点：长标题（AI 生成常见长度）须显示省略号；回退自制卡
-//     maxLines(1)+Ellipsis 显式兜底（占位/AI 生成/用户重命名长标题——旧三件套职责保留）；
-//     若官方内建不截断 → 退路 = textItem.customBuilder 自绘标题（仿官方字级 + maxLines）。
-// ★ 2026-09-19 前缀图标显隐开关（偏好设置页·阅读与会话组第 3 行，决明指令）：message
-//     前缀符号受 PREF_SESSION_ICON_KEY 控制（@StorageProp 自订阅切换即刷——坑16 正解，
-//     无需宿主透传与 ForEach 键变）；官方分支 prefixItem 三目传 undefined（d.ts 可选属性
-//     实锤）走无前缀布局标题左移，回退分支条件渲染同效。默认开 = 现状零回归；真机验证
-//     点 = 官方行卡关图标后标题贴左 padding 无空位残留。
-// ★ 键坐标（最终定稿 = 一百一十一「刚调回官方卡时」坐标）：官方行卡 C 区内容只键 →
-// 键位置即 111 版原样（无 cardSuffixMargin、无固定宽——一百一十三/一百一十四两版修复
-// 目标错位后全回退，本行以上为唯一真源）；回退自制卡标题列 layoutWeight 撑满推键贴
-// 卡内容右缘（卡 padding 16 内缩）——两分支键缘同线（111 版验收坐标）。
-// 底色 = 官方行卡默认卡底色随 appColorMode 深浅（不传 cardBackgroundColor——搜索页同款）；
-// appColorMode @Prop 保留 = 回退自制卡 cardBg 消费。
-// 菜单入口（2026-08-31 领导指令：长按弹菜单改卡片右侧更多键点击——服务商卡四点键同款形制
-// dot_grid_2x2）：键点击弹官方菜单，锚点 id（前缀 + 会话 id）挂键自身（勿锚整卡先例）；
-// 长按手势已清除；多选中菜单键隐藏（原长按多选守卫语义）。
-// ★ 2026-09-04 会话时间显示开关：时间文本显隐走 @StorageProp 自订阅（坑16 正解——
-// 开关切换标签页即刷；仅隐藏显示，updatedAt 照常记录，数据链路零改动）。
-@Component
-struct SessionCardItem {
-  // 卡片数据（宿主 ForEach 项；键含选中态/锁定态/收藏态后缀——变化即重建，本成员建后不变）
-  row: ConversationRow = { id: '', title: '', providerId: '', createdAt: 0, updatedAt: 0,
-    locked: false, titleSource: '', favorite: false };
-  // 会话时间显示开关（2026-09-04 偏好设置页第 6 项：true = 显示最后消息时间（默认）/
-  // false = 只隐藏时间文本——@StorageProp 自订阅切换即刷，无需宿主透传）
-  @StorageProp(PREF_SESSION_TIME_KEY) sessionTimeOn: boolean = true;
-  // 会话图标显示开关（2026-09-19 偏好设置页·阅读与会话组第 3 行：true = 卡片左侧显示
-  // 消息图标（默认，现状）/ false = 图标不显示，标题内容随之左移——@StorageProp 自订阅
-  // 切换即刷，无需宿主透传与 ForEach 键变（坑16 正解，与会话时间开关同款契约）
-  @StorageProp(PREF_SESSION_ICON_KEY) sessionIconOn: boolean = true;
-  // 未读红点（2026-09-12 主动消息第二笔：主动消息落库写 PROACTIVE_UNREAD_CONV_KEY =
-  // 目标会话 id，用户进该会话页 onPageShown 清空——本组件 @Prop 单向接收宿主判定；
-  // 键进宿主 ForEach 键后缀，变化即重建刷新红点）
-  @Prop unread: boolean = false;
-  // 多选模式（@Prop：宿主状态变化须刷新勾选圈显隐——坑57 族入参不重渲染的正解）
-  @Prop selectMode: boolean = false;
-  // 本卡是否选中（@Prop 驱动 Checkbox select 回显）
-  @Prop selected: boolean = false;
-  // 系统颜色模式（卡底配色深浅；宿主 @StorageProp 下发）
-  @Prop appColorMode: number = 1;
-  // 点卡片回调（普通模式 = 进会话；多选中由本组件内守卫切换为勾选）
-  onOpen: (id: string) => void = () => {
-  };
-  // 勾选切换回调（多选中点卡片）
-  onToggle: (id: string) => void = () => {
-  };
-  // 更多键点击回调（普通模式弹官方菜单）
-  onMenu: (row: ConversationRow) => void = () => {
-  };
-  // 官方 HDS 行卡可用性（HdsListItemCard 要求 HDSComponent.Full——搜索结果页/记录区同款
-  // 能力位判定）：True = build 走官方行卡分支；False = 回退自制卡（同构）
-  private hdsListCardAvailable: boolean = canIUse('SystemCapability.UIDesign.HDSComponent.Full');
-  // 更多键（C 区自绘，普通态）：形制/锚点/回调与旧自制卡零变化——TEXTUAL（★ 2026-09-12
-  // UI 同形异构归一笔 1 去显式 height(40)：对齐 ProviderCardItem 四点键基准形制 = 无显式
-  // 高吃官方默认热区，热区变化列真机验收）+ 锚点 id 挂键自身（前缀 + 会话 id，勿锚整卡
-  // 先例）+ 事件上行 onMenu。
-  // ★ 键位置回退定稿（2026-09-08 决明拍板「刚调回官方卡时坐标」）：官方行卡 C 区 = 左锚 +
-  // 内容自适应宽——C 区内容宽变即键位动。故 C 区**只放键**（一百一十一版形态，键位置即
-  // 决明第一次见官方卡的坐标），星/锁改走 primarySuffix 官方符号位（标题行尾、紧邻键
-  // 左侧，见 build 注释）；一百一十二~一百一十四三版（标记进 C 区/固定宽锚定/cardSuffixMargin
-  // 16）全部回退——标记进 C 区被推（112 反馈）、固定宽右推 44vp（113 反馈「整体太右」）、
-  // 边距非目标坐标（114 澄清）
-  @Builder
-  MenuKeyBuilder() {
-    Button() {
-      SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
-        .fontSize(18)
-        .fontColor([$r('sys.color.font_secondary')])
-    }
-    .buttonStyle(ButtonStyleMode.TEXTUAL)
-    .id(SESSION_CARD_MENU_ID_PREFIX + this.row.id)
-    .onClick((): void => {
-      this.onMenu(this.row);
-    })
-  }
-  // 勾选圈（C 区自绘，多选态）：官方 Checkbox + hitTestBehavior(None) 纯视觉指示器（坑5：
-  // Checkbox 自带点击处理会消费事件与 selectedIds 脱钩——点击穿透落到行卡 onClick 单一
-  // 通路切换勾选，与旧自制卡交互逐像素一致）；40vp 占位 = 两态统一基准（圈 20vp 缩水先例）
-  @Builder
-  CheckKeyBuilder() {
-    Column() {
-      Checkbox()
-        .select(this.selected)
-        .hitTestBehavior(HitTestMode.None)
-    }
-    .height(40)
-    .justifyContent(FlexAlign.Center)
-  }
+// ★ 首页 Repeat 试迁：卡片与列表容器两件已迁址 ChatSessionRows.ets（渲染域分立）。
 
-  // 未读红点显隐判定（2026-09-12 主动消息第二笔：多选模式不显示——与勾选圈键位互斥，
-  // 避免视觉冲突〔任务书 §二〕；官方/回退两分支共用唯一判据）
-  private showUnreadDot(): boolean {
-    return !this.selectMode && this.unread;
-  }
+// ═══ 会话卡片菜单（2026-10-30 迁出本件）═══
+// 菜单内容、长按参数与材质全部落在渲染域的拆件 SessionCardMenu.ets——本壳不再持菜单
+// Builder / ComponentContent 宿主 / openMenu 调用，只把四个动作方法经 SessionRows 下传。
+// 触发方式由「卡片右缘四点键点击 + PromptAction.openMenu」改为「长按卡片 + bindContextMenu
+// 标准上下文菜单」（同日两千零一十节再退役预览浮起）；原实现保留在 git 历史，勿按旧形制
+// 重建锚点 id 或宿主类。
 
-  // C 区键行（普通态 = 红点 + 更多键 / 多选态 = 勾选圈）：红点在菜单键左侧、不动官方
-  // 两位符号位（secondarySuffixSymbol / secondarySuffixSubSymbol 星/锁位——§1.1 ②硬约束）；
-  // ★ CustomBuilder lambda 体内禁声明式组件尾随闭包（Row(){} 语法只在 @Builder/build
-  // 上下文合法，lambda 内直写编译期「';' expected」）——故抽本 @Builder 方法、suffixItem
-  // lambda 只做调用（CheckKeyBuilder/MenuKeyBuilder 同款结构）
-  @Builder
-  SuffixRowBuilder() {
-    Row({ space: 4 }) {
-      if (this.showUnreadDot()) {
-        Circle({ width: 8, height: 8 })
-          .fill($r('sys.color.warning'))
-      }
-      if (this.selectMode) {
-        this.CheckKeyBuilder()
-      } else {
-        this.MenuKeyBuilder()
-      }
-    }
-  }
-
-  build() {
-    if (this.hdsListCardAvailable) {
-      // 官方行卡（搜索页 ResultCard 同款骨架）：前缀 message 符号（★ 2026-09-19 起受
-      // 会话图标显示开关控制——关时 prefixItem 传 undefined〔d.ts 可选属性实锤，与
-      // secondaryText/secondarySuffixSymbol 传 undefined 同款姿势〕，官方走无前缀布局
-      // 标题左移）+ 标题/时间两行 + C 区
-      // 只放键（★ 回到一百一十一版坐标——官方行卡 C 区左锚 + 内容自适应宽，内容只键则
-      // 键位置即决明「刚调回官方卡时」坐标；星/锁 = 副行（时间）后官方符号位——
-      // secondarySuffixSymbol/secondarySuffixSubSymbol，位置与动态填充规则见上方组件头
-      // 「星标（favorite）/锁标（locked）」条〔118 定稿，本注释 2026-09-08 自检轮对齐——
-      // 此前误留 115/116 版「标题行尾 primary 符号位」措辞〕）；删 cardSuffixMargin
-      // （一百一十四版边距非目标坐标）
-      HdsListItemCard({
-        prefixItem: this.sessionIconOn ?
-          new PrefixIcon({ iconValue: { symbol: $r('sys.symbol.message') } }) : undefined,
-        textItem: {
-          primaryText: { text: this.row.title !== '' ? this.row.title : '新对话' },
-          // 星/锁 = 副行（时间）**后**（2026-09-08 决明拍板「改回显示在副标题时间后」——
-          // 从标题首位前缀改回副行后缀位；官方符号位 = secondarySuffixSymbol（右侧第 1
-          // 个）/secondarySuffixSubSymbol（右侧第 2 个，**仅第 1 位存在时才显示**——d.ts
-          // 语义，SubSymbol 依赖坑 117 节实锤）。
-          // ★ 动态填充沿用 117 修复：第 1 位 = 收藏优先星、无星有锁则锁占位（独立显示）；
-          // 第 2 位 = 仅星锁并存时放锁（顺序 = 星、锁不变）。组合覆盖 = 仅星（星）/仅锁
-          // （锁）/星锁并存（星、锁）/无标记（空）；时间显隐开关只控时间文本，符号恒显
-          //（加密标记恒在拍板——时间关时副行 = [星/锁]）；回退分支自绘 Row 无依赖问题。
-          secondarySuffixSymbol: this.row.favorite ? { symbol: $r('sys.symbol.star_fill') } :
-            (this.row.locked ? { symbol: $r('sys.symbol.lock') } : undefined),
-          secondarySuffixSubSymbol: this.row.favorite && this.row.locked ?
-            { symbol: $r('sys.symbol.lock') } : undefined,
-          secondaryText: this.sessionTimeOn ?
-            { text: formatConvTime(this.row.updatedAt) } : undefined
-        },
-        // 红点 + 键分支收敛在 SuffixRowBuilder（lambda 体内禁组件尾随闭包，见其注释）
-        suffixItem: new SuffixCustomBuilder((): void => {
-          this.SuffixRowBuilder()
-        }),
-        cardBorderRadius: 16,
-        onClick: (): void => {
-          if (this.selectMode) {
-            this.onToggle(this.row.id);
-            return;
-          }
-          this.onOpen(this.row.id);
-        }
-      })
-    } else {
-      // 回退自制卡（搜索页回退卡同构 + 右缘键）：前缀 message 符号（受会话图标显示开关
-      // 控制——关时条件渲染不挂，Column 成为首子元素、Row space 14 不产左侧空隙，标题
-      // 自然左移）+ 标题/时间两行；星/锁
-      // 在副行（时间）后（与官方分支 secondarySuffix 同位次——时间右、自带 space 8；时间
-      // 开关关时星/锁仍在——副行条件 = sessionTimeOn || 有标记）；右缘只键（位置 = 卡内容
-      // 右缘，与官方分支键缘同线——外层 Row 标题列 layoutWeight 撑满推键贴右）；
-      // Button(Normal) 包裹 = 官方原生按压蒙层（2026-09-12 UI 同形异构归一笔 1——与
-      // HDS 分支按压反馈对齐，selectMode 分支逻辑原样）
-      Button() {
-        Row({ space: 14 }) {
-          if (this.sessionIconOn) {
-            SymbolGlyph($r('sys.symbol.message'))
-              .fontSize(20)
-              .fontColor([cardDescColor()])
-          }
-          Column({ space: 4 }) {
-            Text(this.row.title !== '' ? this.row.title : '新对话')
-              .fontSize(16)
-              .fontColor($r('sys.color.font_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%') // Column 内横向撑满（★ 勿用 layoutWeight——Column 主轴=垂直，
-            // 会用剩余高度拉伸文本行；width 100% = 保长标题单行省略生效，2026-09-08 自检轮修）
-            if (this.sessionTimeOn || this.row.favorite || this.row.locked || this.showUnreadDot()) {
-              Row({ space: 8 }) {
-                if (this.sessionTimeOn) {
-                  Text(formatConvTime(this.row.updatedAt))
-                    .fontSize(13)
-                    .fontColor(cardDescColor())
-                }
-                if (this.row.favorite) {
-                  SymbolGlyph($r('sys.symbol.star_fill'))
-                    .fontSize(14)
-                    .fontColor([$r('sys.color.font_secondary')])
-                }
-                if (this.row.locked) {
-                  SymbolGlyph($r('sys.symbol.lock'))
-                    .fontSize(14)
-                    .fontColor([$r('sys.color.font_secondary')])
-                }
-                // 未读红点（官方分支同构：标记容器尾部追加，多选模式不显示）
-                if (this.showUnreadDot()) {
-                  Circle({ width: 8, height: 8 })
-                    .fill($r('sys.color.warning'))
-                }
-              }
-            }
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          if (this.selectMode) {
-            this.CheckKeyBuilder()
-          } else {
-            this.MenuKeyBuilder()
-          }
-        }
-        .width('100%')
-        .padding(16)
-      }
-      .type(ButtonType.Normal)
-      .width(CARD_PANEL_WIDTH)
-      .borderRadius(16)
-      .backgroundColor(cardBg(this.appColorMode))
-      .onClick((): void => {
-        if (this.selectMode) {
-          this.onToggle(this.row.id);
-          return;
-        }
-        this.onOpen(this.row.id);
-      })
-    }
-  }
-}
-
-// ═══ 会话卡片菜单（2026-08-30 建、2026-09-01 反碎片并回；机制原样）═══
-// 机制 = dshinhm 真机回归修复同款——卡片长按 bindContextMenu 真机不弹，改走项目内真机
-// 已验证的 PromptAction.openMenu 编程式路径（ComponentContent 建/重建/dispose + 锚点
-// TargetInfo 定位 + 官方菜单材质）。域边界：菜单内容（删除/重命名）+ ComponentContent
-// 宿主生命周期 + 弹出函数；动作执行（确认弹窗删除/重命名弹窗 + 列表刷新）经回调注入归
-// 本页。弹窗/材质红线：菜单宽度官方内容自适应；systemMaterial 基准 REGULAR 随沉浸光感总档；每次弹出前 dispose + 重建（深浅色/材质安全）；菜单已开时再点更多键 = 先关旧菜单。
-
-// 卡片锚点 id 前缀（openMenu TargetInfo 定位目标 = 卡片右缘四点键：.id(前缀 + 会话 id)）
-const SESSION_CARD_MENU_ID_PREFIX: string = 'sessionCardMenu_';
-
-// 菜单回调（openMenu 的 ComponentContent 参数载体：全局 @Builder 无组件实例，数据与
-// 动作经参数注入）
-interface SessionCardMenuCallbacks {
-  item: ConversationRow;
-  onDelete: (item: ConversationRow) => void;
-  onRename: (item: ConversationRow) => void;
-  // 加密开关（2026-09-04 加密会话：菜单文案按 item.locked 分「加密会话/解除加密」，
-  // 动作执行 = 本页 toggleConversationLock——先认证后落库）
-  onToggleLock: (item: ConversationRow) => void;
-  // 收藏开关（2026-09-08 会话收藏：文案按 item.favorite 分「收藏/取消收藏」，动作执行 =
-  // 本页 toggleFavorite——直落库无认证前置）
-  onToggleFavorite: (item: ConversationRow) => void;
-}
-
-// 会话卡片菜单内容（官方 Menu 组件）：重命名 = square_and_pencil / 加密 = lock（解除 =
-// lock_open）/ 收藏 = star（取消 = star_fill）/ 删除 = trash（字形 SDK 符号表
-// resources.txt 实锤，坑72 口径）。菜单项顺序 = 重命名/加密会话/收藏/删除（★ 2026-09-12
-// UI 同形异构归一笔 1：「删除」自首位移到末位垫底——与其余全部行卡菜单「编辑在上、删除
-// 垫底」对齐，破坏性项离拇指最远）。宽度官方内容自适应。
-// 分割线：Menu.menuItemDivider 默认不显示须显式设置，mode 必须 EMBEDDED_IN_MENU（FLOATING
-// 悬浮层被菜单项盖住不可见），颜色走 menuDividerColor 深浅分治；全局 @Builder 无组件实例，
-// AppStorage.get 直读——菜单节点每次弹出前重建，读取始终为当前深浅色（ChatMoreMenu.ets
-// 同款姿势）。
-@Builder
-function SessionCardMenuBuilder(params: SessionCardMenuCallbacks) {
-  Menu() {
-    MenuItem({ symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.square_and_pencil')), content: '重命名' })
-      .onClick(() => {
-        params.onRename(params.item);
-      })
-    MenuItem({
-      symbolStartIcon: params.item.locked ? new SymbolGlyphModifier($r('sys.symbol.lock_open')) : new SymbolGlyphModifier($r('sys.symbol.lock')),
-      content: params.item.locked ? '解除加密' : '加密会话'
-    })
-      .onClick(() => {
-        params.onToggleLock(params.item);
-      })
-    MenuItem({
-      symbolStartIcon: params.item.favorite ? new SymbolGlyphModifier($r('sys.symbol.star')) : new SymbolGlyphModifier($r('sys.symbol.star_fill')),
-      content: params.item.favorite ? '取消收藏' : '收藏'
-    })
-      .onClick(() => {
-        params.onToggleFavorite(params.item);
-      })
-    MenuItem({ symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')), content: '删除' })
-      .onClick(() => {
-        params.onDelete(params.item);
-      })
-  }
-  .menuItemDivider({
-    color: menuDividerColor(AppStorage.get<number>('appColorMode')),
-    mode: DividerMode.EMBEDDED_IN_MENU
-  })
-}
-
-// 菜单节点宿主（2026-08-30 反馈轮 13 起为 AppMenuHost 薄壳——节点生命周期与弹出组装在
-// 基类，本壳只实现 buildNode 与便捷 open（材质解析 + 逐卡锚点拼接），页面侧
-// init/open/dispose 调用零变化）。锚点 = 卡片右缘四点键（id 按会话逐卡不同，open 时拼前缀）。
-class SessionCardMenuHost extends AppMenuHost<SessionCardMenuCallbacks> {
-  protected buildNode(uiContext: UIContext,
-    callbacks: SessionCardMenuCallbacks): ComponentContent<SessionCardMenuCallbacks> {
-    return new ComponentContent(uiContext, wrapBuilder(SessionCardMenuBuilder), callbacks,
-      { nestingBuilderSupported: true });
-  }
-
-  // 弹出菜单（基类弹前重建——按当前深浅色/材质重新构建 UI 树；材质 REGULAR 基准随沉浸光感总档在此解析）：placement = BottomRight——菜单右缘对锚点右缘
-  //（四点键右缘）、键下沿下方弹出（ProviderCardMenu 同款锚键姿势）；targetSpace 5 =
-  // 锚点同为按钮的卡片菜单统一间距（轮 8 领导拍板）
-  open(uiContext: UIContext, callbacks: SessionCardMenuCallbacks, immersiveLevel: number): void {
-    this.rebuild(uiContext, callbacks);
-    this.show(uiContext, SESSION_CARD_MENU_ID_PREFIX + callbacks.item.id,
-      // ★ 第三参 true = 交互形变 + 触点流光（2026-09-18 菜单光感笔；官方最佳实践口径，勿回改 false）
-      resolvedUiMaterial(uiMaterial.ImmersiveStyle.REGULAR, immersiveLevel, true),
-      { targetSpace: LengthMetrics.vp(5) });
-  }
-}
+// 「全部/收藏」分段选项单源：胶囊承载位单源在宿主 HomeNavigation 的标题栏覆盖层（本组件
+// 经 export 供宿主 import，勿另造副本）
+export const CHAT_FAV_SEG_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
+  { text: '全部' },
+  { text: '收藏' }
+]);
 
 @Component
 export struct ChatSessionList {
-  // 顶部留白（vp，宿主 titleBarInset 下发）：HDS 路径内容区延伸到标题栏背后，首卡静止时
-  // 完整落在渐变模糊蒙层下方；回退路径 = 0
+  // 页面存活守卫：置位后本组件迟到异步回调不写状态、不碰 UI、不上行；
+  // 写库等数据层意图照常完成
+  private departed: boolean = false;
+  // 顶部留白（vp，宿主 titleBarInset 下发）：内容区延伸到标题栏背后，首卡静止时
+  // 完整落在渐变模糊蒙层下方
   @Prop topPad: number = 0;
   // 底部留白（vp，宿主下发——悬浮页签让位）
   @Prop bottomPad: number = 0;
-  // 多选批量条距屏底（vp，宿主传 navBarHeight + 16——批量条悬浮在页签上方；与 bottomPad
-  // 分开传，navBarHeight 因设备导航条而异不能写死；多选中页签收起后批量条贴屏底）
+  // 多选批量条距屏底（vp，宿主传 navBarHeight + 16——批量条悬浮在页签上方；navBarHeight
+  // 因设备导航条而异不能写死；多选中页签收起后批量条贴屏底）
   @Prop barBottom: number = 96;
   // 刷新广播（对话页 pop 后重拉列表；见上键注释）
   @StorageProp(SESSION_LIST_RELOAD_KEY) @Watch('onReloadTick') reloadTick: number = 0;
-  // 标题刷新广播（2026-09-05 AI 会话标题：AI 写回/占位升级成功 → 重拉列表刷标题行——
-  // 与上键共用 onReloadTick 回调，只读幂等多触发无害；common/TitleGen 单键驱动两订阅侧）
+  // 标题刷新广播（AI 写回/占位升级成功 → 重拉列表刷标题行——与上键共用 onReloadTick 回调，
+  // 只读幂等多触发无害；common/TitleGen 单键驱动两订阅侧）
   @StorageProp(CONV_TITLE_TICK_KEY) @Watch('onReloadTick') titleTick: number = 0;
   // 更多菜单「多选」指令（计数器——@Watch 值变回调进入多选模式）
   @StorageProp(SESSION_MULTISELECT_CMD_KEY) @Watch('onMultiselectCmd') multiselectCmd: number = 0;
-  // 主动消息未读会话（2026-09-12 主动消息第二笔：只读订阅——ProactiveGen 落库写入、
-  // ChatPage.onPageShown 清空；红点判定 = row.id === unreadConvId，零 DB 改动零新查询）
+  // 主动消息未读会话（只读订阅——ProactiveGen 落库写入、ChatPage.onPageShown 清空；
+  // 红点判定 = row.id === unreadConvId，零 DB 改动零新查询）
   @StorageProp(PROACTIVE_UNREAD_CONV_KEY) unreadConvId: string = '';
-  // 点会话卡片回调（宿主执行 push 对话页；标题由对话页自包壳按 id 查询，不上抛——
-  // 任务 4 壳改造收敛）
-  onOpen: (conversationId: string) => void = () => {
+  // 点会话卡片回调（宿主执行 push 对话页；presetTitle = 本行标题上抛供首帧预置——
+  // 2026-11-15 反馈二笔：异步反查永远晚于首帧，行数据在手同步播种，标题态首帧即达）
+  onOpen: (conversationId: string, presetTitle?: string) => void = () => {
+  };
+  // 新会话合成行点击：宿主接线 HomeNavigation.newConversation 同款逻辑（本地生成会话 id
+  // + push 对话页）——进页新 id、查行 null → 认领 '__new__' 槽恢复。★ 右下悬浮新建键
+  //（SessionNewFab）共用本回调——同动作单入口，禁另开第二个回调或在此复制 push 链
+  onOpenNewSession: () => void = () => {
   };
   // 系统颜色模式（卡底配色；EntryAbility 未写键时缺省浅色——M1 既有缺口，BLOCKED.md 待裁决）
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // 沉浸光感档位（会话卡片菜单材质随沉浸光感总档——openCardMenu 经 SessionCardMenuHost.open
-  // 消费；★ 本页原「新建悬浮键」消费方 2026-08-31 随键上移标题栏退役，现消费方仅卡片菜单）
+  // 卡底透明度档位（★ V2 渲染域三件〔SessionRows/SessionSwipeItem/SessionCardItem〕不能挂
+  // V1 @StorageProp，由本壳订阅后标量 @Param 下发；壳侧键变 → build 重跑 → 参数下行即刷）
+  @StorageProp(PREF_CARD_ALPHA_LEVEL_KEY) cardAlphaLevel: number = CARD_ALPHA_DEFAULT;
+  // 沉浸光感档位（长按菜单背板材质随总档——经标量 @Param 下发渲染域，构造 bindContextMenu
+  // 的 options 时消费；悬浮新建键恒走官方实底不消费档位，故消费方只有长按菜单）
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-  @State private rows: ConversationRow[] = [];
+  // 会话宫格视图（用户面名称，内部代号方块档；2026-11-11 新增，默认关 = 现有单列列表）：整页换渲染域，非列表档内分叉。
+  // 方块档 = 两列 WaterFlow + 两档卡高 + 四点更多键 + 长按菜单，无左右滑；列表档零改动。
+  @StorageProp(PREF_SESSION_CARD_GRID_KEY) @Watch('onSessionCardGridChanged')
+  sessionCardGrid: boolean = false;
+  // 快捷新建键（与 HomeNavigation 迷你栏圆键共用同一键）：只有 'float' 档才挂载右下悬浮
+  // 新建键——'off' 与 'tabBar' 档都不建组件；'tabBar' 档圆键由页签栏迷你栏承担，两入口
+  // 互斥由单键值域结构性保证。默认 'tabBar'（决明「默认开启页签栏旁这个」），判据经
+  // resolveNewSessionEntry 归一（脏值 = 缺省档，与偏好页显示段一致）；@StorageProp 订阅 =
+  // 偏好页换档后返回即刷
+  @StorageProp(PREF_NEW_SESSION_ENTRY_KEY) newSessionEntry: string = NEW_SESSION_ENTRY_TAB_BAR;
+  // 全量行（查询结果本体；迁 Repeat 后与 favSegment 一并 @Watch 汇聚——任一赋值即重算
+  // visibleRows，见 syncVisibleRows）
+  @State @Watch('syncVisibleRows') private rows: SessionListRow[] = [];
+  // 可见行（「全部/收藏」分段过滤产物 = 传给渲染域 Repeat 的数据源本体）。★ 为何落 @State：
+  // 官方《状态管理V1和V2混用指导》要求跨 V1→V2 传递的复杂类型须为 V1 状态变量且经
+  // UIUtils.enableV2Compatibility 使能 V2 观察（Repeat 懒加载模式的数据源必须具 V2 观察能力）；
+  // 唯一写入口 = syncVisibleRows——漏挂 @Watch 即列表停旧态且静默（本机制唯一失效面，迁移
+  // 四页同型）
+  @State private visibleRows: SessionListRow[] = [];
   @State private hintText: string = '';
-  // 首拉完成闸（2026-08-31 空态卡配套）：false = 首次查询在途——空态卡不显示（防列表
-  // 初值空态闪现「暂无历史会话」）；查询落定（成功/失败）置真后空列表才显示空态
+  // 首拉完成闸：false = 首次查询在途——空态卡不显示（防列表初值空态闪现）；查询落定
+  //（成功/失败）置真后空列表才显示空态
   @State private loaded: boolean = false;
-  // ── 会话收藏（2026-09-08，任务书-会话搜索与收藏-20260907；搜索域已随改版迁二级页
-  // SessionSearchPage，本页只留收藏分段）──
-  // 收藏分段（0 = 全部 / 1 = 收藏）：切换内存过滤不重查库（visibleRows 派生）
-  @State private favSegment: number = 0;
-  // 分段选项（SegmentButtonV2Items 纯展示，普通成员——ProviderPage segItems 同款）
-  private favSegItems: SegmentButtonV2Items = new SegmentButtonV2Items([
-    { text: '全部' },
-    { text: '收藏' }
-  ]);
+  // ── 会话收藏（搜索域已随改版迁二级页 SessionSearchPage，本页只留收藏分段）──
+  // 收藏分段（0 = 全部 / 1 = 收藏）：切换内存过滤不重查库（@Watch 收敛到 syncVisibleRows
+  // 重算——Repeat 数据源整体换新，不再逐项重建）。★ @State 改 **@Link**——状态上提到宿主
+  // HomeNavigation（胶囊标题栏承载件在它那侧）；@Watch 留在本侧
+  //（@Link 可挂 @Watch，父侧赋值经链路传导即回调）；实例化传 `$chatFavSegment`
+  @Link @Watch('syncVisibleRows') favSegment: number;
+  // 分段选项表 = 模块级 CHAT_FAV_SEG_ITEMS（单源，见文件头）
+  // 首行额外让位（vp）：分段胶囊在标题栏覆盖层内、下方无带 ⇒ 恒 8vp 呼吸
+  //（TITLE_BAR_ROWS_GAP，延续原带内 inset 语义）。渲染域 topClearance 参与 0 行提示行
+  // margin 两处共用本方法单源——各写一份即两处让位分叉
+  private topClearance(): number {
+    return TITLE_BAR_ROWS_GAP;
+  }
   // ── 多选模式（dshinhm KimiSessionList 二二一改同款）──
-  // 多选中（菜单指令进入；批量删除成功/手动取消退出）
-  @State private selectMode: boolean = false;
-  // 选中待删除的会话 id（点卡片切换；数据有界：上限 = 当前列表条数）
-  @State private selectedIds: string[] = [];
+  // 多选中（菜单指令进入；批量删除成功/手动取消退出）。★ 补挂 @Watch 汇聚
+  // syncVisibleRows——新会话合成行的多选过滤（进出两向重算）需它驱动，不补则进出多选
+  // 不重算、过滤不生效；对既有「已选 ⊆ 可见」清空不变量无副作用（进多选时已选空、出多选
+  // 时 ids 全可见，均不触发清空分支——方案 §6.1-3 实锤）
+  @State @Watch('syncVisibleRows') private selectMode: boolean = false;
+  // 选中待删除的会话 id（点卡片切换；数据有界：上限 = 当前列表条数）。★ @Watch 挂计数
+  // 广播——勾选切换/全选/可见集清空/退出四路写点全走整体赋值即触发，宿主标题
+  //「已选 N 项」随勾选实时刷
+  @State @Watch('syncSelectCount') private selectedIds: string[] = [];
+  // 界面实宽（vp，根容器 onAreaChange 实测）：只服务右下悬浮键的左位定位（position.right =
+  // 宽度 − 键宽 − 16）——不参与列表布局，0 = 未测得时键维持右侧
+  @State private viewWidth: number = 0;
+  // 上次已同步的分段值（切分段清空已选的判据——syncVisibleRows 内逐次比较，初值 0 = 缺省段，
+  // 挂载首帧无差异故不清空；非状态变量，不驱动 UI）
+  private lastSyncedSegment: number = 0;
   // 批量删除请求进行中（批量按钮防重复点击 + 确认弹窗防重开）
   @State private deleting: boolean = false;
-  // 删除确认/重命名弹窗控制器（★ 组件成员——d.ts:735 原文「CustomDialogController is
-  // effective only when it is a member variable of the @CustomDialog and @Component」：
-  // 普通类成员构造 open() 静默无效（2026-08-30 坑7 真机实锤——三路弹窗全失效根因）。
-  // 每次打开重建，官方无强制 dispose 要求——dshinhm 一八二改同款）
+  // 删除确认/重命名弹窗控制器（★ 组件成员——d.ts:735「CustomDialogController is effective
+  // only when it is a member variable of the @CustomDialog and @Component」：普通类成员构造
+  // open() 静默无效（坑7 真机实锤）。每次打开重建，无强制 dispose 要求）
   private confirmCtrl: CustomDialogController | null = null;
   private renameCtrl: CustomDialogController | null = null;
-  // 会话卡片长按菜单节点宿主（init/open/dispose 成对，见 SessionCardMenu.ets）
-  private cardMenu: SessionCardMenuHost = new SessionCardMenuHost();
+  // ── 会话移动 ── 移动目标会话 id（卡片菜单/侧滑「移动」键回调写入；面板经 MoveSheet 载体读取）
+  @State private moveTargetId: string = '';
+  // 移动面板开关（bindSheet 挂本件根 Stack——规范-半模态 §1 判据三条天然满足：合法树内 /
+  // 根 Stack 不随数据销毁 / isShow 与触发键同组件位。★ TabContent 槽内 bindSheet 可用性
+  // 本项目无先例 = 本笔最大待验项：真机首验项入 BLOCKED；若不弹按调研档 §四第 2 步备选
+  // 改挂 HomeNavigation 根〔面板件与回调契约逐字不变，只换宿主〕）
+  @State @Watch('onSheetVisibleChanged') private moveSheetShow: boolean = false;
+  // ── 关闭-再开协调（机制单源 = KimiSheetCommon.sheetPanelOptions 第四参注释）──：关闭后
+  // 离场动效在途期内再点「移动到助手」，直接写的可见性 true 会被吞或被压回——在途期只记
+  // 开意图，动效结束再补开
+  private sheetClosing: boolean = false;
+  private pendingOpen: boolean = false;
+  // ── R2-b 重拉合并闩（非 UI 状态用普通成员——状态最小化红线）──
+  // reload 在途闩 + 尾部补跑意图。机制：reload 单入口先查闩，在途期的新请求（同帧多次
+  // tick、#22 撞车、收藏/重命名等直调）**不叠发并发查询**（并发两查乱序落地 = 旧数据覆盖
+  // 新数据），只记意图；收尾（finishReload 单点）时意图在场**必补跑一次**——★ 禁丢弃：在途
+  // 那查可能取不到意图背后的新写入（DB 落库晚于查询执行），尾部真跑是唯一保刷新手段，丢刷新
+  // = 列表停旧态；补跑结果一致则被 R2-a 比对吞掉（只多一次毫秒级本地查询）。同帧 N 次 tick
+  // 收敛 = 恰 1 次立即 + 至多 1 次尾部
+  private reloadInFlight: boolean = false;
+  private reloadPending: boolean = false;
+  // ── R2-c 滚动空闲闸（非 UI 状态，不驱动渲染）──
+  // 退页 400ms 只是推迟查询起点，不能保证回包与整表赋值避开用户滑动。滚动中 reload 只记
+  // reloadPending，不发起新查询；已经在途的回包只保留最新一份 deferredSnap。onScrollStop
+  // 先落该回包、再按 pending 补查，兼顾「滑动中来 tick」与「查询在途时开始滑动」两种交错。
+  private listScrolling: boolean = false;
+  private deferredSnap: SessionListSnapshot | null = null;
 
   aboutToAppear(): void {
-    this.reload();
-    // 长按菜单节点首次构建（getUIContext 需组件就绪；与 aboutToDisappear dispose 成对）。
-    // init 仅建节点需占位 item，open 时必传真实 item 重建——空占位行（列表未加载场景，
-    // dshinhm 同款）
-    this.cardMenu.init(this.getUIContext(), this.menuCallbacks(this.emptyItem()));
+    // 预热快照同步消费（首切闪修复笔，首建一次成型）：命中即 build 前同步走完行合成 + 比对
+    // + 赋值——首帧即完整列表；miss（预热未完成 / 空快照 / 已消费）转 reload 异步链
+    //（在途时与启动链预热共享同一查询，不双发）
+    const warm: SessionListSnapshot | null = homeListWarmup.peekSessionSnapshot();
+    if (warm !== null) {
+      this.applySessionSnapshot(warm);
+    } else {
+      this.reload();
+    }
   }
 
   aboutToDisappear(): void {
-    // 长按菜单节点释放（与 aboutToAppear init 成对）
-    this.cardMenu.dispose();
-    // 寿命匹配（dshinhm 二二二改）：组件带多选态销毁时撤销页签收起广播——否则
-    // AppStorage 残留 true、页签永久收起无法恢复
+    this.departed = true;
+    // 寿命匹配：组件带多选态销毁时撤销页签收起广播——否则 AppStorage 残留 true、页签永久
+    // 收起无法恢复；计数一并归零（标题「已选 N 项」的 N 不残留）
     if (this.selectMode) {
       AppStorage.setOrCreate<boolean>(SESSION_SELECT_MODE_KEY, false);
+      AppStorage.setOrCreate<number>(SESSION_SELECT_COUNT_KEY, 0);
     }
   }
 
-  // 空占位 item（init 时列表未加载，宿主仅建节点不含真实数据；open 时必传真实 item 重建）
-  private emptyItem(): ConversationRow {
-    return { id: '', title: '', providerId: '', createdAt: 0, updatedAt: 0, locked: false,
-      titleSource: '', favorite: false };
+  // 空占位 item（原 openMenu 宿主 init 用）随菜单宿主退役——长按菜单每次按下按当前行
+  // 现场组装参数，不存在「列表未加载时先建占位节点」的场景。
+
+  // 菜单回调组装与 openCardMenu 已随菜单域迁出本件（2026-10-30）：渲染域按「按下当刻」
+  // 的行对象自行组装 menuParams，四个动作经 SessionRows 的 @Event 回到本件的同名方法。
+
+  // ── 会话移动（调研档 = docs/调研-会话移动-竞品机制与落地风险-20260930.md）──
+
+  // 打开移动面板（卡片菜单「移动到助手」唯一入口）
+  private openMoveSheet(row: ConversationRow): void {
+    this.moveTargetId = row.id;
+    this.requestOpen();
   }
 
-  // 菜单回调组装（init/open 两处共用——宿主建节点需要完整 callbacks 对象；显式接口
-  // 构造，坑72：union 上下文禁匿名对象字面量）
-  private menuCallbacks(item: ConversationRow): SessionCardMenuCallbacks {
-    const callbacks: SessionCardMenuCallbacks = {
-      item: item,
-      onDelete: (row: ConversationRow): void => {
-        this.openDeleteConfirm('将彻底删除会话「'
-          + (row.title !== '' ? row.title : '新对话')
-          + '」及其全部聊天记录，不可恢复。', (): void => {
-          this.deleteOne(row.id);
-        });
-      },
-      onRename: (row: ConversationRow): void => {
-        this.openRenameDialog(row);
-      },
-      onToggleLock: (row: ConversationRow): void => {
-        this.toggleConversationLock(row);
-      },
-      onToggleFavorite: (row: ConversationRow): void => {
-        this.toggleFavorite(row);
-      }
-    };
-    return callbacks;
+  // ── 关闭-再开协调（机制说明见字段注释；与会话轨迹页/请求日志页同配方）──
+  // 开意图落定 → 动效在途挂起 / 否则即开（applyOpen 单入口，补开两路共用）
+  private requestOpen(): void {
+    this.pendingOpen = true;
+    if (this.sheetClosing) {
+      return; // 动效在途：待补开
+    }
+    this.applyOpen();
   }
 
-  // 卡片更多键点击弹官方菜单（服务商卡四点键同款触发；多选中菜单键隐藏——卡片侧不渲染）
-  private openCardMenu(row: ConversationRow): void {
-    this.cardMenu.open(this.getUIContext(), this.menuCallbacks(row),
-      this.immersiveLevel);
-  }
-
-  // ── 加密会话（2026-09-04 决明指令；官方接口/权限查证依据见 BiometricGate.ets 头注释）──
-
-  // 加密开关执行（菜单「加密会话/解除加密」唯一入口）：先过官方生物识别——开锁同样要
-  // 验证（门禁的钥匙不能留在门上），通过才落库 + 重拉列表；失败 toast 保持原态可重试
-  //（P0-1 不静默）。锁定/解除均不动 updatedAt（列表时间序不变）
-  private async toggleConversationLock(row: ConversationRow): Promise<void> {
-    const gate: BiometricGateResult = await biometricGate(
-      row.locked ? '验证身份，解除会话加密' : '验证身份，加密此会话');
-    if (gate.outcome !== BiometricGateOutcome.PASSED) {
-      this.toastGateOutcome(gate);
+  private applyOpen(): void {
+    if (!this.pendingOpen) {
       return;
     }
-    try {
-      await setConversationLocked(row.id, !row.locked);
-      this.getUIContext().getPromptAction().showToast(
-        { message: row.locked ? '已解除加密' : '已加密，进入需验证身份' });
-      this.reload(); // 键含锁定态后缀——重拉即键变重建，锁标随新数据刷新
-    } catch (e) {
-      this.getUIContext().getPromptAction().showToast(
-        { message: (row.locked ? '解除加密失败：' : '加密失败：') + (e as Error).message });
+    this.moveSheetShow = true;
+  }
+
+  // 离场动效结束（sheetPanelOptions 第四参——d.ts：动画结束后回调）：清在途位 + 按开意图补开
+  private onSheetGone(): void {
+    this.sheetClosing = false;
+    if (!this.moveSheetShow) {
+      this.applyOpen();
     }
   }
 
-  // 收藏开关执行（2026-09-08 会话收藏，菜单「收藏/取消收藏」唯一入口；归
-  // toggleConversationLock 同构——无生物识别前置）：落库 → 成功 toast + 重拉列表（键含
-  // 收藏态后缀，星标随新数据刷新）；失败 toast 错误信息、状态不变可重试（P0-1 不静默）。
-  // 收藏/取消均不动 updatedAt（列表时间序不变）
+  // 可见性变化兜底（@Watch）：框架 `$$` 收尾回写把可见性压回 false 时按开意图补一次；
+  // 用户关闭必经 requestCloseMove（先清开意图再写 false），不会误触本支
+  private onSheetVisibleChanged(): void {
+    if (!this.moveSheetShow) {
+      this.applyOpen();
+    }
+  }
+
+  // 移动面板关闭入口（规范 §1 硬约束：标题栏 xmark 与 onWillDismiss 两路同调本方法；面板
+  // 无暂存不接确认弹窗——点选即落库属负面清单「点一下就落库的」）。关闭单入口 = 先清开意图
+  // + 置离场动效在途位，再写可见性（关闭-再开协调，见字段注释）
+  private requestCloseMove(): void {
+    this.pendingOpen = false;
+    this.sheetClosing = true;
+    this.moveSheetShow = false;
+  }
+
+  // 移动面板内容（坑51 红线：bindSheet builder 位挂组件内 @Builder；数据自持有在面板件内）
+  @Builder
+  MoveSheet() {
+    SessionMovePanel({
+      conversationId: this.moveTargetId,
+      // 尾部让位（barBottom = 宿主下发的导航条高 + 16——本件可得口径；面板内再 +24 固定呼吸）
+      bottomInset: this.barBottom,
+      onMoved: (): void => {
+        this.requestCloseMove();
+        this.reload();
+        // 落库广播（源/目标两侧消费：助手页「会话 N」chip 等订阅方；一次性计数器形态自增
+        //——写固定值 @Watch 不触发；本页自订阅多一次重拉幂等无害，同 deleteOne 口径）
+        AppStorage.setOrCreate<number>(SESSION_LIST_RELOAD_KEY,
+          (AppStorage.get<number>(SESSION_LIST_RELOAD_KEY) ?? 0) + 1);
+      },
+      onClose: (): void => {
+        this.requestCloseMove();
+      }
+    })
+  }
+
+  // 收藏开关执行（菜单「收藏/取消收藏」唯一入口）：落库 → toast + 重拉（新行对象经
+  // Repeat item 比对刷星标；收藏段内取消收藏 = rows 重算后自然离列）；失败 toast 可重试
+  //（P0-1）。不动 updatedAt（时间序不变）
   private async toggleFavorite(row: ConversationRow): Promise<void> {
     try {
       await setConversationFavorite(row.id, !row.favorite);
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast(
         { message: row.favorite ? '已取消收藏' : '已收藏' });
       this.reload();
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast(
         { message: (row.favorite ? '取消收藏失败：' : '收藏失败：') + (e as Error).message });
     }
   }
 
-  // 点击卡片进入守卫：加密会话先过官方生物识别，通过才上行进入（每次进入都验证，
-  // 不维持解锁态）；未加密直通零改动；取消静默、失败按原因提示不进入。
-  // ★ 最近进入记录（2026-09-08 会话搜索；记录区展示已随搜索迁 SessionSearchPage，本页
-  // 点卡进入仍是记录点之一）：实际放行进入才记（未通过认证/取消不算进入）——去重移头、
-  // 上限 3 条在 SessionSearch 内收敛
+  // 点击卡片进入（2026-11-17 整体退役加密会话后无门禁）：记录最近进入后上行宿主 push。
+  // ★ 最近进入记录（本页点卡进入仍是记录点之一）：去重移头、上限 3 条在 SessionSearch 内收敛
   private handleOpenCard(row: ConversationRow): void {
-    if (!row.locked) {
-      recordSessionRecentConv(row.id);
-      this.onOpen(row.id);
+    // ★ 新会话合成行守卫（首行）：跳过 recordSessionRecentConv（防 '__new__' 记进持久记录
+    // 留脏 id）+ 走新建链上行（进页查行 null → 认领 '__new__' 槽恢复）。严禁把 '__new__'
+    // 直接当 conversationId push（ensureConversation 会建出 id='__new__' 的脏行）
+    if (row.id === NEW_DRAFT_KEY) {
+      this.onOpenNewSession();
       return;
     }
-    biometricGate('验证身份，进入加密会话')
-      .then((gate: BiometricGateResult): void => {
-        if (gate.outcome === BiometricGateOutcome.PASSED) {
-          recordSessionRecentConv(row.id);
-          this.onOpen(row.id);
-          return;
-        }
-        this.toastGateOutcome(gate);
-      });
+    // ★ 打点（进会话性能回归修复笔方案 §五）：点击参考点——进页链各时点（shell/swap/
+    // content/anchor）均按本点输出差分毫秒（读数口径见 ChatEnterProbe）
+    markEnterProbe('tap');
+    recordSessionRecentConv(row.id);
+    this.onOpen(row.id, row.title);
   }
 
-  // 认证结果提示（开关锁/进入三处共用）：取消静默（用户主动行为非故障），其余按原因
-  // 分文案——文案单源已抽 BiometricGate.gateOutcomeMessage（2026-09-05 加密新入口第四处
-  // 消费时提取），本壳只管 toast
-  private toastGateOutcome(gate: BiometricGateResult): void {
-    const message: string = gateOutcomeMessage(gate);
-    if (message !== '') {
-      this.getUIContext().getPromptAction().showToast({ message: message });
-    }
-  }
-
+  // 重拉广播回调（两键共用；★ R2-b：标题 tick 与退出 tick 同帧/在途撞车〔#22〕由 reload
+  // 单入口的 reloadInFlight 闩收敛——同帧多次只一次立即在途 + 尾部必跑一次，机制见闩注释）
   onReloadTick(): void {
     this.reload();
   }
 
-  // 未读红点行级判定（2026-09-12 主动消息第二笔：多选中不显示——红点条件与 ForEach
-  // 未读后缀共用本判据；多选切换时 ForEach 键含多选后缀整列重建，红点随键自然进退）
-  private rowUnread(row: ConversationRow): boolean {
-    return !this.selectMode && row.id === this.unreadConvId;
-  }
-
   onMultiselectCmd(): void {
     // 进入多选（重复点击菜单 = 已在多选中无操作幂等；退出通道 = 批量条「取消」或
-    // 批量删除成功）+ 广播状态（页签收起——HomeNavigation 消费）
+    // 批量删除成功）+ 广播状态（页签收起——HomeNavigation 消费）+ 计数显式归零
+    //（防上次实例残留脏值——@Watch 只在赋值时触发，空集进场不触发）
     if (!this.selectMode) {
       this.selectMode = true;
       AppStorage.setOrCreate<boolean>(SESSION_SELECT_MODE_KEY, true);
+      AppStorage.setOrCreate<number>(SESSION_SELECT_COUNT_KEY, this.selectedIds.length);
     }
   }
 
-  // 渲染派生过滤（2026-09-08 收藏分段——任务书 §2.5 build 内派生方法形态；搜索 keyword
-  // 过滤段已随搜索功能迁二级页 SessionSearchPage 退役）：rows 全量 @State 不变，分段内存
-  // 过滤不动时间序
-  private visibleRows(): ConversationRow[] {
-    let list: ConversationRow[] = this.rows;
-    if (this.favSegment === 1) {
-      list = list.filter((row: ConversationRow): boolean => row.favorite);
-    }
-    return list;
+  // 已选计数广播（selectedIds 唯一 @Watch 汇聚——勾选切换/全选切换/可见集清空/退出四路
+  // 写点全走整体赋值即触发；宿主 HomeNavigation tabTitle 消费拼「已选 N 项」）
+  private syncSelectCount(): void {
+    AppStorage.setOrCreate<number>(SESSION_SELECT_COUNT_KEY, this.selectedIds.length);
   }
 
-  // 空态文案（2026-09-08 搜索分支退役后只剩分段分治）：收藏段空 = 「暂无收藏会话」；全部
-  // 段空维持「该助手暂无会话」
+  // 可见行重算（唯一入口：rows / favSegment / selectMode 三状态 @Watch 汇聚；★ 迁 Repeat
+  // 由「build 内派生」改「@Watch 收敛的状态重算」——理由见 visibleRows 成员注释；分段内存
+  // 过滤不重查库、不动时间序）
+  private syncVisibleRows(): void {
+    const segmentRows: SessionListRow[] = this.favSegment === 1
+      ? this.rows.filter((row: SessionListRow): boolean => row.favorite)
+      : this.rows;
+    // 多选守卫（与 favSegment 过滤同位）：selectMode 为真时滤掉 '__new__' 合成行——不可
+    // 勾选、不被全选 sweep 进 deleteConversations(['__new__'])
+    const guarded: SessionListRow[] = this.selectMode
+      ? segmentRows.filter((row: SessionListRow): boolean => row.id !== NEW_DRAFT_KEY)
+      : segmentRows;
+    // 顺序恒「最新在上」——排序偏好已退役、行为固化为不可反转，不再做显示层 reverse 与
+    // 草稿重钉顶；收藏分段过滤与多选守卫保留在前，多选「已选 ⊆ 可见」不变量不受影响。
+    const next: SessionListRow[] = guarded;
+    const segmentChanged: boolean = this.favSegment !== this.lastSyncedSegment;
+    this.lastSyncedSegment = this.favSegment;
+    // ★ 可见集一变即清空已选，保住「已选 ⊆ 可见」不变量——否则批量条两态判据失真（主按钮
+    // 计数会含屏幕上看不见的行，一点删除就删掉看不到的会话）。两路触发：①段值变；②已选含
+    // 不可见行——同一条不变量的兜底，覆盖段值不变而可见集整体换掉的同类源：换助手（reload
+    // 按 ACTIVE_ASSISTANT_KEY 重过滤，而 HDS 路径本组件活在 TabContent 里跨页签不销毁）、
+    // 备份恢复、他处删行。★ rows 单纯的「增长」不触发（主动消息落库 / 标题写回重拉）——已选
+    // 仍在可见集内，用户手上的选择不被后台写入打断；second 支带空选短路，非多选态零开销
+    if (segmentChanged || (this.selectedIds.length > 0
+      && hasHiddenSelection(this.idsOf(next), this.selectedIds))) {
+      this.selectedIds = [];
+    }
+    this.visibleRows = next;
+  }
+
+  // 空态文案（分段分治）：收藏段空 = 「暂无收藏会话」；全部段空维持「该助手暂无会话」
   private emptyText(): string {
     return this.favSegment === 1 ? '暂无收藏会话' : '该助手暂无会话';
   }
 
+  // 列表/宫格切换时旧容器可能来不及回送 onScrollStop；换档即按停止收口，防滚动位卡住
+  private onSessionCardGridChanged(): void {
+    this.onListScrollingChanged(false);
+  }
+
+  // 两档滚动事件唯一入口：重复起止幂等；首拉 loaded=false 不在 reload/apply 中推迟。
+  // 停止时先消费在途成功回包，再兑现滚动期间累积的补查意图（pending 只存一个，天然合并）。
+  private onListScrollingChanged(scrolling: boolean): void {
+    if (this.departed || this.listScrolling === scrolling) {
+      return;
+    }
+    this.listScrolling = scrolling;
+    if (scrolling) {
+      return;
+    }
+    const snap: SessionListSnapshot | null = this.deferredSnap;
+    this.deferredSnap = null;
+    if (snap !== null) {
+      this.applySessionSnapshot(snap);
+    }
+    if (this.reloadPending) {
+      this.reloadPending = false;
+      this.reload();
+    }
+  }
+
   private reload(): void {
-    // DB 就绪守卫（2026-08-30 竞态修复）：EntryAbility 异步初始化与页面加载并行——冷
-    // 启动时 DB 未就绪即查库会抛「数据库未就绪」且无任何自动重试（钉死在错误提示，重启
-    // 才好）；先等 whenReady 再查。init 失败（doInit 缓存 false，本会话无重试）提示重启
-    whenReady().then((ok: boolean): void => {
-      if (!ok) {
-        this.hintText = '数据库初始化失败，请重启应用重试';
-        return;
-      }
-      // 历史只显示当前助手名下（2026-09-01 会话绑定改造）：active 键入口同步读（缺省 =
-      // 默认助手）；'' 存量行归默认口径在 historyFilterIds
-      const activeId: string = AppStorage.get<string>(ACTIVE_ASSISTANT_KEY) ?? ASSISTANT_DEFAULT_ID;
-      queryConversations(historyFilterIds(activeId))
-        .then((rows: ConversationRow[]): void => {
-          // 全量查询一次性赋值（2026-09-04 拍板：本地库无分页必要；连续状态修改合并为
-          // 一次刷新）
-          this.rows = rows;
-          this.loaded = true;
-        })
-        .catch((e: Object): void => {
-          this.hintText = '会话列表读取失败：' + (e as Error).message;
-        });
-    });
+    // ★ R2-c 首拉完成后，滚动中只记尾部意图，连查询与摘要清洗也推迟到停止后
+    if (this.listScrolling && this.loaded) {
+      this.reloadPending = true;
+      return;
+    }
+    // ★ R2-b 在途闩：在途期只记意图不叠发（同帧多次 tick 收敛 + #22 撞车合并；直调方同守）
+    if (this.reloadInFlight) {
+      this.reloadPending = true;
+      return;
+    }
+    this.reloadInFlight = true;
+    // 读取链单源 = HomeListWarmup.fetchSessionSnapshot（首切闪修复笔外迁，页面与预热共用）：
+    // DB 就绪守卫（whenReady——冷启动 DB 未就绪即查库会抛错钉死提示，init 失败提示重启）
+    // + 助手过滤现读（缺省 = 默认助手；'' 存量行归默认口径在 historyFilterIds）+ 摘要与列表
+    // 两读并行（摘要失败回落空 Map 不阻断列表）；预热在途时与启动链预热共享同一查询不双发。
+    // ★ R2-b 单链收尾：三条出路（查询成功 / 快照交付 / 查询失败）全部必经 finishReload，闩不卡死
+    homeListWarmup.awaitSessionSnapshot()
+      .then((snap: SessionListSnapshot): void => {
+        if (this.departed) {
+          return;
+        }
+        this.applySessionSnapshot(snap);
+      })
+      .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
+        this.hintText = (e as Error).message; // fetch 侧拼好（DB 未就绪 / 读取失败两族文案）
+      })
+      .finally((): void => {
+        this.finishReload();
+      });
+  }
+
+  // 查询结果落屏单点（aboutToAppear 预热同步路径与 reload 异步路径共用）：P0 逐行复用 →
+  // R2-a 全等跳过 → 一次性赋值。★ U9 行合成：DB 行 + 运行态生成中标记（loading 进比对清单
+  //——漏比即标记静默冻结）；草稿行合成接续：草稿打标 + '__new__' 合成行（reconcileSessionRows，
+  // draft 进比对清单同族；合成行随行序头部插入 = newest 默认序恒置顶）；合成参数 activeId
+  // 用快照携带的查询时刻值（与行数据同一过滤口径——混用现读值会在切助手竞态下错配）。
+  // ★ P0（2026-11-16）：reconcileSessionRows 按 id 复用旧行，未变行不再 new；返回 null =
+  // 新旧行集逐项同引用同序，跳过辅助赋值（R2-a 语义不变）。旧路径 applyDraftRows 每次重拉
+  // 先造 2N 个对象再比对，退页重拉落在滑动窗口时这批垃圾会推高 GC 触发概率。
+  private applySessionSnapshot(snap: SessionListSnapshot): void {
+    // 查询起点早于本次滑动时，回包仍可能在滚动中到达；只留最新快照，停止后统一落屏。
+    // 首拉不推迟，保证空列表首次查询无论是否触发回弹滚动都能立即出内容。
+    if (this.listScrolling && this.loaded) {
+      this.deferredSnap = snap;
+      return;
+    }
+    this.deferredSnap = null;
+    // ★ 成功读取即清上次失败提示（2026-11-16 自检轮修）：hintText 只在 reload 的 catch 写，
+    // 成功路径不清则一次读取失败后提示行永久跟随末卡（visibleRows>0 时由渲染件尾行呈现，
+    // 且空态卡判据要求 hintText==='' 故空列表也不再显示空态）——本函数是唯一落屏单点，
+    // 清点放此处 = 两分支（null 跳过赋值 / 赋值）共同收口；同值赋值不触发刷新，零开销
+    this.hintText = '';
+    const rows: SessionListRow[] | null = reconcileSessionRows(this.rows, snap.queried,
+      snap.activeId, snap.snippets);
+    if (rows === null) {
+      this.loaded = true;
+      return;
+    }
+    this.rows = rows;
+    this.loaded = true;
+  }
+
+  // R2-b 收尾单点（reload 全部出路的汇合处）：释闩 + 意图在场必补跑一次——★ 尾部必跑、
+  // 禁丢弃（丢刷新 = 列表停旧态，见闩注释）；补跑再入 reload 时闩已释，无递归在途叠加
+  private finishReload(): void {
+    this.reloadInFlight = false;
+    if (this.reloadPending) {
+      this.reloadPending = false;
+      this.reload();
+    }
   }
 
   // ── 多选模式（dshinhm KimiSessionList 二二一改同款）──
 
-  // 点击卡片切换勾选（selectedIds 整体替换；ForEach 键值含选中态——该项键变即重建,
-  // 勾选圈随新键刷新）
+  // 行集 → id 集（全选两态判据、全选动作与「已选含不可见行」判据的共同输入——可见集单源，
+  // 勿在别处重造）
+  private idsOf(rows: SessionListRow[]): string[] {
+    return rows.map((row: ConversationRow): string => row.id);
+  }
+
+  // 全选/全不选（批量条左端键）：全选态 → 清空已选；否则 → 选中当前可见全部（分段过滤后的
+  // 可见集，非全量 rows——「所见即所选」）。判据纯函数在 SessionMultiselectBar（两页共用单源）
+  private toggleSelectAll(): void {
+    this.selectedIds = nextSelectAllIds(this.idsOf(this.visibleRows), this.selectedIds);
+  }
+
+  // 点击卡片切换勾选（selectedIds 整体替换；勾选圈回显 = 渲染域逐行 @Param selected 传播
+  //——迁 Repeat 后不再用键含选中后缀的重建机制）
   private toggleSelect(id: string): void {
     if (this.selectedIds.includes(id)) {
       this.selectedIds = this.selectedIds.filter((i: string): boolean => i !== id);
@@ -743,8 +602,8 @@ export struct ChatSessionList {
       }),
       autoCancel: true,
       alignment: DialogAlignment.Center
-      // customStyle 不传 = 官方对话框底板（2026-08-30 领导指令「删除弹窗材质统一为重命名的」
-      // ——与 InputDialog 同款官方实底，形态单一来源见 ConfirmDialog.ets 文件头）
+      // customStyle 不传 = 官方对话框底板（领导指令「删除弹窗材质统一为重命名的」——与
+      // InputDialog 同款官方实底，形态单一来源见 ConfirmDialog.ets 文件头）
     });
     this.confirmCtrl.open();
   }
@@ -757,15 +616,26 @@ export struct ChatSessionList {
     }
     hilog.info(0xD5A1, 'ChatSessionList', 'confirm delete %{public}d conversations',
       this.selectedIds.length);
+    // 临时区级联拦截句（地基笔 §3.4-② + 勘误改判条件句：listWorkspaceTmpGroups 一次扫根，
+    // 与选中集有交集才加句——无交集零提示，不做逐会话计数）
+    const tmpGroups = listWorkspaceTmpGroups();
+    let tmpHit = false;
+    for (const group of tmpGroups) {
+      if (this.selectedIds.indexOf(group.conversationId) >= 0) {
+        tmpHit = true;
+        break;
+      }
+    }
     this.openDeleteConfirm('将彻底删除选中的 ' + this.selectedIds.length
-      + ' 个会话及其全部聊天记录，不可恢复。', (): void => {
+      + ' 个会话及其全部聊天记录，不可恢复。'
+      + (tmpHit ? '选中会话的临时文件将一并删除。' : ''), (): void => {
       this.deleteSelected();
     });
   }
 
-  // 打开重命名官方弹窗（2026-08-30 领导指令「重命名参考旧项目」——dshinhm KimiSessionList
-  // 一八二改同款 InputDialog 复用；每次打开重建 controller；构造在组件成员位——坑7 约束）；
-  // 初值 = 当前标题（空标题兜底「新对话」，与卡片展示一致）
+  // 打开重命名官方弹窗（领导指令「重命名参考旧项目」——dshinhm 一八二改同款 InputDialog；
+  // 每次打开重建 controller；构造在组件成员位——坑7）；初值 = 当前标题（空标题兜底
+  //「新对话」，与卡片展示一致）
   private openRenameDialog(row: ConversationRow): void {
     this.renameCtrl = new CustomDialogController({
       systemMaterial: overlayMaterial(),
@@ -783,44 +653,78 @@ export struct ChatSessionList {
     this.renameCtrl.open();
   }
 
-  // 长按单条删除（2026-08-30 领导指令「删除同新项目右上角菜单删除」）：确认弹窗与删除
-  // 链路同多选删除（ConfirmDialog + ChatDb.deleteConversations 事务级联，单 id 数组为
-  // 新建普通数组非代理——坑6 族无暴露）；失败 toast 可重试（长按菜单再开即可，P0-1）
+  // 单条删除确认（★ 自会话侧滑笔自 menuCallbacks.onDelete 内联段抽出——卡片菜单与侧滑删除
+  // 键共用同一确认链，避免两处文案/计数逻辑漂移）。临时区级联拦截句（点开时轻量扫该会话
+  // 临时目录计数，>0 才加句——同步 fs 列举毫秒级，不逐会话预查）；确认后走 deleteOne 事务
+  // 级联。★ 决明令：'__new__' 合成行删除 = 删草稿本体（无会话行无库记录——WithFiles 档
+  // 单元素数组清条目与附件文件，reload 后合成行随 reconcileSessionRows 自然消失，无 DB 变更不广播）
+  private confirmDeleteOne(row: ConversationRow): void {
+    if (row.id === NEW_DRAFT_KEY) {
+      this.openDeleteConfirm('将删除该草稿，不可恢复。', (): void => {
+        removeDraftsWithFiles([NEW_DRAFT_KEY]);
+        this.reload();
+        this.getUIContext().getPromptAction().showToast({ message: '草稿已删除' });
+      });
+      return;
+    }
+    const tmpCount: number = countWorkspaceTmpFiles(row.id);
+    this.openDeleteConfirm('将彻底删除会话「'
+      + (row.title !== '' ? row.title : '新对话')
+      + '」及其全部聊天记录，不可恢复。'
+      + (tmpCount > 0 ? '删除后该会话的 ' + tmpCount + ' 个临时文件将一并删除。' : ''),
+      (): void => {
+        this.deleteOne(row.id);
+      });
+  }
+
+  // 单条删除执行：确认弹窗与删除链路同多选删除（ConfirmDialog + deleteConversations 事务
+  // 级联，单 id 数组为新建普通数组非代理——坑6 族无暴露）；失败 toast 可重试（P0-1）
   private async deleteOne(id: string): Promise<void> {
     try {
       const count: number = await deleteConversations([id]);
+      if (this.departed) {
+        return;
+      }
+      // 草稿级联清（DB 事务碰不到内存草稿与其无库行附件文件，UI 侧显式级联——WithFiles
+      // 档：删条目 + 级联删附件，方案 §4 调用点①）
+      removeDraftsWithFiles([id]);
       this.rows = this.rows.filter((row: ConversationRow): boolean => row.id !== id);
-      // 删行已落库 → 广播重拉（★ 2026-09-20 复验轮补写点：本页本地移除只覆盖自己在场时的
-      // 列表，跨页签消费方不知道——助手页卡面「会话 N」chip 正订阅同键，无此写点则删除后
-      // 切回助手页签仍显示旧数；一次性计数器形态自增，写固定值 @Watch 不触发。本页自订阅
-      // 同样重拉一次 = 幂等无害、无回环（同 AssistantPage 切助手自写先例）
+      // 删行已落库 → 广播重拉（★ 复验轮补写点：本页本地移除只覆盖自己在场时的列表，跨页签
+      // 消费方不知道——助手页「会话 N」chip 正订阅同键；一次性计数器自增。本页自订阅重拉
+      // 一次幂等无害）
       AppStorage.setOrCreate<number>(SESSION_LIST_RELOAD_KEY,
         (AppStorage.get<number>(SESSION_LIST_RELOAD_KEY) ?? 0) + 1);
       this.getUIContext().getPromptAction().showToast({ message: '已删除 ' + count + ' 个会话' });
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '删除失败：' + (e as Error).message });
     }
   }
 
-  // 重命名执行（2026-08-30 领导指令「重命名参考旧项目」；弹窗构造在 SessionCardActions，
-  // dshinhm 一八二改同款 InputDialog——空值/同值校验在弹窗内，此处 P0-1 兜底 toast）：
-  // 本地 DB 直写 → 成功 toast + 重拉列表（不动 updatedAt 故时间序不变）；失败 toast
-  // 错误信息、列表不动可重试
+  // 重命名执行（空值/同值校验在弹窗内，此处 P0-1 兜底 toast）：本地 DB 直写 → 成功 toast
+  // + 重拉列表（不动 updatedAt 故时间序不变）；失败 toast、列表不动可重试
   private async applyRename(id: string, text: string): Promise<void> {
     try {
       await renameConversation(id, text);
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '已重命名' });
       this.reload();
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '重命名失败：' + (e as Error).message });
     }
   }
 
   // 批量删除执行（确认弹窗「删除」回调）：全成功本地移除 + 广播重拉 + toast + 退出多选；
-  // 失败 toast 且保留选择（可调整后重试，P0-1 不静默）。★ 2026-09-20 复验轮改写：原稿
-  // 「本地移除不再广播重拉（删除方持有最新列表，dshinhm archiveSelected 同款）」只考虑了
-  // 本页自己——跨页签的助手页卡面「会话 N」chip 订阅同键，删完切回助手页签即停旧数，
-  // 故此侧必须广播；本地移除保留（即时反馈，不等重查），自订阅多一次重拉幂等无害
+  // 失败 toast 且保留选择（可调整后重试，P0-1 不静默）。★ 复验轮改写：本地移除只考虑了
+  // 本页自己——跨页签的助手页卡面「会话 N」chip 订阅同键，删完切回助手页签即停旧数，故此侧
+  // 必须广播；本地移除保留（即时反馈，不等重查），自订阅多一次重拉幂等无害
   private async deleteSelected(): Promise<void> {
     if (this.selectedIds.length === 0 || this.deleting) {
       return;
@@ -829,6 +733,11 @@ export struct ChatSessionList {
     try {
       const ids: string[] = this.selectedIds;
       const count: number = await deleteConversations(ids);
+      if (this.departed) {
+        return;
+      }
+      // 草稿级联清（同 deleteOne——方案 §4 调用点②批形态；合成行已被多选守卫滤出，不进 ids）
+      removeDraftsWithFiles(ids);
       this.rows = this.rows.filter((row: ConversationRow): boolean => ids.indexOf(row.id) < 0);
       // 删行已落库 → 广播重拉（同上 deleteOne：单条/批量两条删除链都不得漏此写点——漏一处
       // 即「删了会话、助手页 chip 不停更」；一次性计数器形态自增）
@@ -837,6 +746,9 @@ export struct ChatSessionList {
       this.getUIContext().getPromptAction().showToast({ message: '已删除 ' + count + ' 个会话' });
       this.exitMultiselect();
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '删除失败：' + (e as Error).message });
     } finally {
       this.deleting = false;
@@ -844,77 +756,128 @@ export struct ChatSessionList {
   }
 
   build() {
-    // alignContent Top（2026-09-08 搜索/分段悬浮层定位需要——ProviderPage 同款；既有
-    // 全尺寸子组件 Scroll/空态卡/批量条不受对齐影响）
+    // alignContent Top（顶部对齐：0 行提示行 margin 定位依赖；既有全尺寸子组件不受对齐影响）
     Stack({ alignContent: Alignment.Top }) {
-      // ── 会话列表（2026-09-04 回退定稿：级页在 HdsNavigation 下 List 兼容坑 = 一级页
-      //    禁 List 沉淀（dshinhm 2026-08-20 真机实锤「顶蒙层点不了滑不动」）——回 Scroll
-      //    +Column+ForEach；全量查询（本地库无分页必要）──
-      Scroll() {
-        Column({ space: CARD_SPACING }) {
-          // 派生过滤渲染（rows 全量不变——收藏分段内存过滤，见 visibleRows；搜索过滤已
-          // 随搜索迁二级页退役）
-          ForEach(this.visibleRows(), (row: ConversationRow) => {
-            SessionCardItem({
-              row: row,
-              selectMode: this.selectMode,
-              selected: this.selectedIds.includes(row.id),
-              unread: this.rowUnread(row),
-              appColorMode: this.appColorMode,
-              onOpen: (id: string): void => {
-                this.handleOpenCard(row); // 加密会话先认证再进入（未加密直通）——row 闭包
-              },
-              onToggle: (id: string): void => {
-                this.toggleSelect(id);
-              },
-              onMenu: (cardRow: ConversationRow): void => {
-                this.openCardMenu(cardRow);
-              }
-            })
-            // 键含多选/选中/锁定/收藏态后缀（dshinhm 归档页同款机制——键变即重建，勾选圈/
-            // 锁标/星标/形态随新键刷新；selectMode 切换 = 全列表键变重建，与 dshinhm 同代价
-            // 可接受）
-          }, (row: ConversationRow): string => row.id +
-            (row.locked ? '|L' : '') +
-            '|' + row.title + // 标题进键（2026-09-05 AI 会话标题）：CONV_TITLE_TICK 广播
-            // 重拉后标题变化即键变重建卡片——键不变则 SessionCardItem 构造快照不刷（坑16）
-            (row.favorite ? '|F' : '') + // 收藏态进键（2026-09-08）：开关收藏即重建刷星标
-            (this.rowUnread(row) ? '|U' : '') + // 未读态进键（2026-09-12 主动消息第二笔）：
-            // 未读键写入/清除即键变重建刷红点（坑16 族——@Prop 传入变化不经键不重渲染）
-            '|' + row.updatedAt + // 时间进键（2026-09-08 自检轮补修）：发消息/reload 后
-            // updatedAt 变化即键变重建刷时间——键不含时间则复用旧快照显示陈旧时间
-            //（110 版起预存在，坑16 族；搜索页键含时间同款姿势）
-            (this.selectMode ? (this.selectedIds.includes(row.id) ? '|s1' : '|s0') : ''))
-
-          if (this.hintText !== '') {
-            Text(this.hintText)
-              .fontSize(12)
-              .fontColor($r('sys.color.ohos_id_color_warning'))
-              .width('calc(100% - 32vp)')
+      // ── 会话列表（★ 首页 Repeat 试迁：Scroll+Column+ForEach → 渲染域组件 SessionRows
+      //    〔List + Repeat.virtualScroll，V2 机制〕——卡片与列表容器在 ChatSessionRows.ets，
+      //    机制实读与红线见该件头注释；数据源与全部行级状态在此按官方《状态管理V1和V2混用
+      //    指导》桥接：visibleRows 与 selectedIds 两个 V1 @State 经 UIUtils.enableV2Compatibility
+      //    传入〔构造处调用——整体赋值随壳 build 重跑重新使能〕，其余为标量 @Param）──
+      // ── 会话列表两档（2026-11-11 决明拍板「新增偏好开关，可把对话页卡显示成方块」）：
+      //    整页换渲染域，不在 List 档里分叉（顺手大重构禁区）。两档参数逐项对齐，点卡 /
+      //    勾选 / 四个动作全部复用本壳既有方法，零新增业务路径；数据源仍经
+      //    UIUtils.enableV2Compatibility 桥接（Repeat 懒加载要求 V2 观察能力，见
+      //    ChatSessionRows 机制①）。方块档交互与形制见 SessionGridRows.ets 头注释 ──
+      if (this.sessionCardGrid) {
+        SessionGridRows({
+          visibleRows: UIUtils.enableV2Compatibility(this.visibleRows),
+          hintText: this.hintText,
+          topPad: this.topPad,
+          topClearance: this.topClearance(),
+          bottomPad: this.bottomPad,
+          selectMode: this.selectMode,
+          selectedIds: UIUtils.enableV2Compatibility(this.selectedIds),
+          unreadConvId: this.unreadConvId,
+          appColorMode: this.appColorMode,
+          cardAlphaLevel: this.cardAlphaLevel,
+          immersiveLevel: this.immersiveLevel,
+          onScrollingChanged: (scrolling: boolean): void => {
+            this.onListScrollingChanged(scrolling);
+          },
+          onOpen: (row: ConversationRow): void => {
+            this.handleOpenCard(row);
+          },
+          onToggle: (id: string): void => {
+            this.toggleSelect(id);
+          },
+          onFavorite: (row: ConversationRow): void => {
+            this.toggleFavorite(row);
+          },
+          onRename: (row: ConversationRow): void => {
+            this.openRenameDialog(row);
+          },
+          onMove: (row: ConversationRow): void => {
+            this.openMoveSheet(row);
+          },
+          onDelete: (row: ConversationRow): void => {
+            this.confirmDeleteOne(row);
           }
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.Start)
-        // 顶/底留白 = 滚动内容内部 padding（随内容滚走、卡片滑入标题栏蒙层透出——坑9
-        // 正解在 Scroll+Column 下天然成立；多选中批量条悬浮贴屏底 = 末卡固定让位）。
-        // 顶让位（2026-09-08）：分段悬浮位 48（常量见文件头 SEGMENT_TOP_CLEARANCE；搜索
-        // 框行让位随搜索迁二级页退役）
-        .padding({
-          top: this.topPad + SEGMENT_TOP_CLEARANCE,
-          bottom: this.bottomPad + 16 + (this.selectMode ? 56 : 0)
         })
+          .width('100%')
+          .height('100%')
+          // 渐显链与列表档同源（冷启动首拉在途藏空白，落屏 200ms EaseOut）
+          .opacity(this.loaded || this.hintText !== '' ? 1 : 0)
+          .animation({ duration: 200, curve: Curve.EaseOut })
+      } else {
+        SessionRows({
+          visibleRows: UIUtils.enableV2Compatibility(this.visibleRows),
+          hintText: this.hintText,
+          topPad: this.topPad,
+          // 顶部额外让位：恒 TITLE_BAR_ROWS_GAP（胶囊在标题栏覆盖层内，无带可让），
+          // 多选态归零由渲染件 selectMode 三目承接
+          topClearance: this.topClearance(),
+          bottomPad: this.bottomPad,
+          selectMode: this.selectMode,
+          selectedIds: UIUtils.enableV2Compatibility(this.selectedIds),
+          unreadConvId: this.unreadConvId,
+          appColorMode: this.appColorMode,
+          cardAlphaLevel: this.cardAlphaLevel,
+          // 沉浸光感档位（长按菜单背板材质随总档——渲染域标量消费，不自己挂 V1 订阅）
+          immersiveLevel: this.immersiveLevel,
+          onScrollingChanged: (scrolling: boolean): void => {
+            this.onListScrollingChanged(scrolling);
+          },
+          onOpen: (row: ConversationRow): void => {
+            this.handleOpenCard(row); // 读当前行（记录最近进入 + 上行 push）
+          },
+          onToggle: (id: string): void => {
+            this.toggleSelect(id);
+          },
+          // 四个动作（侧滑四键与长按菜单共用同一批）：全部落到本件既有动作方法，不新增业务
+          // 路径——收藏 = toggleFavorite（落库 + reload）、删除 = confirmDeleteOne（确认弹窗 +
+          // 级联）、重命名 = InputDialog、移动 = 半模态
+          onFavorite: (row: ConversationRow): void => {
+            this.toggleFavorite(row);
+          },
+          onRename: (row: ConversationRow): void => {
+            this.openRenameDialog(row);
+          },
+          onMove: (row: ConversationRow): void => {
+            this.openMoveSheet(row);
+          },
+          onDelete: (row: ConversationRow): void => {
+            this.confirmDeleteOne(row);
+          },
+          // 触摸预载整件已退役（2026-10-18）：进页一律走读库单一路径
+        })
+          .width('100%')
+          .height('100%')
+          // 进场渐显（★ 首切闪修复观感笔，决明拍板「列表也做渐显」+ 调参 500→200ms）：冷启动
+          // 首拉在途（loaded=false 且无失败提示）列表整层 opacity 0 藏空白，数据落屏置位后
+          // 200ms EaseOut 渐显（区别于消息区/会话页壁纸的 500 档）。预热快照同步命中路径首帧
+          // 即 1 = 直显不播——一次成型场景零动画开销；reload 刷新 loaded 恒 1 不重播（只有
+          // 首建播）。提示行/空态卡在外层条件渲染不受本层辖——失败报告行即时可见（P0-1）。
+          // ★ animation 辖域只辖 opacity，声明位紧随其后
+          .opacity(this.loaded || this.hintText !== '' ? 1 : 0)
+          .animation({ duration: 200, curve: Curve.EaseOut })
       }
-      .width('100%')
-      .height('100%')
-      // 滚动内容不足视口时顶对齐（坑18：Scroll align 默认 Center）+ 短内容可拖拽回弹（坑76）
-      .align(Alignment.TopStart)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
 
-      // ── 空态卡（2026-08-31 任务 C，四域复检观察项；2026-09-08 文案分治）：当前分段
-      // 结果为空时全高垂直居中提示——dshinhm KimiSessionList 同款形态（居中文字 + 次要色
-      // 深浅自适应，底部抵消 topPad 悬蒙层下视觉居中）。文案分治见 emptyText；首拉在途
-      //（loaded=false）与加载失败（hintText 覆盖层提示）不显示 ──
-      if (this.loaded && this.hintText === '' && this.visibleRows().length === 0) {
+      // ── 读取失败提示行 · 0 行兜底（★ Repeat 迁）：>0 行时由渲染域随末卡尾行呈现；0 行时
+      //    Repeat 无行可挂，本层以同一定位常量补位——hintText 即便 0 行也能见（P0-1）──
+      if (this.visibleRows.length === 0 && this.hintText !== '') {
+        Text(this.hintText)
+          .fontSize(12)
+          .fontColor($r('sys.color.ohos_id_color_warning'))
+          .width('calc(100% - 32vp)')
+          // 让位与首行同源（多选态分段面收起 → 同步归零；常态让位吃 topClearance 单源方法，
+          // 与渲染域同值）
+          .margin({ top: this.topPad + (this.selectMode ? 0 : this.topClearance()) })
+      }
+
+      // ── 空态卡：当前分段结果为空时全高垂直居中提示——dshinhm 同款形态（居中文字 +
+      // 次要色深浅自适应，底部抵消 topPad 悬蒙层下视觉居中）。文案分治见 emptyText；
+      // 首拉在途（loaded=false）与加载失败（hintText 覆盖层提示）不显示 ──
+      if (this.loaded && this.hintText === '' && this.visibleRows.length === 0) {
         Column() {
           Text(this.emptyText())
             .fontSize(13)
@@ -926,40 +889,73 @@ export struct ChatSessionList {
         .padding({ bottom: this.topPad })
       }
 
-      // ── 「全部/收藏」分段悬浮层（2026-09-08 会话收藏；ProviderPage :431-443 悬浮吸顶
-      // 形制逐参数同款：Stack({ alignContent: Alignment.Top }) 顶层 + width(CARD_PANEL_
-      // WIDTH) + margin top = max(topPad - 8, 0)；SegmentBar A 档参数单一来源，本体零
-      // 改动。切换内存过滤不重查库——favSegment @State → visibleRows 派生）──
-      Column() {
-        SegmentBar({
-          items: this.favSegItems,
-          selectedIndex: $favSegment
-        })
-      }
-      .width(CARD_PANEL_WIDTH)
-      .margin({ top: Math.max(this.topPad - 8, 0) })
+      // ── 「全部/收藏」分段胶囊：承载位单源在宿主标题栏覆盖层中央（ChatTabTitleBar 内嵌），
+      // 本组件内容区不渲染胶囊、勿在此按旧悬浮层形制补回；favSegment @Link 状态由宿主
+      // 承载件与本壳共用，切换内存过滤不重查库（@Watch 收敛到 syncVisibleRows 重算）；
+      // 多选态胶囊由宿主侧收起（标题切「已选 N 项」计数态），首行让位经 selectMode
+      // 三目同步归零 ──
 
-      // ── 多选批量条（组件 = SessionMultiselectBar——dshinhm 同款独立域件，形态/穿透/
-      // 材质说明见该文件头注释）。多选中才挂载——普通模式零渲染零命中负担 ──
+      // ── 多选批量条（决明拍板「采用无主按钮路线」：SessionMultiselectActionBar 图标三键
+      //（HdsActionBar，计数文字随形态退役——计数反馈保留在确认弹窗）。多选中才挂载——
+      // 普通模式零渲染零命中负担 ──
       if (this.selectMode) {
-        SessionMultiselectBar({
-          // 三态文案（dshinhm 二二四改补请求态反馈）：删除请求在途显示「删除中…」防
-          // 重复点击 + 用户可见反馈；N=0 空选守卫见 confirmDeleteSelected 首行
-          barText: this.deleting ? '删除中…' : this.selectedIds.length > 0
-            ? '删除 ' + this.selectedIds.length + ' 个会话' : '删除会话',
-          barBottom: this.barBottom,
+        SessionMultiselectActionBar({
+          // 全选两态（驱动图标 fill/描边切换——判据纯函数单源在 SessionMultiselectBar 件）
+          allSelected: isAllSelectedIn(this.idsOf(this.visibleRows), this.selectedIds),
+          deleting: this.deleting,
+          // 距底去 16vp 呼吸间距 = 与悬浮页签常态几何重合（多选中页签已收起，批量条
+          // 独占其位；barBottom 口径见 HomeNavigation）
+          barBottom: this.barBottom - 16,
           onCancel: (): void => {
             this.exitMultiselect();
           },
           onPrimary: (): void => {
             this.confirmDeleteSelected();
+          },
+          onToggleAll: (): void => {
+            this.toggleSelectAll();
           }
         })
       }
-      // ── 新建会话入口 2026-08-31 上移标题栏（领导指令：右下角悬浮键去掉，标题栏四点键
-      // 左侧加号键点击新建——HomeNavigation 标题栏双键负责，本页不再挂悬浮键）──
+      // ── 右下悬浮新建键（复活笔，决明指令「一级页右下悬浮新建键（智感握姿跟随）」；
+      //    标题栏新建入口不撤〔现 = 「更多」菜单首项〕，两入口同动作）。组件件自持 motion
+      //    握姿订阅（on/off 成对，寿命 = 组件而非本页壳）；形制 = 局部容器绝对定位（键以外
+      //    零覆盖，卡片无按压蒙层）；多选态 hide（Visibility 隐藏不销毁，保留左右位与订阅）；
+      //    点击走 onOpenNewSession 既有链，禁复制 push 逻辑。挂载条件 = 偏好 'float' 档
+      //    ——与页签栏旁圆键共用两档键〔★ 2026-10-30 两档化，原 'off' 档退役〕、互斥由值域
+      //    保证；判据经 resolveNewSessionEntry 归一──
+      if (resolveNewSessionEntry(this.newSessionEntry) === NEW_SESSION_ENTRY_FLOAT) {
+        SessionNewFab({
+          hide: this.selectMode,
+          barBottom: this.barBottom,
+          contentWidth: this.viewWidth,
+          onTap: (): void => {
+            this.onOpenNewSession();
+          }
+        })
+      }
     }
     .width('100%')
     .height('100%')
+    // 界面实宽实测（局部容器的左位 position.right 需要内容区宽度；普通成员语义但需驱动
+    // 子件重算 → @State；一次实测后仅换机/分栏变化才变）
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      const width: number = newArea.width as number;
+      if (width > 0 && width !== this.viewWidth) {
+        this.viewWidth = width;
+      }
+    })
+    // 会话移动半模态（挂本件根 Stack；档位 [MEDIUM, LARGE] 半屏起——规范-半模态 §4 选择器/
+    // 列表类；onWillDismiss 与面板标题栏 xmark 两路同调 requestCloseMove 单一关闭入口——
+    // 规范 §1 硬约束。可见性 `$$` 双向 + onWillDismiss 内 action.dismiss() 放行（官方契约，
+    // KimiSheetCommon 注释）；第四参 onDisappear 补开〔关闭-再开协调，见字段注释〕）
+    .bindSheet($$this.moveSheetShow, this.MoveSheet(), sheetPanelOptions(
+      (action: DismissSheetAction): void => {
+        action.dismiss();
+        this.requestCloseMove();
+      }, [SheetSize.MEDIUM, SheetSize.LARGE] as SheetDetents, undefined,
+      (): void => {
+        this.onSheetGone();
+      }))
   }
 }

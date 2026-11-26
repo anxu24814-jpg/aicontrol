@@ -1,24 +1,25 @@
-// 助手知识库启用页（2026-09-21 世界书知识库首版，任务书-世界书知识库-20260921 §4.5④；
-// 用户可见名「知识库」）：助手编辑页「知识库」分区卡 push，param = 助手 id——形制照
-// AssistantSkillPage 助手模式（开关组卡 + 管理入口行 + 上限拦截 + 失败回灌）。
-// · 开关组卡（GroupSettingCard 开关行形态——只点开关切换，规范 §4.1）：行 = 书名（副标题 =
-//   「N 条条目」）+ 行尾官方 Toggle；开关即时落库（KnowledgeText.serializeEnabledKnowledgeIds
-//   唯一序列化落点）；页顶说明句 = 能力语义（模型按需自己去查，不是常驻注入）+ 上限。
+// 助手知识库启用页（用户可见名「知识库」）：助手编辑页「知识库」分区卡 push，param =
+// 助手 id——形制照 AssistantSkillPage 助手模式（开关组卡 + 上限拦截 + 失败回灌）。
+// · 开关组卡（GroupSettingCard 开关行形态——只点开关切换，规范 §4.1）：行 = 书名（副标题
+//   = 「N 条条目」）+ 行尾官方 Toggle；开关即时落库（serializeEnabledKnowledgeIds 唯一
+//   序列化落点）；页顶说明句 = 能力语义（模型按需自己去查，不是常驻注入）+ 上限。
 // · ★ 启用上限 KNOWLEDGE_ENABLED_MAX（10）：第 11 个开关**在页面上直接拒**（toast + 纪元
 //   回弹）——上限执行在开关面而非发送链，用户当场知道为什么开不上；判定在写入之前做
 //   **整集合**判定（只按「当前个数 ≥ 上限」判会在连点/并发下漏）。
-// · 「管理知识库」入口行：push 知识库库页（deep entry 第二入口，与设置页行卡成双入口）；
-//   返回时**两样都要重读**（库页里可能删了书——不重读，内存里的悬空 id 会被下次拨开关
-//   随序列化写回库，级联清列刚清掉的白写回来；AssistantSkillPage 同款理由）。
-// · 空态：仓库为空时给引导语（先去设置 → 知识库建一本），组卡不出（空组卡无意义）。
+// · ★ 本页无管理入口（决明指令：知识库的管理只在设置页，形态对齐助手记忆页「条目只读、
+//   管理去设置页」）；启用集只在进页时取一次，页内无第二次库读，悬空 id 写回的风险随之
+//   消失；开关写入失败的回滚链另有其读点，不受影响。
+// · 空态：仓库为空时只报空（管理去向由页顶说明句恒显给出），组卡不出（空组卡无意义）。
 // · 刷新链：@State enabledIds 驱动组卡重建键（键含状态 + 纪元——GroupSettingCard 头注释
-//   「开关显示刷新责任在调用方」）；库页返回经 push 回调 reload。
-// · 返回带 result（坑17）——pop({ saved: true }) 触发编辑页 onPop 重拉「已启用 N 个知识库」摘要。
+//   「开关显示刷新责任在调用方」）。返回带 result（坑17）——pop({saved:true}) 触发编辑页
+//   onPop 重拉「已启用 N 个知识库」摘要。
 import { PageShell } from '../../common/PageShell';
 import { CARD_SPACING, cardDescColor, CARD_PANEL_WIDTH } from '../../common/Theme';
-import { GroupEntryItem, GroupSettingCard } from '../GroupSettingCard';
+import { InfoCard } from '../InfoCard';
+import { DIVIDER_LEFT_ICON_LARGE, GroupEntryItem, GroupSettingCard, SETTING_ICON_ORANGE } from '../GroupSettingCard';
 import {
-  AssistantRow, queryAssistant, updateAssistantKnowledge
+  AssistantRow, queryAssistant, updateAssistantKnowledge,
+  updateAssistantKnowledgeAutoInject
 } from '../../common/store/AssistantDb';
 import {
   countEntriesOfBooks, KnowledgeBookRow, KNOWLEDGE_ENABLED_MAX, queryBooks
@@ -26,10 +27,12 @@ import {
 import {
   parseEnabledKnowledgeIds, serializeEnabledKnowledgeIds
 } from '../../common/KnowledgeText';
-import { ROUTE_ASSISTANT_KNOWLEDGE_PAGE, ROUTE_KNOWLEDGE_LIBRARY_PAGE } from '../../common/RouteNames';
+import { ROUTE_ASSISTANT_KNOWLEDGE_PAGE } from '../../common/RouteNames';
 
 @Component
 export struct AssistantKnowledgePage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI；写库等数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
@@ -43,6 +46,9 @@ export struct AssistantKnowledgePage {
   // 若纪元不自增，键不变 → 组卡不重建 → 开关停在「开」的假象上。故本纪元在**载入与每次
   // 开关交互（含被拒）**都自增
   @State private toggleEpoch: number = 0;
+  // 关键词自动注入开关（assistants.knowledgeAutoInject 列——页顶开关组卡一行，落库即写
+  // 本状态驱动重建；默认关）
+  @State private autoInject: boolean = false;
   private rowId: string = '';
 
   aboutToAppear(): void {
@@ -57,16 +63,23 @@ export struct AssistantKnowledgePage {
     this.rowId = param;
     queryAssistant(param)
       .then((row: AssistantRow | null): void => {
+        if (this.departed) {
+          return;
+        }
         if (row === null) {
           this.getUIContext().getPromptAction().showToast({ message: '助手不存在或已删除' });
           this.pathStack.pop();
           return;
         }
         this.enabledIds = parseEnabledKnowledgeIds(row.knowledge);
+        this.autoInject = row.knowledgeAutoInject;
         this.toggleEpoch += 1; // 库读回也自增（进页即拉新值，不依赖首帧）
         this.reloadBooks();
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({
           message: '知识库启用清单读取失败：' + (e as Error).message
         });
@@ -82,6 +95,9 @@ export struct AssistantKnowledgePage {
   private reloadBooks(): Promise<void> {
     return queryBooks()
       .then((rows: KnowledgeBookRow[]): Promise<void> => {
+        if (this.departed) {
+          return Promise.resolve();
+        }
         this.books = rows;
         const ids: string[] = rows.map((row: KnowledgeBookRow): string => row.id);
         return countEntriesOfBooks(ids).then((counts: Map<string, number>): void => {
@@ -90,6 +106,9 @@ export struct AssistantKnowledgePage {
         });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({
           message: '知识库读取失败：' + (e as Error).message
         });
@@ -128,6 +147,9 @@ export struct AssistantKnowledgePage {
     const serialized: string = serializeEnabledKnowledgeIds(next);
     updateAssistantKnowledge(this.rowId, serialized)
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.reloadEnabledIds();
         this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
       });
@@ -138,13 +160,52 @@ export struct AssistantKnowledgePage {
   private reloadEnabledIds(): void {
     queryAssistant(this.rowId)
       .then((row: AssistantRow | null): void => {
+        if (this.departed) {
+          return;
+        }
         if (row !== null) {
           this.enabledIds = parseEnabledKnowledgeIds(row.knowledge);
+          this.autoInject = row.knowledgeAutoInject;
           this.toggleEpoch += 1; // 回滚/重读也自增（「每次启用集写入都自增」这条不变量不留缺口）
         }
       })
       .catch((): void => {
       });
+  }
+
+  // 关键词自动注入开关落库（即时生效——下次发送即按新态，读取走会话 load 链重读 DB；
+  // 失败回灌同款口径）
+  private toggleAutoInject(isOn: boolean): void {
+    this.autoInject = isOn;
+    this.toggleEpoch += 1;
+    updateAssistantKnowledgeAutoInject(this.rowId, isOn)
+      .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
+        this.reloadEnabledIds();
+        this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
+      });
+  }
+
+  // 关键词自动注入开关行（GroupSettingCard 单行——AssistantMemoryPage switchGroup 先例，
+  // 登记例外：页顶独立开关组卡；长说明在页顶说明句，行内 secondary 短句）
+  private autoInjectRows(): GroupEntryItem[] {
+    return [{
+      icon: $r('sys.symbol.bolt'),
+      iconBg: SETTING_ICON_ORANGE,
+      label: '关键词自动注入',
+      secondary: '命中关键词的条目自动进上下文',
+      toggleValue: (): boolean => this.autoInject,
+      onToggle: (isOn: boolean): void => {
+        this.toggleAutoInject(isOn);
+      }
+    }];
+  }
+
+  // 开关组卡重建键（键含开关值 + 纪元——红线 4「显示刷新责任在调用方」）
+  private autoInjectKey(): string {
+    return String(this.autoInject) + '|' + this.toggleEpoch;
   }
 
   // 开关行数据（GroupSettingCard 开关行：toggleValue/onToggle 两字段齐全，行尾官方 Toggle
@@ -154,6 +215,7 @@ export struct AssistantKnowledgePage {
     for (const book of this.books) {
       items.push({
         icon: $r('sys.symbol.book'),
+        iconBg: SETTING_ICON_ORANGE,
         label: book.name !== '' ? book.name : '未命名知识库',
         secondary: (this.counts.get(book.id) ?? 0) + ' 条条目',
         toggleValue: (): boolean => this.enabledIds.includes(book.id),
@@ -165,18 +227,6 @@ export struct AssistantKnowledgePage {
     return items;
   }
 
-  // 「管理知识库」入口行（跳转行形态：onClick 上抛 push）
-  private manageRow(): GroupEntryItem[] {
-    return [{
-      icon: $r('sys.symbol.bookshelf'),
-      label: '管理知识库',
-      secondary: '新建、编辑或删除知识库',
-      onClick: (): void => {
-        this.openKnowledgeLibrary();
-      }
-    }];
-  }
-
   // 组卡重建键（键含启用集 + 库内清单 + **重建纪元**——任一变即重建拉新 Toggle；
   // GroupSettingCard 头注释「开关显示刷新责任在调用方」）
   private switchGroupKey(): string {
@@ -186,45 +236,35 @@ export struct AssistantKnowledgePage {
     return ids + '|' + names + '|' + this.toggleEpoch;
   }
 
-  // 「管理知识库」跳转：返回时**两样都要重读**（库里删掉某本书后，页内 enabledIds 里那条
-  // id 还在内存里，下次拨任何开关都会把它随序列化一起写回库——级联清列刚清掉的白写回来）
-  private openKnowledgeLibrary(): void {
-    this.pathStack.pushPathByName(ROUTE_KNOWLEDGE_LIBRARY_PAGE, null, (): void => {
-      this.reloadBooks().then((): void => {
-        this.reloadEnabledIds();
-      });
-    });
-  }
-
   @Builder
   Content() {
     Scroll() {
       Column({ space: CARD_SPACING }) {
-        // 页顶说明小字（13fp 次要色 + 卡宽无卡底——空态行同款归一形态）。句意 = 这功能怎么
-        // 生效（模型按需自己去查，不是把条目常驻塞进对话）+ **工具卡前置**（★ 2026-09-21
-        // 自检轮补：检索工具 defaultEnabled=false，用户只开本页开关而「知识库」卡未开时
-        // 功能静默不生效——帮助条目同笔补同义句，两处互为兜底）+ 上限（数字随常量拼接不写死）。
-        // ★ 2026-09-21 剥离笔：卡名随形「本地检索」→「知识库」（search_knowledge 已自本地检索
-        // 卡移到本名的卡，旧句指错卡 = 用户照做仍不生效——151 组文案钉同笔随形）
-        Text('知识库是助手按需查阅的词条本。开启后，助手觉得需要某领域的知识时会自己去查。'
-          + '检索知识库的工具默认关闭，先在「工具调用」里打开「知识库」卡。最多同时启用 '
-          + KNOWLEDGE_ENABLED_MAX + ' 个知识库。')
+        // 页顶说明（InfoCard 单源件）：功能语义（模型按需自己去查）+ 工具卡前置 + 上限
+        InfoCard({ text: '知识库是助手按需查阅的词条本，需要时助手会自己去查。'
+          + '检索工具默认关闭，先在「工具调用」里打开「知识库」卡。最多同时启用 '
+          + KNOWLEDGE_ENABLED_MAX + ' 个知识库。' })
+        // ── 关键词自动注入开关组卡（页顶、书目组卡之上）。说明句在组卡上方「先说明后
+        // 操作」，句义 = 开关关时两路语义（不自动注入，工具检索不受影响）──
+        Text('开启后命中关键词的知识条目会自动进入上下文。关闭后不自动注入，仍可让助手用工具检索知识库。')
           .fontSize(13)
           .fontColor(cardDescColor())
           .width(CARD_PANEL_WIDTH)
+        ForEach([this.autoInjectKey()], (_key: string) => {
+          GroupSettingCard({ items: this.autoInjectRows(), dividerLeft: DIVIDER_LEFT_ICON_LARGE })
+        }, (key: string): string => key)
         if (this.books.length === 0) {
-          // 空态行内提示行（13fp 次要色 + 卡宽无卡底；本页不进空组卡——一张没有行的开关卡
-          // 在页面上是纯噪声）
-          Text('还没有知识库。可在设置 → 知识库里新建。')
+          // 空态行内提示行（13fp 次要色 + 卡宽无卡底；本页不进空组卡——没有行的开关卡是
+          // 纯噪声）。空态只报空不指路（管理去向由页顶说明句承载，空态不是其替代说明位）
+          Text('还没有知识库。')
             .fontSize(13)
             .fontColor(cardDescColor())
             .width(CARD_PANEL_WIDTH)
         } else {
           ForEach([this.switchGroupKey()], (_key: string) => {
-            GroupSettingCard({ items: this.bookRows() })
+            GroupSettingCard({ items: this.bookRows(), dividerLeft: DIVIDER_LEFT_ICON_LARGE })
           }, (key: string): string => key)
         }
-        GroupSettingCard({ items: this.manageRow() })
       }
       .width('100%')
       .justifyContent(FlexAlign.Start)
@@ -234,6 +274,7 @@ export struct AssistantKnowledgePage {
     .height('100%')
     .align(Alignment.TopStart)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .scrollBar(BarState.Off)
   }
 
   build() {
@@ -248,5 +289,9 @@ export struct AssistantKnowledgePage {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

@@ -1,17 +1,13 @@
-// 模型卡（一卡一模型）——2026-08-31 自 ProviderModelsPanel 域拆（统一保存语义改动加
-// 启停草稿链前按防屎山规则腾行数红线；组件体原样搬迁）：modelId 主文本 + 能力标签徽章行
-// + 右侧启停 Toggle + 四点菜单键。
-// ★ 2026-09-17 交互改形（决明指令「开关略左移，右侧放更多；菜单放编辑与删除；原来点卡片
-// 进编辑改为只能点菜单才能进」）：①卡点击进编辑退役——卡片本体不再挂 onClick，编辑与删除
-// 统一收进右侧四点键菜单（ModelCardMenu 域件）；②四点键与启停开关同排右缘，开关因此左移
-// 一个键宽（形制对齐 ProviderCardItem：Toggle + 四点键，服务商卡先例）；③无按压蒙层——
-// 卡片本体已无点击语义，不再需要整卡蒙层（原文档同款亦无）。
-// ★ 启停 = 草稿态（2026-08-31 统一保存语义）：onChange 乐观上行 onToggle 由宿主
-// ProviderToggleDraft 记草稿、点详情页标题栏「保存」统一落库；直接退出 = 草稿随页面丢弃
-// 不保存。数组整组替换 + ForEach 键含 enabled（键变重建卡）驱动 Toggle 与数据态一致。
+// 模型卡（一卡一模型）：modelId 主文本 + 能力标签徽章行 + 右侧启停 Toggle。
+// 交互形制：编辑 = 卡片本体点击直进编辑页（现行形制；原四点菜单键整键退役），删除唯一走行左滑
+//（RowSwipeDelete 确认链在宿主面板）；启停开关在同排右缘（Toggle 自吞点击，点开关不触发卡片
+// onClick——ProviderCardItem 同构先例）；无按压蒙层。
+// 启停 = 草稿态（统一保存语义）：onChange 乐观上行 onToggle，由宿主 ProviderToggleDraft 记草稿、
+// 点详情页标题栏「保存」统一落库；直接退出 = 草稿随页面丢弃。数组整组替换 + ForEach 键含
+// enabled（键变重建卡）驱动 Toggle 与数据态一致。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { capLabels, effectiveCaps, ModelRow } from '../../common/store/ProviderDb';
-import { CARD_PANEL_WIDTH, badgeBg, cardBg, cardDescColor, cardTitleColor } from '../../common/Theme';
+import { CARD_PANEL_WIDTH, badgeBg, cardBg, cardDescColor, cardTitleColor, CARD_RADIUS } from '../../common/Theme';
 
 @Component
 export struct ModelCardItem {
@@ -22,12 +18,9 @@ export struct ModelCardItem {
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   onToggle: (row: ModelRow, isOn: boolean) => void = () => {
   };
-  // 更多键回调（弹 ModelCardMenu；编排在宿主面板）
-  onMenu: (row: ModelRow) => void = () => {
+  // 卡片点击进编辑页回调（编排在宿主面板；空 id 行不跳——获取同步入库前不存在编辑对象）
+  onOpen: (row: ModelRow) => void = () => {
   };
-  // 菜单锚点 id（openMenu TargetInfo 定位目标 = 本四点键——勿锚整卡，服务商卡先例：
-  // 整卡锚点使菜单低于按钮 ≈30vp 观感偏低；空串 = 不定位，宿主恒传）
-  menuAnchorId: string = '';
 
   // 小徽章（文字胶囊；badgeBg 半透明灰底，文字 cardDescColor——ProviderCardItem 同款）
   @Builder
@@ -50,8 +43,8 @@ export struct ModelCardItem {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        // 能力标签徽章行（生效能力 = effectiveCaps——未手改行走模型名派生〔v15 Cube 吸收
-        // A1，规则升级自动跟随〕；生效空 = 不渲染——获取模型拉回的裸 id 行不摆空徽章）
+        // 能力徽章行（生效能力 = effectiveCaps——未手改行走模型名派生，规则升级自动跟随；
+        // 生效空 = 不渲染——获取模型拉回的裸 id 行不摆空徽章）
         if (effectiveCaps(this.row) !== '') {
           Row({ space: 4 }) {
             ForEach(capLabels(effectiveCaps(this.row)), (label: string) => {
@@ -63,30 +56,24 @@ export struct ModelCardItem {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      // 启停开关（草稿态见头注释；不弹确认——开关语义即时可逆且未保存可退回，
-      // ProviderCardItem 同款）
+      // 启停开关（草稿态见头注释；不弹确认——开关语义即时可逆且未保存可退回；
+      // Toggle 自吞点击不冒泡卡片 onClick）
       Toggle({ type: ToggleType.Switch, isOn: this.row.enabled })
         .onChange((isOn: boolean): void => {
           this.onToggle(this.row, isOn);
         })
-      // 四点菜单键（dot_grid_2x2——服务商卡/会话卡同符号；TEXTUAL 文字键形制 + 锚点 id
-      // 挂键自身，2026-09-12 UI 同形异构归一笔 1 定稿形制：无显式高宽吃官方默认热区）
-      Button() {
-        SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
-          .fontSize(18)
-          .fontColor([$r('sys.color.font_secondary')])
-      }
-      .buttonStyle(ButtonStyleMode.TEXTUAL)
-      .id(this.menuAnchorId)
-      .onClick((): void => {
-        this.onMenu(this.row);
-      })
     }
-    // 卡样式照详情页面板卡（CARD_PANEL_WIDTH + cardBg + 圆角16 + padding16）
+    // 卡样式照详情页面板卡（CARD_PANEL_WIDTH + cardBg + CARD_RADIUS + padding16）
     .width(CARD_PANEL_WIDTH)
     .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(VerticalAlign.Center)
+    // 卡片热区点击进编辑页（空 id 行守卫不跳）
+    .onClick((): void => {
+      if (this.row.id !== '') {
+        this.onOpen(this.row);
+      }
+    })
   }
 }

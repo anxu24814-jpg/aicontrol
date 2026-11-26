@@ -1,48 +1,43 @@
-// 推荐问题生成服务（2026-09-19 推荐问题功能，任务书-推荐问题-20260919 执行）——进程级
-// 独立域，TitleGen 同构：顶层函数模块、不持页面/组件引用、不触 UI（刷新纯靠广播键）、
-// 全链吞错永不 reject（hilog 留痕，不 toast 不出气泡不打扰对话主链路）。
-// 单场景（§一，★ 2026-09-19 当晚决明拍板退役开场推荐链——原 A 场景 assistants.openers
-// 已随退役全仓零消费，列留库为死列）：消息后推荐 = AI 回复 done 后
-// fire-and-forget 独立非流式小请求（全链复用标题生成基建：TitleApi.requestTitleText 四
-// 协议非流式通道 + TitleGen 验证/退避/记账范式），末条覆盖写 conversations.suggestions
-// 并广播，末条助手消息气泡下 chips 显示，点击经 onSend 直接发送（决策 2/3/4）。
-// 守卫序（任务书 §5.1 定稿，逐级早退全静默）：dbReady → 总开关 suggestEnabled（默认关，
-// 决策 1）→ 两键齐（未配置 = 零请求无兜底——照标题生成 2026-09-05 拍板，不回退标题模型
-// 禁走四级链）→ resolveTitleEndpoint 单级验证 → loadPoolKey 启用序首支 → 隐私会话由调用
-// 侧过滤（本层无从判隐私态，TitleGen 同口径）→ 会话行已有非空 suggestions 跳过。
-// 输入 = 最后 1 轮（最后 user + 最后 assistant 各 1 条，各截 800 字符加 …）——推荐只依赖
-// 最后一问一答，比竞品 6~8 条省 token（任务书 §4.3）。重试 = isRetryable 类退避 2/4/8 秒
-// 最多 3 次（setTimeout 链，失败恢复型等待非 P1-3 冗余等待）；解析为空不重试（同 prompt
-// 重试大概率同样输出，TitleGen 同款）。
-// 清空与代纪元：发送瞬间清空（写 '' + 广播）是中断场景关键兜底（第二轮失败/停止时旧建议
-// 已随发送清掉，不会错挂）——同时 bumps 本会话代纪元，在途旧轮生成完成时核对纪元不符
-// 即作废（防「发送清空后旧轮建议又写回」竞态：清空 ≠ 取消通道，唯一廉价作废点）。
-// 记账：HTTP 200 即 logTaskUsage('suggest', ...) 入账（含 ok=false 的 200 形态，TitleGen
-// 2026-09-10 口径）；网络错误/非 200 不记。
+// 推荐问题生成服务（TitleGen 同构的进程级独立域）：顶层函数模块、不持页面/组件引用、不触
+// UI（刷新纯靠广播键）、全链吞错永不 reject（hilog 留痕，不 toast 不打扰对话主链路）。
+// 单场景 = 消息后推荐（开场推荐链已退役，assistants.openers 留库为死列）：AI 回复 done 后
+// fire-and-forget 独立非流式小请求（复用标题生成基建：TitleApi.requestTitleText 四协议非流式
+// 通道 + TitleGen 验证/退避/记账范式），末条覆盖写 conversations.suggestions 并广播，末条
+// 助手消息气泡下 chips 显示，点击经 onSend 直接发送。
+// 守卫序（逐级早退全静默）：dbReady → 总开关 suggestEnabled（默认关）→ 两键齐（未配置 =
+// 零请求无兜底——不回退标题模型、禁走四级链）→ resolveTitleEndpoint 单级验证 → loadPoolKey
+// 启用序首支 → 调用侧过滤（本层无从判隐私态，TitleGen 同口径）→ 会话行已有非空建议跳过。
+// 输入 = 最后 1 轮（最后 user + 最后 assistant 各 1 条，各截 800 字符加 …）——只依赖最后一问
+// 一答，比竞品 6~8 条省 token。重试 = isRetryable 类退避 2/4/8 秒最多 3 次（失败恢复型等待
+// 非 P1-3 冗余等待）；解析为空不重试（同 prompt 重试大概率同样输出）。
+// 清空与代纪元：发送瞬间清空（写 '' + 广播）是中断场景关键兜底（见 clearConversationSuggestions
+// 注释），同时 bumps 本会话代纪元作废在途旧轮（见 clearEpochs 注释）。记账：HTTP 200 即
+// logTaskUsage('suggest', ...) 入账（含 ok=false 的 200 形态，TitleGen 口径）；网络错/非 200 不记。
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { MessageRow, isReady, queryConversationSuggestions, queryRecentMessages,
+import { readRecentRows } from './chat/ChatContextSource';
+import { MessageRow, isReady, queryConversationSuggestions,
   setConversationSuggestions } from './store/ChatDb';
 import { SUGGEST_ENABLED_KEY, SUGGEST_MODEL_KEY, SUGGEST_PROVIDER_KEY } from './store/ProviderDb';
 import { TitleEndpoint, isRetryable, resolveTitleEndpoint } from './TitleGen';
 import { loadPoolKey } from './store/KeyStore';
-import { requestTitleText, TitleRequestResult } from './providers/TitleApi';
+import { READ_TIMEOUT_MS, requestTitleText, resolveFunctionalThinking,
+  TitleRequestResult } from './providers/TitleApi';
 import { logTaskUsage } from './store/UsageStatsDb';
 
 const DOMAIN: number = 0x71C2;
 const TAG: string = 'SuggestGen';
 
-// 推荐问题提示词（任务书 §5.1 内置默认——语义定稿文案可润色：以用户口吻生成 3 条接下来
-// 可能提出的问题，与对话内容语言一致，每条 ≤10 字〔★ 2026-09-19 决明改版：20 → 10 字，
-// chips 短句化；解析截断 SUGGEST_ITEM_MAX_CHARS 同值联动〕，不重复已问内容，直接输出 JSON
-// 数组不加解释与 markdown）。★ 机制照 TITLE_PROMPT_TEMPLATE：SUGGEST_PROMPT_TEMPLATE = 内置
-// 默认（唯一真源），SUGGEST_PROMPT_KEY 存用户定制覆盖——'' = 未定制 = 生效内置（恢复默认
-// = 清键回退，内置模板后续升级自动跟随）；生效模板单源 = resolveSuggestPromptTemplate()
-// 生成链与功能模型页编辑面板共用；SUGGEST_PROMPT_CONTENT = {content} 占位符（编辑保存
-// 校验必须含——缺占位符 = 请求无对话内容可插，模板失效），渲染时替换为对话内容拼接串
+// 推荐问题提示词（内置默认——以用户口吻生成 3 条接下来可能提出的问题，与对话内容语言一致
+// 并贴合用户的表达习惯——推荐语是用户即将说出口的话，口吻越贴越可用，每条 ≤10 字〔chips
+// 短句化，与 SUGGEST_ITEM_MAX_CHARS 同值联动〕，不重复已问内容，直接输出 JSON 数组不加
+// 解释与 markdown）。机制照 TITLE_PROMPT_TEMPLATE：本常量 = 内置默认唯一真源，
+// SUGGEST_PROMPT_KEY 存用户定制覆盖——'' = 未定制生效内置（清键回退，内置升级自动跟随）；
+// 生效模板单源 = resolveSuggestPromptTemplate()（生成链与功能模型页编辑面板共用）；
+// SUGGEST_PROMPT_CONTENT = {content} 占位符（编辑保存校验必须含——缺则模板失效）
 export const SUGGEST_PROMPT_TEMPLATE: string =
   '我将给你一段对话内容，放在 <content> 标签块中。\n' +
   '请以用户的口吻，生成 3 条接下来最可能提出的问题。\n' +
-  '1. 问题使用与对话内容一致的语言\n' +
+  '1. 问题使用与对话内容一致的语言，并贴合用户的表达习惯\n' +
   '2. 每条不超过 10 个字，不重复对话中已经问过的内容\n' +
   '3. 直接输出 JSON 字符串数组，例如 ["问题一","问题二","问题三"]，' +
   '不要任何解释，不要 markdown 代码块\n' +
@@ -51,12 +46,11 @@ export const SUGGEST_PROMPT_TEMPLATE: string =
   '{content}\n' +
   '</content>';
 export const SUGGEST_PROMPT_CONTENT: string = '{content}';
-// 推荐提示词定制键（AppStorage 持久化；'' = 未定制 = 生效内置模板——清删式语义；EntryAbility
-// persistProp 注册，备份白名单在 AppPreferences.BACKUP_PREF_KEYS 功能模型绑定段）
+// 推荐提示词定制键（'' = 未定制生效内置——清删式语义；EntryAbility persistProp 注册，
+// 备份白名单在 AppPreferences.BACKUP_PREF_KEYS 功能模型绑定段）
 export const SUGGEST_PROMPT_KEY: string = 'suggestPrompt';
 
-// 生效模板纯选择（custom 非空取 custom，空回退内置——AppStorage 读取在 IO 面，
-// 本纯函数可 node 直跑断言：内核回退与定制两路，pickTitlePrompt 同款）
+// 生效模板纯选择（custom 非空取 custom，空回退内置——AppStorage 读取在 IO 面，本纯函数可 node 直跑断言）
 export function pickSuggestPrompt(custom: string): string {
   return custom !== '' ? custom : SUGGEST_PROMPT_TEMPLATE;
 }
@@ -67,26 +61,23 @@ export function resolveSuggestPromptTemplate(): string {
 }
 
 // ── 数值常量（导出 = 断言资产消费）──
-// 生成请求温度 0.3 与 maxOutput 在 TitleApi 侧由调用参给定（此处只传 maxOutput）；
-// ★ 2026-09-20 上限 300 → 0（决明拍板照标题/记忆链同口径——真机账本实锤 42 笔 34 笔
-// 打满 300、思考段烧满正文恒空 = 推荐不出主因；0 = 不发 max_tokens 字段）
+// 温度 0.3 与 maxOutput 在 TitleApi 侧由调用参给定（此处只传 maxOutput）；上限 300 → 0
+//（照标题/记忆链同口径——真机实锤思考段烧满致正文恒空是推荐不出主因；0 = 不发 max_tokens 字段）
 export const SUGGEST_MAX_OUTPUT: number = 0;
 export const SUGGEST_INPUT_CHAR_LIMIT: number = 800; // 单条输入截断（超长加 …）
-export const SUGGEST_COUNT: number = 3; // 推荐条数固定 3（决策 4）
-export const SUGGEST_ITEM_MAX_CHARS: number = 10; // 单条建议上限（解析时截断；★ 2026-09-19 决明改版 50 → 10 与提示词同值联动）
+export const SUGGEST_COUNT: number = 3; // 推荐条数固定 3
+export const SUGGEST_ITEM_MAX_CHARS: number = 10; // 单条建议上限（解析时截断，与提示词 ≤10 字同值联动）
 const SUGGEST_STORE_MAX: number = 4; // 存储解析条数收口（推荐 ≤3 恒不受影响）
 // 退避重试（TitleGen MAX_TITLE_RETRY 同参数）：2^(n+1) 秒 = 2/4/8 共 3 次，总窗 ≤14s
 const MAX_SUGGEST_RETRY: number = 3;
 const RETRY_BASE_SECONDS: number = 2;
 
-// 推荐刷新广播键（AppStorage tick 递增；CONV_TITLE_TICK_KEY 同款先例）。★ 2026-09-19 执行
-// 偏差点名（任务书原写「ChatPageContent 订阅 tick → 调 SuggestGen 读会话行函数」）：会话
-// id 不经 ChatPage 传入 ChatPageContent（ChatPage 硬线零改动，其现有 props 无会话 id），
-// 订阅侧无从知道该读哪个会话行——改为广播**载荷键**（SUGGEST_PAYLOAD_KEY = JSON 串
-// {msgId, items}，msgId 全局唯一），订阅侧按 msgId 在自身 dataSource 命中后原地挂字段，
-// 跨会话天然无串扰（他页 dataSource 无此 id = no-op）。tick 键保留作时序信号（语义与
-// CONN_RESOLVE_TICK_KEY 同族：@Watch 对同值不触发，payload 键可能连写同串，tick 递增
-// 保证每次广播都被感知）。回放路径不走广播——ChatPageLoad.loadHistory 持会话 id 直读库列
+// 推荐刷新广播键（AppStorage tick 递增）。★ 广播用**载荷键**（SUGGEST_PAYLOAD_KEY =
+// JSON 串 {msgId, items}，msgId 全局唯一）：会话 id 不经 ChatPage 传入 ChatPageContent，
+// 订阅侧无从知道该读哪个会话行——按 msgId 在自身 dataSource 命中后原地挂字段，跨会话
+// 天然无串扰（他页 dataSource 无此 id = no-op）。tick 键保留作时序信号（@Watch 对同值不
+// 触发，payload 键可能连写同串，tick 递增保证每次广播都被感知）；回放不走广播（loadHistory
+// 持会话 id 直读库列）
 export const SUGGEST_TICK_KEY: string = 'suggestTick';
 export const SUGGEST_PAYLOAD_KEY: string = 'suggestPayload';
 
@@ -127,13 +118,12 @@ export function parseSuggestPayload(json: string): SuggestPayload | null {
   return payload;
 }
 
-// ── 存储解析/序列化（conversations.suggestions 单一落点
-// 「本域只存取原串、解析单落点」先例 = tools→ToolTypes / skills→SkillText；openers 列
-// 已随开场链退役成死列，无调用方）──
+// ── 存储解析/序列化（conversations.suggestions 单一落点；本域只存取原串、解析单落点——
+// 先例同 tools→ToolTypes / skills→SkillText；openers 列已随开场链退役成死列）──
 
 // 库列 JSON 串 → 条目清单（'' / 坏 JSON / 非数组 / 非字符串项逐条丢弃不抛错；trim + 滤空；
-// 条数收口 SUGGEST_STORE_MAX = 4）。不压空白不截长——存储值由写入侧（生成解析/编辑页
-// 保存校验）保证形态，解析侧只防御坏数据
+// 条数收口 SUGGEST_STORE_MAX = 4）。不压空白不截长——形态由写入侧（生成解析/编辑页保存
+// 校验）保证，解析侧只防御坏数据
 export function parseSuggestions(json: string): string[] {
   if (json === '') {
     return [];
@@ -161,10 +151,10 @@ export function serializeSuggestions(items: string[]): string {
   return JSON.stringify(items);
 }
 
-// 模型输出清洗解析（任务书 §5.1 七环）：去 <think> 标签（TitleGen.cleanTitle 同款正则）→
-// 剥首尾 markdown code fence（```json 围栏，模型偶发包裹的防御）→ JSON.parse → 接受两种
-// 形态：字符串数组，或对象含 follow_ups 数组（Open WebUI 式包裹防御）→ 逐条 trim / 压
-// 空白 / 截 10 字符（按码点，见 clipByCodePoint）/ 滤空串 → 取前 3。任何一步不符或结果为空 = 回 []
+// 模型输出清洗解析（七环）：去 <think> 标签（TitleGen.cleanTitle 同款正则）→ 剥首尾
+// markdown code fence（模型偶发包裹的防御）→ JSON.parse → 接受两种形态：字符串数组，或
+// 对象含 follow_ups 数组（Open WebUI 式包裹防御）→ 逐条 trim / 压空白 / 截 10 字符（按
+// 码点，见 clipByCodePoint）/ 滤空串 → 取前 3。任何一步不符或结果为空 = 回 []
 export function parseSuggestList(raw: string): string[] {
   let text: string = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
   text = stripCodeFence(text);
@@ -201,10 +191,10 @@ export function parseSuggestList(raw: string): string[] {
   return items.slice(0, SUGGEST_COUNT);
 }
 
-// 按码点截断（2026-09-20 D2-3 修复）：substring 按 UTF-16 码元切，截点落在代理对中间会切出
-// 孤立高位代理（半个 emoji）——残串照写库 / 广播 / 上屏，点击即把残串当消息发出。改按码点
-// 计数剪切（代理对算一个字符，与「≤ N 字符」语义一致）；孤立代理脏数据不入对（+1 收尾不死循环）。
-// 溢出不加省略号的既有形态（parseSuggestList 面）保持不变
+// 按码点截断：substring 按 UTF-16 码元切，截点落在代理对中间会切出孤立高位代理（半个
+// emoji）——残串照写库/广播/上屏，点击即把残串当消息发出。改按码点计数剪切（代理对算一个
+// 字符，与「≤ N 字符」语义一致）；孤立代理脏数据不入对（+1 收尾不死循环）；溢出不加省略号
+// 的既有形态保持不变
 function clipByCodePoint(text: string, max: number): string {
   if (text.length <= max) {
     return text; // 码元数 ≤ max 时码点数必 ≤ max——零拷贝快路径
@@ -235,8 +225,8 @@ function stripCodeFence(text: string): string {
 }
 
 // 对话内容拼接：最后 1 轮 = 最后 user + 最后 assistant 各 1 条（过滤空内容；tool 行不入），
-// 各截 800 字符加 …，`user: 内容` / `assistant: 内容` 逐行（buildTitleContent 同款拼接，
-// 含压空白）。两条皆空 = ''（无请求必要）
+// 各截 800 字符加 …，`user: 内容` / `assistant: 内容` 逐行（buildTitleContent 同款含压空白）。
+// 两条皆空 = ''（无请求必要）
 export function buildSuggestContent(messages: MessageRow[]): string {
   let lastUser: string = '';
   let lastAssistant: string = '';
@@ -261,8 +251,7 @@ export function buildSuggestContent(messages: MessageRow[]): string {
   return lines.join('\n');
 }
 
-// 单条输入截断：压空白 ≤800 字符、超长加 …（TITLE_INPUT_CHAR_LIMIT 同款姿势；截断按码点
-// 走 clipByCodePoint——同族收口，D2-3 的孤立代理残串本处虽只进提示词不上屏，仍一并根治）
+// 单条输入截断：压空白 ≤800 字符、超长加 …（截断按码点走 clipByCodePoint——同族收口）
 function squeezeInput(content: string): string {
   const squeezed: string = content.replace(/\s+/g, ' ').trim();
   return squeezed.length > SUGGEST_INPUT_CHAR_LIMIT ?
@@ -271,18 +260,16 @@ function squeezeInput(content: string): string {
 
 // in-flight 会话 id 集（退避窗口内防同会话并发重复请求；跨会话并行无害——TitleGen 同款）
 const inflightIds: Set<string> = new Set();
-// 在途期被吞掉的触发暂存（会话 id → 最近一次被跳过的目标消息 id）——收口后补跑一次。
-// ★ 2026-09-20 修复（D2-1）：原实现命中在途直接 return 丢弃——上一轮生成仍在途时（退避
-// 重试窗 2+4+8 = 14s 加请求时长）用户发下一条，该轮 done 的触发被整条吞掉，净效果是该轮
-// 建议永不生成且用户侧完全静默（只有 hilog）。恒只保最新一条、收口即删（数据有界）
+// 在途期被吞掉的触发暂存（会话 id → 最近一次被跳过的目标消息 id）——收口后补跑一次。原实现
+// 命中在途直接 return 丢弃：上一轮仍在途（退避窗 + 请求时长可达数十秒）时用户发下一条，该轮
+// 触发被整条吞掉且完全静默。恒只保最新一条、收口即删（数据有界）
 const pendingMsgIds: Map<string, string> = new Map();
 // 代纪元（会话级）：clearConversationSuggestions bumps——在途生成写库前核对，不符即作废
 //（防「发送清空后旧轮建议又写回」竞态；只在 in-flight 期记账，生成收口即删，Map 恒小）
 const clearEpochs: Map<string, number> = new Map();
 
-// 推荐生成入口（finishStream('done') 内 finalizeMessage.then 的 done 分支一行
-// fire-and-forget 调用，generateTitleForConversation 同位；隐私会话由调用侧守卫过滤后才到
-// 这；内部全吞错误 hilog 留痕，永不 reject）
+// 推荐生成入口（done 分支 fire-and-forget 调用，generateTitleForConversation 同位；隐私会话
+// 由调用侧守卫过滤后才到这；内部全吞错误 hilog 留痕，永不 reject）
 export function generateSuggestForMessage(conversationId: string, assistantMsgId: string): void {
   if (conversationId === '' || assistantMsgId === '') {
     return;
@@ -303,8 +290,8 @@ export function generateSuggestForMessage(conversationId: string, assistantMsgId
     .finally((): void => {
       inflightIds.delete(conversationId);
       clearEpochs.delete(conversationId); // 收口即删——纪元只在 in-flight 期有意义（有界）
-      // 在途期被吞掉的触发在此补跑（★ 2026-09-20 修复 D2-1）：先清在途登记再重入，
-      // 否则补跑又被自身去重拦下；重入走完整守卫序，纪元按收口后现值现读
+      // 在途期被吞掉的触发在此补跑：先清在途登记再重入（否则补跑又被自身去重拦下）；
+      // 重入走完整守卫序，纪元按收口后现值现读
       const pending: string | undefined = pendingMsgIds.get(conversationId);
       if (pending !== undefined) {
         pendingMsgIds.delete(conversationId);
@@ -350,23 +337,26 @@ async function runSuggestGeneration(conversationId: string, assistantMsgId: stri
     hilog.warn(DOMAIN, TAG, '推荐问题 Key 明文缺失（资产迁移中断/手工清资产），放弃');
     return;
   }
-  const content: string = buildSuggestContent(await queryRecentMessages(conversationId));
+// 三态路由读（建议绑定当前路径 head/run 语境——graph 会话按路径读）
+  const content: string = buildSuggestContent(await readRecentRows(conversationId));
   if (content === '') {
     return; // 无可推荐内容（两条皆空），无请求必要
   }
   // split/join 替换——String.replace 的替换串含 $&/$`/$' 等特殊序列时会被解释注入模板
-  //（消息内容来自用户输入不可信；TitleGen 同款 split/join 先例）
-  // 模板 = resolveSuggestPromptTemplate() 现读（用户改提示词下次生成立即生效，无缓存）
+  //（消息内容来自用户输入不可信）；模板 = resolveSuggestPromptTemplate() 现读（改提示词
+  // 下次生成立即生效，无缓存）
   const prompt: string =
     resolveSuggestPromptTemplate().split(SUGGEST_PROMPT_CONTENT).join(content);
-  // 末三形参：读超时与句柄回传走默认，第三位 taskLabel = 请求日志来源标签 + 失败文案用途
-  // 前缀（2026-09-23 请求日志笔；此前不传即错报「标题」）
+  // 末三形参：taskLabel = 请求日志来源标签 + 失败文案前缀；思考档位与读超时组装单源 =
+  // TitleApi.resolveFunctionalThinking
+  const ft = resolveFunctionalThinking(resolved.baseUrl, resolved.modelId,
+    resolved.protocol, resolved.endpoint, READ_TIMEOUT_MS);
   const result: TitleRequestResult = await requestTitleText(resolved.baseUrl, resolved.modelId,
     resolved.protocol, resolved.endpoint, apiKey, prompt, SUGGEST_MAX_OUTPUT,
-    undefined, undefined, '推荐问题');
-  // 用途记账（TitleGen 2026-09-10 口径）：HTTP 200 即已消耗 token——ok=false 的 200 形态也
-  // 入账；网络错误/HTTP 非 200 无 usage 不记。放清洗之前，建议无效放弃不影响账本如实
-  //（purpose='suggest'，conversationId = 目标会话随删会话级联删；全零不落 = 零污染守卫）
+    ft.readTimeoutMs, undefined, '推荐问题', ft.thinking, ft.offEnabled);
+  // 用途记账（TitleGen 口径）：HTTP 200 即已消耗 token——ok=false 的 200 形态也入账；网络
+  // 错误/非 200 无 usage 不记。放清洗之前，建议无效放弃不影响账本如实（purpose='suggest'，
+  // conversationId = 目标会话随删会话级联删；全零不落 = 零污染守卫）
   if (result.status === 200) {
     logTaskUsage('suggest', conversationId, resolved.providerId, resolved.modelId,
       result.promptTokens, result.completionTokens, result.cachedTokens);
@@ -411,10 +401,9 @@ async function runSuggestGeneration(conversationId: string, assistantMsgId: stri
     conversationId, result.status, result.errorMessage);
 }
 
-// 发送瞬间清空（dispatchSend 入库链 upgradeTitlePlaceholder 调用同位——任务书 §5.1 清空
-// 接线；此清空是中断场景的关键兜底：第二轮回复失败或手动停止时，上一轮旧建议已在发送
-// 瞬间清掉，不会错挂在失败轮下面）。in-flight 期同时 bumps 代纪元作废在途旧轮写回；
-// fire-and-forget，写库失败 hilog 不广播。隐私会话由调用侧过滤（不入此函数）
+// 发送瞬间清空（dispatchSend 入库链调用同位；此清空是中断场景的关键兜底——第二轮回复失败
+// 或手动停止时，上一轮旧建议已在发送瞬间清掉，不会错挂在失败轮下面）。in-flight 期同时
+// bumps 代纪元作废在途旧轮写回；fire-and-forget，写库失败 hilog 不广播。隐私会话由调用侧过滤
 export function clearConversationSuggestions(conversationId: string): void {
   if (conversationId === '') {
     return;
@@ -432,8 +421,7 @@ export function clearConversationSuggestions(conversationId: string): void {
     });
 }
 
-// 会话行建议读取（ChatPageLoad.loadHistory 回放装配消费——持会话 id 直读库列，不经广播）；
-// 解析单落点 = parseSuggestions（'' / 坏数据回 []）
+// 会话行建议读取（loadHistory 回放装配消费——持会话 id 直读库列不经广播）；解析单落点 = parseSuggestions
 export async function loadConversationSuggestions(conversationId: string): Promise<string[]> {
   return parseSuggestions(await queryConversationSuggestions(conversationId));
 }

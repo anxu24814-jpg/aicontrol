@@ -15,6 +15,6 @@
 /tools/verify/.tmp
 # HAP 回滚备份（不进打包、不入库）
 /backups
-# ZCode 客户端工作区产物（会话计划 / 工作流草稿与运行记录 / 客户端排除表；同型先例 = dshinhm 亦忽略 /.zcode/）
+# 本地开发客户端的工作区产物（会话计划、工作流草稿与排除表）
 /.zcode/
 /.zcodeignore

@@ -1,31 +1,28 @@
-// 助手上下文与输出三级页（2026-09-01 高级设定，领导指令照参考图复刻）：编辑页「高级
-// 设定」二级页「上下文与输出」行卡 push 进入，param = 助手 id。
-// · 页面形态：PageShell 自包壳 + 灰底直放说明行「控制发送历史范围和单次回复长度」+
-//   两张滑块卡——上下文消息数（0~100 step 1，0 = 不限制）/ 最大输出长度（0~131072
-//   step 1024，0 = 不限制）。卡形制见 SliderValueCard（2026-09-09 迁出共用——上下文两卡
-//   与工具轮上限卡三处同构；卡内 = 标题行〔标题 + 右侧蓝值 + square_and_pencil 编辑键弹
-//   数字输入〕+ 官方 InSet 滑块 + 底部 12fp 灰说明）。
-// · 发送语义（官方 API 文档查证 2026-09-01，细则见 RequestCompose/RequestInject 头注释）：
-//   上下文消息数 = 应用层截取（发送序列保尾部 N 条含本条 user，注入前截——身份注入
-//   永不丢，clipHistoryTail）；最大输出长度四协议方言落点 = openai chat max_tokens /
-//   responses max_output_tokens / gemini maxOutputTokens / anthropic max_tokens
-//   （未配置 8192 现状、显式 0 兜底 131072〔128K，说明文案照图〕、正数用值）。
-// · 手动输入范围：2026-09-02 领导拍板对齐 CubeAgent 数值——上下文 0~1024 整数 / 输出
-//   0~393216 整数（滑块与手动输入同上限，超出由服务商 400 自答走既有回显）。
+// 助手上下文与输出三级页：编辑页「高级设定」二级页「上下文与输出」行卡 push 进入，
+// param = 助手 id。
+// · 页面形态：PageShell 自包壳 + 说明行「控制发送历史范围和单次回复长度」+ 两张滑块卡
+//——上下文消息数（0~100 step 1，0 = 不限制）/ 最大输出长度（0~131072 step 1024，0 =
+//   不限制）。卡形制见 SliderValueCard（共用件——上下文两卡与工具轮上限卡三处同构；卡内 =
+//   标题行〔标题 + 右侧蓝值 + 右箭头入口弹数字输入〕+ 官方 InSet 滑块 + 底部 12fp 灰说明）。
+// · 发送语义（官方 API 文档查证，细则见 RequestCompose/RequestInject 头注释）：上下文
+//   消息数 = 应用层截取（发送序列保尾部 N 条含本条 user，注入前截——身份注入永不丢，
+//   clipHistoryTail）；最大输出长度四协议方言落点 = openai chat max_tokens / responses
+//   max_output_tokens / gemini maxOutputTokens / anthropic max_tokens（未配置 8192 现状、
+//   显式 0 兜底 131072〔128K，说明文案照图〕、正数用值）。
+// · 手动输入范围（领导拍板对齐 CubeAgent 数值）：上下文 0~1024 整数 / 输出 0~393216
+//   整数（滑块与手动输入同上限，超出由服务商 400 自答走既有回显）。
 // · 保存模式：无保存键——onBackPressed 统一落库（值对比 initial 判无改动 → 无参 pop；
 //   有改动落库失败 toast 留页）→ pop({saved:true}) 刷二级页摘要。★ 保存恒写
 //   contextCount/maxOutput 两键（0 也写——「进过上下文页保存」后 anthropic 的 0 走
 //   131072 兜底而非 8192 现状；采样四键原样保留不经本页改动）。
-// · ★ 2026-09-02 领导真机反馈修复（坑16 家族归正）：滑块卡 @Prop value/普通成员
-//   valueText 居 PageShell.content（@BuilderParam）内不随父 @State 更新——拖动只动
-//   滑杆内部态、右侧文案冻结，编辑弹窗改值滑块也不同步，观感「拖动条不生效只能靠
-//   编辑键」。value 改 @Link 订阅式双向（onChange 直写回父 @State；编辑弹窗改 @State
-//   同步进滑块进度），蓝值文案改 format 纯函数入参（读 @Link value 随刷）。采样页
-//   SamplingToggleCard 同构同病同轮归正。2026-09-09 卡体迁 SliderValueCard 共用（@Link
-//   契约随迁原样保留，本页零行为变化）。
+// · ★ 坑16 家族归正（领导真机反馈修复）：滑块卡 @Prop value/普通成员 valueText 居
+//   PageShell.content（@BuilderParam）内不随父 @State 更新——拖动只动滑杆内部态、右侧
+//   文案冻结，编辑弹窗改值滑块也不同步。value 改 @Link 订阅式双向（onChange 直写回父
+//   @State），蓝值文案改 format 纯函数入参（读 @Link value 随刷）；契约随 SliderValueCard
+//   共用迁出原样保留，本页零行为变化。
 import { PageShell } from '../../common/PageShell';
 import { ROUTE_ASSISTANT_CONTEXT_PAGE } from '../../common/RouteNames';
-import { CARD_PANEL_WIDTH, cardDescColor } from '../../common/Theme';
+import { InfoCard } from '../InfoCard';
 import { overlayMaterial } from '../../common/ImmersiveLevel';
 import {
   AssistantAdvancedParams, parseAssistantAdvancedParams, serializeAssistantAdvancedParams
@@ -34,9 +31,9 @@ import { queryAssistant, updateAssistantAdvancedParams } from '../../common/stor
 import { InputDialog } from '../chat/InputDialog';
 import { SliderValueCard } from '../SliderValueCard';
 
-// 滑块域常量（2026-09-02 领导拍板对齐 CubeAgent 数值：上下文消息数上限 1024 条 / 最大
-// 输出长度上限 393216 tokens = 384K——两者均为滑块与手动输入共用上限；0 = 不限制语义
-// 不变。手动输入上限随滑块同值——超出模型真实上限的值由服务商 400 自答，不再放宽）
+// 滑块域常量（领导拍板对齐 CubeAgent 数值：上下文消息数上限 1024 条 / 最大输出长度上限
+// 393216 tokens = 384K——两者均为滑块与手动输入共用上限；0 = 不限制语义不变。手动输入
+// 上限随滑块同值——超出模型真实上限的值由服务商 400 自答，不再放宽）
 const CONTEXT_SLIDER_MAX: number = 1024;
 const OUTPUT_SLIDER_MAX: number = 393216;
 const OUTPUT_SLIDER_STEP: number = 1024;
@@ -52,11 +49,13 @@ export function formatTokenText(v: number): string {
   return String(v);
 }
 
-// 滑块卡（页内组件——两卡同构提取）：2026-09-09 迁出为共用 SliderValueCard（工具轮上限
-// 卡第三处消费；@Link/format 契约与坑16 修复随迁原样，本页零行为变化）
+// 滑块卡（页内组件）已迁出为共用 SliderValueCard（工具轮上限卡第三处消费；@Link/format
+// 契约与坑16 修复随迁原样，本页零行为变化）
 
 @Component
 export struct AssistantContextPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI；写库等数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
@@ -78,7 +77,7 @@ export struct AssistantContextPage {
   private outputEditCtrl: CustomDialogController | null = null;
 
   aboutToAppear(): void {
-    // push 参数（getParamByName 取末条，ModelSettingsPage 同款姿势）：string id
+    // push 参数（getParamByName 取末条）：string id
     const params: Array<string> =
       this.pathStack.getParamByName(ROUTE_ASSISTANT_CONTEXT_PAGE) as Array<string>;
     const param: string | undefined = params.length > 0 ? params[params.length - 1] : undefined;
@@ -90,6 +89,9 @@ export struct AssistantContextPage {
     this.rowId = param;
     queryAssistant(param)
       .then((row): void => {
+        if (this.departed) {
+          return;
+        }
         if (row === null) {
           this.getUIContext().getPromptAction().showToast({ message: '助手不存在或已删除' });
           this.pathStack.pop();
@@ -109,13 +111,15 @@ export struct AssistantContextPage {
         }
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '助手读取失败：' + (e as Error).message });
         this.pathStack.pop();
       });
   }
 
-  // 右侧蓝值文案由父组件 format 纯函数渲染（0 = 不限制语义在 format 内），本页不再
-  // 持有文案方法（2026-09-02 归正时随 valueText 入参一并移除）
+  // 右侧蓝值文案由父组件 format 纯函数渲染（0 = 不限制语义在 format 内），本页不持文案方法
 
   // 手动输入解析（整数 + 范围校验；非法 toast 不静默）；合法则更新 @State（滑块联动）
   private applyContextInput(text: string): void {
@@ -136,7 +140,7 @@ export struct AssistantContextPage {
     this.maxOutput = v;
   }
 
-  // 编辑键弹窗（InputDialog 数字型——2026-09-01 加 number 参；初值预填当前值）
+  // 编辑键弹窗（InputDialog 数字型；初值预填当前值）
   private openContextEdit(): void {
     this.contextEditCtrl = new CustomDialogController({
       systemMaterial: overlayMaterial(),
@@ -179,23 +183,23 @@ export struct AssistantContextPage {
   Content() {
     Scroll() {
       Column({ space: 12 }) {
-        // 说明行（灰底直放不加卡——SystemPromptPage 说明行范式）
-        Text('控制发送历史范围和单次回复长度')
-          .fontSize(13)
-          .fontColor(cardDescColor())
-          .width(CARD_PANEL_WIDTH)
+        // 说明行（InfoCard 单源件）
+        InfoCard({ text: '控制发送历史范围和单次回复长度' })
         SliderValueCard({
           title: '上下文消息数', value: $contextCount,
           min: 0, max: CONTEXT_SLIDER_MAX, step: 1,
           format: (v: number): string => v === 0 ? '不限制' : v + ' 条',
           desc: '限制发送给模型的历史消息数量，0 为不限制',
+          rowLabel: '消息数',
           onEdit: (): void => { this.openContextEdit(); }
         })
         SliderValueCard({
           title: '最大输出长度', value: $maxOutput,
           min: 0, max: OUTPUT_SLIDER_MAX, step: OUTPUT_SLIDER_STEP,
-          format: (v: number): string => v === 0 ? '无限制' : formatTokenText(v),
-          desc: '0 表示不限制（由模型按自身上限输出），Claude 等强制要求该字段的服务商会兜底为 128K。开启思考档位时，输出上限会自动抬到思考所需的最小值',
+          format: (v: number): string => v === 0 ? '不限制' : formatTokenText(v),
+          // ★ 文案口径：去括号改分句；「无限制」与上下文卡「不限制」同义两词，统一为「不限制」
+          desc: '0 为不限制，由模型按自身上限输出。Claude 等强制要求该字段的服务商会兜底为 128K。开启思考档位时，输出上限会自动抬到思考所需的最小值',
+          rowLabel: '输出长度',
           onEdit: (): void => { this.openOutputEdit(); }
         })
       }
@@ -207,6 +211,7 @@ export struct AssistantContextPage {
     .height('100%')
     .align(Alignment.TopStart)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .scrollBar(BarState.Off)
   }
 
   build() {
@@ -232,9 +237,15 @@ export struct AssistantContextPage {
         };
         updateAssistantAdvancedParams(this.rowId, serializeAssistantAdvancedParams(next))
           .then((): void => {
+            if (this.departed) {
+              return; // 自检轮 1712 补判：页面已亡不再 pop（否则会退掉上一层）
+            }
             this.pathStack.pop({ saved: true });
           })
           .catch((e: Object): void => {
+            if (this.departed) {
+              return;
+            }
             this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
           });
         return true; // 拦截返回——落库结果回调内再 pop（失败留页）
@@ -243,5 +254,9 @@ export struct AssistantContextPage {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

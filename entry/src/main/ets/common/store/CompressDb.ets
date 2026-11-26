@@ -1,42 +1,64 @@
-// 压缩摘要存储域（2026-09-23 上下文压缩，任务书-上下文压缩-20260923 §2.1）：messages 表
+// 压缩摘要存储域（任务书-上下文压缩-20260923 §2.1）：messages 表
 // role='summary' 行（coversToSeq = 覆盖边界）的读写与边界查询收拢本文件。
+// ★ 本域承载**边界行两类**——role='summary'（摘要，带正文）与
+// role='clear'（清空，正文恒空）；边界真源同为 summary_bindings 行（表名沿历史不改，语义 =
+// 「边界节点 ↔ 覆盖区间」绑定）。新增 role 取值零迁移（role 列建表无 CHECK）。
 // · 为什么新开本件而不并入 ChatDb.ets（宪法「反碎片下限」三问）：①职责一句话 = 压缩摘要行
-//   的读写与边界查询，有独立职责缝；②无既有同域可并——MessageVariantDb 管多版本、
-//   MessageSeqDb 管序号，各为别表主域，ChatDb.ets 剔头 1192 本笔 +50 量级会越 1200 硬线；
-//   ③实逻辑非转接壳。
-// · 依赖方向（零环红线，坑50）：本件 → ChatDb（sharedRdbStore / nextMessageId /
-//   nextRowCreatedAt / deleteMessagesBy）+ MessageSeqDb（nextRowSeq）+ AttachmentDb
-//   （deleteAttachmentsForMessages——级联铁律件）；**禁反向**（ChatDb 不 import 本件）。
-// · ★ D1 红线（MessageSeqDb 头注释，09-19 与 D4-1 两次真机实锤）：摘要行的 seq 必须由
-//   **写入侧分配器**在构造行对象的同一同步块内铸造（nextRowSeq），禁 SQL 侧 MAX(seq)+1、
-//   禁 await 之后再补铸——本域全部写函数的铸造都在函数体首个 await 之前。
-// · 摘要行的其余列恒定值：status='done'、reasoning=''、variants=''（单版语义）；
-//   content = **纯摘要正文**（不含包装语——包装语是组装时常量，见 RequestInject）。
-// · 每会话至多一条生效摘要（采用新摘要时同事务删旧行，见 adoptCompressSummary）；
-//   更早的摘要行在请求组装侧被自然吞掉（seq <= boundary 一律不进请求）。
+//   的读写与边界查询，有独立职责缝；②无既有同域可并——MessageSeqDb 管序号，为别表主域，
+//   ChatDb.ets 剔头已近硬线；③实逻辑非转接壳。
+// · 依赖方向（零环红线，坑50）：本件 → ChatDb（sharedRdbStore）单向；**禁反向**（ChatDb
+//   不 import 本件）。
+// · legacy 写面三方法（insertSummaryMessage / adoptCompressSummary / deleteSummaryRows）
+//   随线性写路径整域退役删除；现役 = 读面查询与采用在途登记。graph 会话的摘要采用/删除 =
+//   ChatGraphCommandSource.adoptGraphSummary / deleteGraphSummary（binding 同事务，K9/K4）。
+// · 每会话至多一条生效摘要；更早的摘要行在请求组装侧被自然吞掉（seq <= boundary 一律
+//   不进请求）。
 import { relationalStore } from '@kit.ArkData';
-import { deleteAttachmentsForMessages } from './AttachmentDb';
-import { MessageRow, deleteMessagesBy, nextMessageId, nextRowCreatedAt,
-  sharedRdbStore } from './ChatDb';
-import { nextRowSeq } from './MessageSeqDb';
+import { MessageRow, sharedRdbStore } from './ChatDb';
 
-// 摘要行 id 前缀（nextMessageId 用；仅供人读，跨库拦截不靠前缀）
-const SUMMARY_ID_PREFIX: string = 'sum';
+// ── 采用在途登记（S7 纵深防御）──
+// 缺口：生成侧有在途闸（CompressGen.inflight），采用侧原两侧皆无——「采用」键双击即两路
+// 落库各跑一遍（两个摘要节点）。本登记是它的域侧收口：面板 @State adopting 只挡同一面板的
+// 连击（UI 面，见 CompressPreviewSheet.adopt），跨实例与迟到路径由本登记兜底。登记键 = 会话
+// id，**置位与复位在同一次 adopt 调用内成对**（try/finally），故调用方无需参与置位——面板
+// 若也置位会与域侧入口检查自锁（首调即被自己拦下）。adopt 单点 = ChatGraphCommandSource.
+// adoptGraphSummary（该件 import 本件取登记原语）。
+const adoptInflight: Set<string> = new Set<string>();
 
-// 最新生效摘要行（按 seq DESC 取第一条 role='summary'；无摘要 = null）。投影带 coversToSeq
-// ——面板状态行与请求组装的边界判据都从本函数来（单一读取口，两消费方不各写查询）
-export async function queryLatestSummary(conversationId: string): Promise<MessageRow | null> {
+// 在途查询（adopt 入口的写前闸：在途即拒，不排队——用户手一松再点即可重试）
+export function isAdoptInflight(conversationId: string): boolean {
+  return adoptInflight.has(conversationId);
+}
+
+// 置位 / 复位（'' = 无库会话，不入登记——空串登记会让所有无库会话共用一个键，误闸无关会话）
+export function markAdopt(conversationId: string, on: boolean): void {
+  if (conversationId === '') {
+    return;
+  }
+  if (on) {
+    adoptInflight.add(conversationId);
+  } else {
+    adoptInflight.delete(conversationId);
+  }
+}
+
+// 按角色白名单取最新一行（三读口的共同实现；role 走参数占位，禁把角色名拼进 SQL 串）。
+// ★ 原实现硬编码 role='summary'——扩出 clear 边界行后，
+// 「最新摘要」（压缩卡）与「最新边界」（请求注入探针）是两问，抽本函数供三读口各取所需
+async function queryLatestByRoles(conversationId: string,
+  roles: string[]): Promise<MessageRow | null> {
+  const placeholders: string = roles.map((_r: string): string => '?').join(', ');
   const result: relationalStore.ResultSet = await sharedRdbStore().querySql(
     'SELECT id, conversationId, role, content, reasoning, status, createdAt, rowid, seq, ' +
     'variants, variant_active, coversToSeq FROM messages ' +
-    'WHERE conversationId = ? AND role = \'summary\' ORDER BY seq DESC LIMIT 1',
-    [conversationId]);
+    'WHERE conversationId = ? AND role IN (' + placeholders + ') ORDER BY seq DESC LIMIT 1',
+    [conversationId].concat(roles));
   try {
     if (result.goToNextRow()) {
       const row: MessageRow = {
         id: result.getString(result.getColumnIndex('id')),
         conversationId: result.getString(result.getColumnIndex('conversationId')),
-        role: 'summary',
+        role: result.getString(result.getColumnIndex('role')),
         content: result.getString(result.getColumnIndex('content')),
         reasoning: '',
         status: result.getString(result.getColumnIndex('status')),
@@ -58,32 +80,21 @@ export async function queryLatestSummary(conversationId: string): Promise<Messag
   }
 }
 
-// 摘要行插入（自持 INSERT，四值一次写全：id / seq / createdAt / coversToSeq）。
-// ★ 禁改走 ChatDb.insertMessage——它的 bucket 是白名单键（id/conversationId/role/content/
-// reasoning/status/createdAt + 条件 seq），**不带 coversToSeq**，走它会静默落 NULL =
-// 边界丢失、压缩整个不生效。铸造（nextRowSeq/nextRowCreatedAt）在函数体首个 await 之前
-// （D1 红线）；本函数不开事务——独立调用（面板无此形态）与 adoptCompressSummary 事务内
-// 调用两用（db.insert 在外层事务内天然参与该事务）
-export async function insertSummaryMessage(conversationId: string, content: string,
-  coversToSeq: number): Promise<string> {
-  const id: string = nextMessageId(SUMMARY_ID_PREFIX);
-  const seq: number = nextRowSeq(conversationId);
-  const createdAt: number = nextRowCreatedAt();
-  const bucket: relationalStore.ValuesBucket = {
-    'id': id,
-    'conversationId': conversationId,
-    'role': 'summary',
-    'content': content,
-    'reasoning': '',
-    'status': 'done',
-    'createdAt': createdAt,
-    'variants': '',
-    'variant_active': 0,
-    'seq': seq,
-    'coversToSeq': coversToSeq
-  };
-  await sharedRdbStore().insert('messages', bucket);
-  return id;
+// 最新生效摘要行（按 seq DESC 取第一条 role='summary'；无摘要 = null）。投影带 coversToSeq
+// ——面板状态行与请求组装的边界判据都从本函数来（单一读取口，两消费方不各写查询）
+export async function queryLatestSummary(conversationId: string): Promise<MessageRow | null> {
+  return queryLatestByRoles(conversationId, ['summary']);
+}
+
+// 最新清空边界行（清空卡状态行：有无清空 + 覆盖边界；路径感知在 ChatContextSource 读口）
+export async function queryLatestClear(conversationId: string): Promise<MessageRow | null> {
+  return queryLatestByRoles(conversationId, ['clear']);
+}
+
+// 最新边界行（摘要或清空，两类同权）——请求注入口的廉价前置探针（有边界才走路径链上溯；
+// 无边界直接回 null，与旧「先探摘要再上溯」同款省查形状）
+export async function queryLatestBoundary(conversationId: string): Promise<MessageRow | null> {
+  return queryLatestByRoles(conversationId, ['summary', 'clear']);
 }
 
 // 边界时间查询（面板状态行「覆盖 … 之前的内容」的时间来源）：取该 seq 行的 createdAt，
@@ -101,48 +112,4 @@ export async function queryBoundaryCreatedAt(conversationId: string,
   } finally {
     result.close();
   }
-}
-
-// 采用摘要（唯一落库写点，一次事务）：插入新摘要行 + 删除被它吞掉的旧摘要行（若有——
-// 「库里只留一条生效摘要，流里不会出现多条失效提示」）。返回新行 id。★ 旧摘要行删除不借
-// ChatDb.deleteMessagesBy——它自开事务，嵌套 beginTransaction 会抛「嵌套」错（applyMemoryImport
-// 同款取舍：事务内逐件调用不开事务的底层件）；级联铁律仍守（删 messages 路径同事务删附件行
-// ——摘要行理论无附件，deleteAttachmentsForMessages 为铁律兜底）
-export async function adoptCompressSummary(conversationId: string, content: string,
-  coversToSeq: number): Promise<string> {
-  const db: relationalStore.RdbStore = sharedRdbStore();
-  db.beginTransaction();
-  try {
-    // 旧摘要行收集（事务内读——读到的是与写入同一快照）
-    const oldResult: relationalStore.ResultSet = await db.querySql(
-      'SELECT id FROM messages WHERE conversationId = ? AND role = \'summary\'',
-      [conversationId]);
-    const oldIds: string[] = [];
-    try {
-      while (oldResult.goToNextRow()) {
-        oldIds.push(oldResult.getString(oldResult.getColumnIndex('id')));
-      }
-    } finally {
-      oldResult.close();
-    }
-    if (oldIds.length > 0) {
-      const attachPaths: string[] = await deleteAttachmentsForMessages(db, oldIds);
-      const predicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('messages');
-      predicates.in('id', oldIds);
-      await db.delete(predicates);
-    }
-    const newId: string = await insertSummaryMessage(conversationId, content, coversToSeq);
-    db.commit();
-    return newId;
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
-  }
-}
-
-// 删除摘要（面板「删除摘要」键落点）：复用既有批删（事务 + 附件级联，勿另写）。
-// 空集 0 直接返回
-export function deleteSummaryRows(ids: string[]): Promise<number> {
-  return deleteMessagesBy(ids);
 }

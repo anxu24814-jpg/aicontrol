@@ -1,23 +1,18 @@
-// 记忆历史页（2026-09-22 记忆优化历史，方案-记忆优化历史-20260922 §7.2）：记忆库管理页
-// 「更多」菜单「记忆历史」项 push 的三级页——列出该库最近的改动前快照（before_opt 优化前 /
-// before_import 导入前，★ 2026-09-22 记忆导入笔新增第三值：两类共用同一份配额）与一份恢复前
-// 兜底（before_restore），行卡右侧恢复键可整库回退到那一版。
-// · 入口库上下文：push param 复用 MemoryLibraryParam（声明单源在 MemoryPage.ets，本页只
-//   import 消费——**禁本地复写**：两份声明字段漂移编译不报错，undefined 会被 typeof 兜到
-//   'global'，点某助手库的历史会静默显示全局库的（2026-09-20 D3-5 事故同族））。
-// · 数据：aboutToAppear + onShown 各拉一次（坑25 定稿「onShown 是可靠姿势」——广播在栈下层
-//   收不到时的兜底）；列表重建走纪元键（ForEach 键含纪元，坑16 家族防同键不刷）。
-// · 顺序：createdAt 降序（queryMemorySnapshots 保证）——兜底槽必然排最前，因为它恒是最近
-//   写入的那一份。
-// · 行卡形制：抄库管理页 MemoryRowCard（Button(Normal) + CARD_PANEL_WIDTH + cardBg +
-//   圆角 16 + padding 14）；恢复键 = 行卡右侧图标键（Button TEXTUAL 包裹 SymbolGlyph，
-//   先例 AttachmentManagePage / AssistantPage），**禁垫 fallbackButton*/resolvedButton* 四件套**
-//  （宪法「行内操作按钮官方形制」条）。
-// · 恢复是破坏性动作，禁止一点即执行——必须过确认弹窗（D6），且恢复前由存储层自动把当前态
-//   存进独立兜底槽，使恢复本身也可撤销（D4）。
+// 记忆历史页：记忆库管理页「更多」菜单「记忆历史」项 push 的三级页——列出该库最近的改动前
+// 快照（before_opt 优化前 / before_import 导入前，共用一份配额）与两份兜底槽快照
+//（before_restore 恢复前 / before_sink 整理前——各每库 ≤1 份覆盖写），行卡右侧恢复键可整库回退。
+// · 入口库上下文：push param 复用 MemoryLibraryParam（声明单源在 MemoryPage.ets，本页只 import
+//   消费——**禁本地复写**：字段漂移编译不报错，undefined 会被 typeof 兜到 'global'，静默显示全局库）。
+// · 数据：aboutToAppear + onShown 各拉一次（坑25「onShown 是可靠姿势」兜底栈下层广播）；列表
+//   重建走纪元键（ForEach 键含纪元，坑16 家族防同键不刷）。顺序 = createdAt 降序——最近写入的
+//   那份排最前（通常是刚触发本次进入的动作存下的兜底槽快照）。
+// · 行卡形制：抄库管理页 MemoryRowCard（Button(Normal) + CARD_PANEL_WIDTH + cardBg + CARD_RADIUS
+//   + padding 14）；恢复键 = 行卡右侧图标键（Button TEXTUAL + SymbolGlyph，禁垫
+//   fallbackButton*/resolvedButton*——宪法「行内操作按钮官方形制」条）。
+// · 恢复是破坏性动作，禁止一点即执行——必须过确认弹窗；恢复前存储层自动存兜底槽，使恢复可撤销。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import {
-  CARD_PANEL_WIDTH, CARD_SPACING, cardBg, cardDescColor, cardTitleColor
+  CARD_PANEL_WIDTH, CARD_SPACING, SECTION_HEADER_GAP, cardBg, cardDescColor, cardTitleColor, CARD_RADIUS
 } from '../../common/Theme';
 import { PageShell } from '../../common/PageShell';
 import { SectionHeader } from '../SectionHeader';
@@ -27,7 +22,8 @@ import { overlayMaterial } from '../../common/ImmersiveLevel';
 import { ROUTE_MEMORY_HISTORY_PAGE, ROUTE_MEMORY_SNAPSHOT_PAGE } from '../../common/RouteNames';
 import {
   countAssistantMemories, countMemories, MEMORY_SCOPE_GLOBAL, MEMORY_SNAPSHOT_KIND_IMPORT,
-  MEMORY_SNAPSHOT_KIND_RESTORE, MemorySnapshotRow, queryMemorySnapshots, restoreMemorySnapshot
+  MEMORY_SNAPSHOT_KIND_RESTORE, MEMORY_SNAPSHOT_KIND_SINK, MemorySnapshotRow,
+  queryMemorySnapshots, restoreMemorySnapshot
 } from '../../common/store/MemoryDb';
 import { MemoryLibraryParam } from './MemoryPage';
 
@@ -36,12 +32,16 @@ export interface MemorySnapshotParam {
   snapshotId: string;
 }
 
-// 快照体量（主行文案——「优化前 · 12 条」/「导入前 · 12 条」/「恢复前 · 12 条」；kindLabel
-// 单源此处）。★ 2026-09-22 记忆导入笔：二元式扩三态——导入链存的快照 kind = 'before_import'
-// （MEMORY_SNAPSHOT_KIND_IMPORT），若沿用原二元式会被标成「优化前」（说的是另一件事）
+// 快照体量（主行文案——「优化前 · 12 条」/「导入前 · 12 条」/「整理前 · 12 条」/「恢复前 ·
+// 12 条」；kindLabel 单源此处）。kind 取值：导入 = 'before_import'（沿用二元式会被标成
+// 「优化前」，说的却是另一件事）；整理 = 'before_sink'（**中性词**——手动「立即整理」与退出
+// 会话自动整理走同一条存档链，写「自动整理前」在手动场景是假话）；兜底回 '优化前'
 function snapshotKindLabel(kind: string): string {
   if (kind === MEMORY_SNAPSHOT_KIND_RESTORE) {
     return '恢复前';
+  }
+  if (kind === MEMORY_SNAPSHOT_KIND_SINK) {
+    return '整理前';
   }
   if (kind === MEMORY_SNAPSHOT_KIND_IMPORT) {
     return '导入前';
@@ -51,10 +51,11 @@ function snapshotKindLabel(kind: string): string {
 
 @Component
 export struct MemoryHistoryPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI、不上行；数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
-  // 目标库（aboutToAppear 从 push param 解析）：'global' = 全局库 / 助手 id = 助手库
   private libraryId: string = MEMORY_SCOPE_GLOBAL;
   // 该库全部快照（createdAt 降序；payload 不解析——列表只需 itemCount）
   @State private snapshots: MemorySnapshotRow[] = [];
@@ -85,12 +86,18 @@ export struct MemoryHistoryPage {
   private reload(): void {
     queryMemorySnapshots(this.libraryId)
       .then((rows: MemorySnapshotRow[]): void => {
+        if (this.departed) {
+          return;
+        }
         this.snapshots = rows;
         this.listEpoch = this.listEpoch + 1;
         const readCount: Promise<number> = this.libraryId === MEMORY_SCOPE_GLOBAL ?
           countMemories() : countAssistantMemories(this.libraryId);
         readCount
           .then((count: number): void => {
+            if (this.departed) {
+              return;
+            }
             this.currentCount = count;
           })
           .catch((): void => {
@@ -98,13 +105,15 @@ export struct MemoryHistoryPage {
           });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({
           message: '历史读取失败：' + (e as Error).message
         });
       });
   }
 
-  // 列表重建键（纪元——每次 reload 自增）
   private listKey(): string {
     return 'snapshots|' + this.libraryId + '|' + this.listEpoch;
   }
@@ -147,10 +156,16 @@ export struct MemoryHistoryPage {
     }
     restoreMemorySnapshot(target.id)
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.reload();
         this.getUIContext().getPromptAction().showToast({ message: '已恢复到该版本。' });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         // 错误原文照上屏（禁止吞掉——P0-1，用户要知道为什么没恢复）
         this.getUIContext().getPromptAction().showToast({ message: (e as Error).message });
       });
@@ -160,18 +175,16 @@ export struct MemoryHistoryPage {
   Content() {
     Scroll() {
       Column({ space: CARD_SPACING }) {
-        Column({ space: 6 }) {
+        Column({ space: SECTION_HEADER_GAP }) {
           SectionHeader({
             title: '记忆历史',
-            subtitle: this.snapshots.length + ' 份',
-            // 页内说明：每库保留口径 + 兜底槽语义（两库同口径）；★ 2026-09-22 记忆导入笔：
-            // 存档触发面由「优化」扩为「优化或导入」——不更新会让用户看到「导入前」快照时
-            // 以为来了不该来的东西
-            hint: '每次优化记忆或导入记忆前会自动存档，最多保留三次。恢复某一版之前也会自动存一份，所以恢复可以撤销一次。历史只存在本机，不随备份导出。'
+            // 页内说明：触发面已扩为「整理、优化、导入」——不更新会让用户看到「导入前」/「整理前」
+            // 快照时以为来了不该来的东西
+            hint: '每次整理、优化或导入记忆前会自动存档，最多保留三次。恢复某一版前也会自动存档，因此恢复可撤销一次。历史只存在本机，不随备份导出。'
           })
           if (this.snapshots.length === 0) {
             // 空态行内提示（无卡——行内提示行形制，与库管理页空态同款）
-            Text('还没有历史记录。优化记忆或导入记忆前会自动存档，最多保留三次。')
+            Text('还没有历史记录。整理、优化或导入记忆前会自动存档，最多保留三次。')
               .fontSize(13)
               .fontColor(cardDescColor())
               .width(CARD_PANEL_WIDTH)
@@ -196,53 +209,60 @@ export struct MemoryHistoryPage {
     .height('100%')
     .align(Alignment.TopStart)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .scrollBar(BarState.Off)
   }
 
-  // 快照行卡：主行「<kind 标签> · 12 条」（优化前 / 导入前 / 兜底槽 = 恢复前；映射单源 =
-  // 本页 snapshotKindLabel）+ 副行「时间 · 摘要」+ 右侧恢复键；整卡点击进详情
+  // 快照行卡：主行「<kind 标签> · 12 条」（映射单源 = snapshotKindLabel）+ 副行「时间 · 摘要」+
+  // 右侧恢复键；整卡点击进详情。卡底 Column + 四周 padding 4，蒙层距卡外圈 4vp；壳 padding
+  // 14→10 回添，几何零位移
   @Builder
   SnapshotRowCard(row: MemorySnapshotRow) {
-    Button() {
-      Row({ space: 10 }) {
-        Column({ space: 3 }) {
-          Text(snapshotKindLabel(row.kind) + ' · ' + row.itemCount + ' 条')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(cardTitleColor())
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(row.note !== '' ?
-            formatConvTime(row.createdAt) + ' · ' + row.note : formatConvTime(row.createdAt))
-            .fontSize(13)
-            .fontColor(cardDescColor())
-            .maxLines(1)
+    Column() {
+      Button() {
+        Row({ space: 10 }) {
+          Column({ space: 3 }) {
+            Text(snapshotKindLabel(row.kind) + ' · ' + row.itemCount + ' 条')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(row.note !== '' ?
+              formatConvTime(row.createdAt) + ' · ' + row.note : formatConvTime(row.createdAt))
+              .fontSize(13)
+              .fontColor(cardDescColor())
+              .maxLines(1)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          // 恢复键（行卡右侧图标键：官方 TEXTUAL 无底 + font_secondary，宪法「行内操作按钮官方
+          // 形制」条；符号 arrow_counterclockwise = 逆时针回退语义，SDK 符号表在册）
+          Button() {
+            SymbolGlyph($r('sys.symbol.arrow_counterclockwise'))
+              .fontSize(18)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .buttonStyle(ButtonStyleMode.TEXTUAL)
+          .onClick((): void => {
+            this.askRestore(row);
+          })
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        // 恢复键（行卡右侧图标键：官方 TEXTUAL 无底 + font_secondary，宪法「行内操作按钮
-        // 官方形制」条；符号 arrow_counterclockwise = 逆时针箭头回退语义，SDK 符号表实锤
-        // 码位 0xF00C8 + 128px 渲染核验 + 同机先例 cubeagent-stream-test「恢复内置」）
-        Button() {
-          SymbolGlyph($r('sys.symbol.arrow_counterclockwise'))
-            .fontSize(18)
-            .fontColor([$r('sys.color.font_secondary')])
-        }
-        .buttonStyle(ButtonStyleMode.TEXTUAL)
-        .onClick((): void => {
-          this.askRestore(row);
-        })
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
       }
+      .type(ButtonType.Normal)
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(CARD_RADIUS)
+      .padding(10)
+      .onClick((): void => {
+        this.openSnapshotDetail(row);
+      })
     }
-    .type(ButtonType.Normal)
     .width(CARD_PANEL_WIDTH)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
-    .padding(14)
-    .onClick((): void => {
-      this.openSnapshotDetail(row);
-    })
+    .borderRadius(CARD_RADIUS)
+    .padding(4)
   }
 
   build() {
@@ -263,5 +283,9 @@ export struct MemoryHistoryPage {
         return true;
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

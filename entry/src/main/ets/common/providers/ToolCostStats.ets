@@ -13,6 +13,7 @@
 // 载荷组装纯函数 / 执行器）；校验与载荷纯函数自包含可直跑（断言脚本剥 import 求值，同
 // ToolUsageStats 姿势）。
 import { ToolExecutor } from './ToolContracts';
+import { ToolExecutionContext } from '../chat/MessageContracts';
 import { USAGE_RANGE_ALL, USAGE_RANGE_MONTH, USAGE_RANGE_WEEK } from './ToolUsageStats';
 import { COST_TOP_MODEL_MAX, CostAggregate, CostByModelRow, CostByPurposeRow, CostEventInput,
   ModelPriceSourceRow, aggregateCosts, buildPriceMap, fmtCost, purposeLabel } from '../store/CostStatsCalc';
@@ -167,7 +168,7 @@ export function buildCostStatsPayload(range: string, agg: CostAggregate): CostSt
 // 全量模型行价格 map，与费用页 loadStats 同两函数同 since）→ 聚合纯函数 → 载荷。DB 查询
 // 抛错上抛由 executeToolCall 统一包装 error JSON（不炸轮次）
 export class GetCostStatsExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     const v: GetCostStatsValidation = validateGetCostStatsArgs(argsJson);
     if (!v.ok) {
       return Promise.resolve(JSON.stringify({ error: v.error }));

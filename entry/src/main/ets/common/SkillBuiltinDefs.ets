@@ -1,18 +1,13 @@
-// 内置技能定义单源（2026-09-19 内置技能首批笔新建）：全部内置技能的固定 id、名称、触发
-// 描述、图标、正文与「是否默认启用」以 SKILL_BUILTIN_DEFS 数组为唯一来源，元技能「创建技能」
-// 的正文拼接自 SkillDb.ets 迁入（原样搬迁，三处上限数字仍随 SkillText 常量拼接防漂移）。
-// 消费方 = SkillDb.ensureBuiltinSkills（逐条幂等插入 + 代数标记升代迁移）；本文件纯数据，
-// 只允许 import SkillText 上限常量，禁引 DB/AppStorage（断言脚本剥 import 后直跑本文件真值，
-// assert-app-domain 130 组）。
-// · 升代机制（首版「只认 id 不认内容」登记二期的兑现）：SKILL_BUILTIN_GENERATION 每次修订
-//   内置内容时 +1 并同步改 SKILL_BUILTIN_DEFS 常量，SkillDb 迁移面在启动时把已装用户的
-//   内置行按定义刷新（只升不降，标记语义见 SkillDb seed 节注释）——修订正文必须动两处：
-//   定义常量 + 代数 +1，漏一代数 = 已装用户拿不到新内容。
-// · autoEnable = 首插时并入默认助手启用集（首启即用——内置技能不启用则清单不注入、
-//   use_skill 不声明，对模型完全不可见；已存在的行不重并，恢复备份不翻案用户关闭态——
-//   并入判据 = SKILL_PENDING_JOIN_KEY 登记（只由 seed 新插路径写入），见
-//   SkillDb.flushPendingAutoEnable 注释）；恒 true 的 = 三内容件 + 知识整理（都是「用户开口
-//   就走流程」的活儿），恒 false 的只有「创建技能」一件（沿用其「引导用户手动开」语义）。
+// 内置技能定义单源：全部内置技能的固定 id、名称、触发描述、正文与「是否默认启用」以
+// SKILL_BUILTIN_DEFS 数组为唯一来源。消费方 = SkillDb.ensureBuiltinSkills（逐条幂等插入 +
+// 代数标记升代迁移）；本文件纯数据，只允许 import SkillText 上限常量，禁引 DB/AppStorage
+//（断言脚本剥 import 后直跑本文件真值，assert-app-domain 130 组）。
+// · 升代机制：SKILL_BUILTIN_GENERATION 每次修订内置内容时 +1 并同步改 SKILL_BUILTIN_DEFS
+//   常量，SkillDb 迁移面在启动时把已装用户的内置行按定义刷新（只升不降）——修订正文必须
+//   动两处：定义常量 + 代数 +1，漏一代数 = 已装用户拿不到新内容。
+// · autoEnable = 首插时并入默认助手启用集（不启用则清单不注入、对模型不可见；已存在的行
+//   不重并，恢复备份不翻案用户关闭态——并入判据 = SKILL_PENDING_JOIN_KEY 登记，见
+//   SkillDb.flushPendingAutoEnable 注释）。
 // · 新增内置件四步：defs 数组加条目（id 形如 skill-builtin-xxx 全小写连字符）→ autoEnable
 //   拍板 → 断言 130 组锚点补该件 → SKILL_BUILTIN_GENERATION +1。
 import { SKILL_CONTENT_MAX, SKILL_DESC_MAX, SKILL_NAME_MAX } from './SkillText';
@@ -21,22 +16,19 @@ import { SKILL_CONTENT_MAX, SKILL_DESC_MAX, SKILL_NAME_MAX } from './SkillText';
 // '' = 从未迁移。本机安装态标记，AppPreferences BACKUP_EXCLUDED_PREF_KEYS 豁免随备份走）
 export const SKILL_BUILTIN_SEEDED_KEY: string = 'skill_builtin_seeded';
 
-// 待并入登记键（2026-09-20 D5-3 修复；AppStorage + PersistentStorage，EntryAbility 注册，
-// 缺省 '[]'）：JSON 字符串数组 = 「本机 seed 插入、自动并入尚未落定」的内置 id。与标记键
-// 同为安装态标记（同入 BACKUP_EXCLUDED_PREF_KEYS）——首启迁移超 SKILL_ENABLED_MAX 整组
-// 跳过、或迁移中途抛错时凭它下次启动补跑；旧实现按「本轮新插」这一易失态判定并入，两窗口
-// 都会永久丢失「默认助手开箱启用」。并入成功才移除（消费见 SkillDb.flushPendingAutoEnable）
+// 待并入登记键（AppStorage + PersistentStorage，EntryAbility 注册，缺省 '[]'）：JSON 字符串
+// 数组 = 「本机 seed 插入、自动并入尚未落定」的内置 id。同为安装态标记（同入
+// BACKUP_EXCLUDED_PREF_KEYS）——首启迁移超上限整组跳过、或迁移中途抛错时凭它下次启动补跑；
+// 并入成功才移除（消费见 SkillDb.flushPendingAutoEnable）
 export const SKILL_PENDING_JOIN_KEY: string = 'skill_builtin_pending';
 
 // 当前内置定义代数：修订任何内置内容 / 新增内置件时 +1（迁移触发阈，见头注释升代机制）
-// 2 = 2026-09-22 知识整理笔（新增 skill-builtin-knowledge-curate）
 export const SKILL_BUILTIN_GENERATION: number = 2;
 
 export interface SkillBuiltinDef {
   id: string;
   name: string;
   description: string;
-  icon: string;
   content: string;
   autoEnable: boolean;
 }
@@ -46,7 +38,6 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
     id: 'skill-builtin-plan-interview',
     name: '方案访谈',
     description: '当用户想把一个想法或需求变成可执行的方案时使用。先访谈澄清再给带取舍的候选，拍板后出完整方案。',
-    icon: 'person',
     autoEnable: true,
     content: [
       '你在帮用户把一个想法打磨成可执行的方案。本技能的核心纪律是先访谈后方案：不拿到一句话需求就直接输出完整方案，也不挤牙膏式地一次只问一个问题拖上好几轮。',
@@ -82,7 +73,7 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
       '方案中的技术名词、产品名、参数名保持原文，不擅自翻译或改写。',
       '',
       '第五步 收尾',
-      '方案交付后问一句是否要调整。若用户表示这类讨论不想留档，如实告知可以在会话页右上更多菜单里选「隐私会话」重新开聊，隐私会话不落库、退出即不再保留。',
+      '方案交付后问一句是否要调整。用户后续的调整意见按新的访谈轮处理，回到第三步重给候选。',
       '',
       '边界与降级',
       '· ask_user 不可用（被关闭或当前模型不支持工具调用）时，降级为在回复正文里一次性列出问题请用户作答，纪律不变。',
@@ -95,7 +86,6 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
     id: 'skill-builtin-writing-polish',
     name: '写作精修',
     description: '当用户请润色、改写或诊断一段文字时使用。先给诊断再给对照稿，保留作者本意。',
-    icon: 'text_alignleft',
     autoEnable: true,
     content: [
       '你在帮用户改稿。本技能的纪律是先诊断后动笔：没读出具体问题就整段重写，是改稿最大的失职。',
@@ -133,7 +123,6 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
     id: 'skill-builtin-brainstorm',
     name: '放开想',
     description: '当用户要灵感、点子或思路发散时使用。数量先行再分档收拢，选中后深入展开。',
-    icon: 'lightbulb',
     autoEnable: true,
     content: [
       '你在帮用户发散思路。本技能的纪律是数量先行：先不管好坏把量堆起来，再收拢筛选。过早挑三拣四是发散最大的敌人。',
@@ -170,7 +159,6 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
     id: 'skill-builtin-knowledge-curate',
     name: '知识整理',
     description: '当用户想把聊过的内容或某段资料整理成知识库条目时使用。先问清落点与粒度，复述草稿，用户明确要求后再写入。',
-    icon: 'book',
     autoEnable: true,
     content: [
       '你在帮用户把内容整理成知识库条目。本技能的核心纪律是三步：先问清落点，再复述草稿，用户明确要求后才写入。落点不清就往库里写，写进去的是废条目；用户没点头就写，越过了授权边界。',
@@ -216,7 +204,6 @@ export const SKILL_BUILTIN_DEFS: SkillBuiltinDef[] = [
     description: '当用户想把某个做法、流程、规范或偏好沉淀成可复用' +
       '技能，或询问怎么创建技能时使用。引导补齐意图，起草名称、触发描述与正文，经创建工具保存' +
       '入库，并告知如何启用。',
-    icon: 'wand_and_stars',
     autoEnable: false,
     content: [
       '你在帮用户把一个做法沉淀成可复用技能。技能由三件组成：',

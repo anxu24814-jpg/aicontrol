@@ -1,0 +1,34 @@
+{
+  "generator": "scripts/build-web-ui.mjs",
+  "builtAt": "2026-10-22T05:04:20.059Z",
+  "sourceFingerprint": "09b3de192cce3808adb8f9442c0a6bedda833e07df80862db7562b5f0d9af8e8",
+  "sourceFileCount": 30,
+  "totalBytes": 511776,
+  "files": [
+    {
+      "path": "app-manifest.json",
+      "bytes": 417,
+      "sha256": "0c95b7b50fe40a08b26d9a84f542109917a16af9ef07c8377a8c545deac11ed5"
+    },
+    {
+      "path": "assets/index-Bpc29QD_.css",
+      "bytes": 39173,
+      "sha256": "b784f76fcc7746ebe7f1a0827d136ac0ff07a277c24704f6e3503c30bf588bb9"
+    },
+    {
+      "path": "assets/index-oCZp0TMM.js",
+      "bytes": 469530,
+      "sha256": "e81571393ce836866a64ab52d970f3d5579d80d4e593ef0e648021c1b8cecb5a"
+    },
+    {
+      "path": "icon.svg",
+      "bytes": 742,
+      "sha256": "fd218822d418f24db7a489633414bc37d3dacdfb53e409a756a95670b2603585"
+    },
+    {
+      "path": "index.html",
+      "bytes": 1914,
+      "sha256": "4e4d4a204c9dbd62ba7679544cba22677d55094dffdd6eb0b1c54aae4f33e902"
+    }
+  ]
+}

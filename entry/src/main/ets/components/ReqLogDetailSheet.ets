@@ -1,13 +1,14 @@
-// 「请求日志」详情半模态面板（2026-09-23 请求日志笔）：
+// 「请求日志」详情半模态面板：
 // 面板内容件（**不含 bindSheet**——宿主 = ReqLogPage 页面根，规范-半模态 §1 挂点「页面根」、
 // §8「面板内容件」先例）。形制照 MessageCopySheet 同款三件套（HdsNavigation MODAL 壳 +
 // sheetTitleBarOptions + bindToScrollable 滚动感知 + 底部安全区延伸 + 滚动容器 clip(false)）。
 //
-// 内容五段（响应头 / 请求体 / 错误三卡条件渲染）：概览卡（来源 / 模型 / 时间 / 方法 / URL /
-// 状态 / 建议 / 耗时 / 首字节 / 请求体长度）· 请求头卡 · 响应头卡 · 请求体卡 · 错误卡（错误
-// 信息 + 错误响应体尾部）。长文本一律
+// 内容五段：概览卡（来源 / 模型 / 时间 / 方法 / URL / 状态 / 建议 / 耗时 / 首字节 / 请求体长度）·
+// 请求头卡 · 响应头卡 · 请求体卡 · 错误卡（错误信息 + 错误响应体尾部）。长文本一律
 // copyOption(CopyOptions.LocalDevice) 长按可选；请求头与请求体两卡各配一个「复制」键——
-// 报障时把整段请求粘给别人看是本功能最常见的用法，长按选择对整段长文本太费事。
+// 报障时把整段请求粘给别人看是本功能最常见的用法，长按选择对整段长文本太费事。面板顶部
+// 另有「复制全部」键（一键给出概览 + 四段全文，见 allText）——逐卡复制对「整条报障」场景
+// 仍要按四五次。
 //
 // 数据 = **快照语义**（点行一刻的条目拷入宿主 @State 传入，面板打开期间后台回填不跟进）：
 // 面板职责是看这一次请求的定稿现场，不是实时监视（MessageCopySheet 同款口径）。
@@ -24,7 +25,7 @@ import {
   fallbackButtonMaterial,
   fallbackButtonStateEffect
 } from '../common/ImmersiveLevel';
-import { cardBg, cardDescColor, cardTitleColor, CARD_PANEL_WIDTH } from '../common/Theme';
+import { cardBg, cardDescColor, cardTitleColor, CARD_PANEL_WIDTH, CARD_RADIUS } from '../common/Theme';
 import { emptyReqLogEntry, REQ_LOG_HEADERS_MAX_CHARS, ReqLogEntry, reqLogAdvice,
   reqLogDurationText, reqLogFullTimeText, reqLogHasMask, reqLogStatusText } from '../common/ReqLog';
 import { sheetTitleBarOptions } from './chat/KimiSheetCommon';
@@ -34,6 +35,9 @@ const TAG: string = 'ReqLogSheet';
 
 @Component
 export struct ReqLogDetailSheet {
+  // 页面存活守卫（2026-10-18 销毁守卫全站治理）：置位后本组件迟到异步回调不写状态、
+  // 不碰 UI、不上行；写库等数据层意图照常完成
+  private departed: boolean = false;
   // 条目快照（点行一刻；普通成员——快照语义，见头注释）
   entry: ReqLogEntry = emptyReqLogEntry();
   onClose: () => void = () => {
@@ -56,8 +60,14 @@ export struct ReqLogDetailSheet {
     const data: pasteboard.PasteData =
       pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, payload);
     pasteboard.getSystemPasteboard().setData(data).then((): void => {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '已复制' });
     }).catch((e: Object): void => {
+      if (this.departed) {
+        return;
+      }
       hilog.error(DOMAIN, TAG, '复制失败：%{public}s', (e as Error).message);
       this.getUIContext().getPromptAction().showToast({ message: '复制失败，请重试' });
     });
@@ -120,7 +130,7 @@ export struct ReqLogDetailSheet {
     .width(CARD_PANEL_WIDTH)
     .padding(14)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -130,12 +140,57 @@ export struct ReqLogDetailSheet {
     return reqLogAdvice(this.entry.status, this.entry.respHeadersText);
   }
 
+  // 复制全部载荷：报障时把整条请求粘给别人看是本功能最常见的用法，逐卡点「复制」太费事
+  //——一键给出「概览 + 请求头 + 响应头 + 请求体 + 错误响应」全文。空段不出现（判据与面板
+  // 渲染一致：空串即本条没记该段），标题与面板区块名同字面量
+  private allText(): string {
+    const parts: string[] = [];
+    parts.push(this.entry.method + ' ' + this.entry.url);
+    parts.push('状态 ' + reqLogStatusText(this.entry.status) + ' · 时间 ' +
+      reqLogFullTimeText(this.entry.at) + (this.entry.model !== '' ? ' · 模型 ' + this.entry.model : ''));
+    const advice: string = this.adviceText();
+    if (advice !== '') {
+      parts.push('建议 ' + advice);
+    }
+    if (this.entry.headersText !== '') {
+      parts.push('===== 请求头 =====\n' + this.entry.headersText);
+    }
+    if (this.entry.respHeadersText !== '') {
+      parts.push('===== 响应头 =====\n' + this.entry.respHeadersText);
+    }
+    if (this.entry.bodyText !== '') {
+      parts.push('===== 请求体 =====\n' + this.entry.bodyText);
+    }
+    if (this.entry.error !== '' || this.entry.responseTail !== '') {
+      parts.push('===== 错误响应 =====\n' +
+        (this.entry.responseTail !== '' ? this.entry.responseTail : this.entry.error));
+    }
+    return parts.join('\n\n');
+  }
+
+  // 复制全部键行（右对齐；键形制照面板内既有两个「复制」键——内容区 fallbackButton* 双态族）
+  @Builder
+  CopyAllRow() {
+    Row() {
+      Blank()
+      Button('复制全部')
+        .fontColor(fallbackButtonFont(this.contentFallback, false))
+        .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
+        .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
+        .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
+        .onClick((): void => {
+          this.copyText(this.allText(), '本次请求');
+        })
+    }
+    .width(CARD_PANEL_WIDTH)
+  }
+
   // 概览卡（一次请求的全部元数据）
   @Builder
   OverviewCard() {
     Column({ space: 6 }) {
       this.InfoLine('来源', this.entry.source)
-      // 模型名（2026-09-23 扩充笔）：拉模型清单这类不针对模型的请求为空，显示「—」
+      // 模型名：拉模型清单这类不针对模型的请求为空，显示「—」
       this.InfoLine('模型', this.entry.model !== '' ? this.entry.model : '—')
       this.InfoLine('时间', reqLogFullTimeText(this.entry.at))
       this.InfoLine('请求', this.entry.method + ' ' + this.entry.url)
@@ -147,8 +202,8 @@ export struct ReqLogDetailSheet {
       }
       this.InfoLine('耗时', reqLogDurationText(this.entry.durationMs) !== '' ?
         reqLogDurationText(this.entry.durationMs) : '—')
-      // 首字节（只在流式链有值——非流式链首字节即总时长，记了无意义；见 common/ReqLog.ets
-      // 文件头扩充笔第二条）。与总耗时并排看才能分辨「连不上」与「连上了但半天不出字」
+      // 首字节（只在流式链有值——非流式链首字节即总时长，记了无意义，见 common/ReqLog.ets）。
+      // 与总耗时并排看才能分辨「连不上」与「连上了但半天不出字」
       if (this.entry.firstByteMs > 0) {
         this.InfoLine('首字节', reqLogDurationText(this.entry.firstByteMs))
       }
@@ -164,7 +219,7 @@ export struct ReqLogDetailSheet {
     .width(CARD_PANEL_WIDTH)
     .padding(14)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -172,6 +227,8 @@ export struct ReqLogDetailSheet {
     HdsNavigation() {
       Scroll(this.scroller) {
         Column({ space: 10 }) {
+          // 复制全部键行（一键复制整条请求，见 allText）
+          this.CopyAllRow()
           this.OverviewCard()
           // 请求头（已掩码——掩码在写入日志时完成，本面板只展示，见 common/ReqLog.ets）。
           // 截断提示：头文本不存原长字段，改用**上限关系**判定——clipText 的截断产物恒为
@@ -179,8 +236,8 @@ export struct ReqLogDetailSheet {
           this.TextSection('请求头', this.entry.headersText,
             this.entry.headersText.length > REQ_LOG_HEADERS_MAX_CHARS ?
               '已截断，请求头过长或过多' : '')
-          // 响应头（2026-09-23 扩充笔；**白名单**——只记排障要的几类，见 common/ReqLog.ets
-          // 「响应头白名单」节）。空串 = 本条没命中白名单头，不渲染此卡
+          // 响应头（**白名单**——只记排障要的几类，见 common/ReqLog.ets「响应头白名单」节）。
+          // 空串 = 本条没命中白名单头，不渲染此卡
           if (this.entry.respHeadersText !== '') {
             this.TextSection('响应头', this.entry.respHeadersText,
               this.entry.respHeadersText.length > REQ_LOG_HEADERS_MAX_CHARS ?
@@ -222,5 +279,9 @@ export struct ReqLogDetailSheet {
     .hideBackButton(true)
     .bindToScrollable([this.scroller])
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

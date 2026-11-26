@@ -1,32 +1,22 @@
-// 附件管理页（2026-09-15 附件管理列表笔，任务书-附件管理列表-20260915）：设置 → 存储管理 →
-// 「会话附件」卡 push——按会话分组列出全部已发送附件，可展开逐件查看、预览、单件删除。
-// 壳体 = 自包 PageShell（照 StoragePage）；列表 = List + LazyForEach（官方长列表红线）+
-// 扁平项模型（规避嵌套 LazyForEach：展开 = 该组子行 splice 进本数组，折叠 = 移出）。
+// 附件管理页：设置 → 存储管理 → 分类组卡「对话附件」行 push——按会话分组列出全部已发送附件，
+// 可展开逐件查看、预览、单件删除。壳体自包 PageShell；列表 = List + LazyForEach（官方长列表
+// 红线）+ 扁平项模型（规避嵌套 LazyForEach：展开 = 该组子行 splice 进本数组，折叠 = 移出）。
 //
-// 分页有界（决明 2026-09-15 问句「显示条数呢，后面附件会话数量膨胀怎么办」的正答）：
-// · 一级每批 20 组、触底自动续批、到底即停（groupsExhausted——照 ChatOlderCtrl 既有有界
-//   口径：返回不足一批即置位，此后不再触发；无界连拉是禁区）；
-// · 二级展开才查、每批 50 件、组尾「显示更多」显式续批（组内不自动续——书内自定口径：
-//   自动续会把长组越拉越长、观众失焦）；未展开的组零查询零渲染；
-// · 查询不取 parsedText（AttachmentDb.AttachmentListRow 类型级封死大字段）；
-// · 峰值内存 = 已加载组行（≤20×n）+ 已展开组行（≤50×m），且折叠即丢弃该组行对象，再展开
-//   重新取第一批（有界优先，代价 = 续批进度不保留）。
+// 分页有界（防会话膨胀）：一级每批 20 组、触底自动续批、到底即停（groupsExhausted——返回不足
+// 一批即置位，无界连拉是禁区）；二级展开才查、每批 50 件、组尾「显示更多」显式续批（组内不
+// 自动续——长组越拉越长、观众失焦）；未展开组零查询零渲染。查询不取 parsedText（类型级封死
+// 大字段）；峰值内存 = 已加载组行（≤20×n）+ 已展开组行（≤50×m），折叠即丢弃该组行对象。
 //
-// 为何新开件（反碎片下限②书面理由）：StoragePage 是「存储占用展示 + 可安全清理」定位，本页
-// 承担第二职责（附件逐件管理：分组/展开/预览/删除）且体量必然越 800 软引导线；亦不能并入
-// AttachmentDb（store 层零 UI）。
-// 刷新链（规范-数据存储获取刷新方案 §3 白名单）：aboutToAppear 首载 + 失败重试键——删除走
-// 页内即时更新（拍板 4：不设刷新键），无子页编辑无保存动作故不挂 onShown 重进重拉（每次
-// push 都是新实例，进页即现读）。
-// 删除（拍板 2 + 红线 3/4）：按附件行 id 单件删，行走 ChatDb 委托入口（行 + 文件成对铁律，
-// 页面侧不碰文件原语）；库内消息文本里的「[附件] 文件名」标注一字不动，气泡侧照旧显示、
-// 点开提示「文件已不在本机」。
-// 查看器承载 = **导航栈内二级页**（★ 2026-09-15 二级页化笔；本页前一形态 = 全屏模态
-// bindContentCover，再前一形态 = 页内覆盖层）：行点击经共享件 AttachmentUtil.openAttachmentViewer
-// push 查看器页（ROUTE_ATTACHMENT_VIEWER_PAGE，页面 = components/chat/AttachmentViewerPage.ets）
-// ——页内不再持有查看器状态（原 viewerItems/viewerIndex/viewerOpen 三 @State 与模态挂载链
-// 删净），返回归官方返回链。列表行是**类型图标**、无缩略图（决明「附件管理用不了共享元素
-// 动画」即在这一点），故本页不写共享元素广播键——键由查看器内部随页写、由查看器页销毁时清。
+// 为何新开件（反碎片下限②书面理由）：StoragePage 定位「存储占用展示 + 可安全清理」，本页承担第二
+// 职责（附件逐件管理）且体量必然越 800 软引导线；亦不能并入 AttachmentDb（store 层零 UI）。
+// 刷新链（规范 §3 白名单）：aboutToAppear 首载 + 失败重试键；删除走页内即时更新（不设刷新键），
+// 无子页编辑、无保存动作故不挂 onShown（每次 push 都是新实例）。
+// 删除（拍板 + 红线）：按附件行 id 单件删，行走 ChatDb 委托入口（行 + 文件成对铁律，页面不碰
+// 文件原语）；库内消息文本里的「[附件] 文件名」标注一字不动，气泡侧照旧显示、点开提示文件已不在。
+// 查看器承载 = **导航栈内二级页**（原全屏模态 bindContentCover 与页内覆盖层均已退役）：行点击经
+// 共享件 openAttachmentViewer push 查看器页，页内不持有查看器状态，返回归官方返回链。列表行是
+// **类型图标**、无缩略图（决明「附件管理用不了共享元素动画」即在此），故本页不写共享元素广播键
+// ——键由查看器内部随页写、由查看器页销毁时清。
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -38,7 +28,7 @@ import { AttachmentGroupRow, AttachmentListRow,
   AttachmentTotalRow } from '../../common/store/AttachmentDb';
 import { deleteAttachments, isReady, queryAttachmentGroups,
   queryAttachmentTotal, queryAttachmentsByConversation } from '../../common/store/ChatDb';
-import { CARD_SPACING, cardBg, cardDescColor, cardTitleColor } from '../../common/Theme';
+import { CARD_SPACING, cardBg, cardDescColor, cardTitleColor, CARD_RADIUS } from '../../common/Theme';
 import { formatBytes } from '../../common/StorageStats';
 import { CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg,
   fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect,
@@ -48,24 +38,18 @@ import { formatConvTime } from '../chat/SessionSearchPanels';
 
 const DOMAIN: number = 0xD5A1;
 const TAG: string = 'AttachManage';
-// 页名/入口卡名单源（StoragePage 引用同一常量——两处显示名必然一致）
+// 页名单源（标题栏与帮助条目同引；组卡行 label 走分类名单源 storageCategories，两处不同名是有意的：组卡行须与图例/占比条的分类名一致）
 export const ATTACH_MANAGE_TITLE: string = '会话附件';
-// 一级分页批大小（会话组数）：首屏一屏略多、单次查询轻量（书内自定口径）
+// 一级分页批大小（会话组数）：首屏一屏略多、单次查询轻量
 const PAGE_GROUPS: number = 20;
 // 二级分页批大小（单组附件件数）：同上
 const PAGE_FILES: number = 50;
-// 会话标题缺位兜底显示名（库行缺失或标题为空串）
+// 会话标题缺位兜底显示名
 const UNTITLED_CONV: string = '未命名会话';
-// 组折叠动画时长（2026-09-17 折叠动画统一笔；官方 FAQ faqs-arkui-769 折叠示例同值 300ms，
-// 与价格卡 / 工具卡同形制；助手工具页折叠 2026-09-18 随分类卡重组退役）。★ 本页折叠机制与
-// 另两处不同——不是条件渲染
-// 而是扁平列表行的增删（LazyForEach 数据源 insertRange/removeRange），animateTo 包的是
-// 数据变更：行出现/消失与其余行的让位随之插值
+// 组折叠动画时长（官方 FAQ 折叠示例同值 300ms）。★ 本页折叠不是条件渲染而是扁平列表行增删（LazyForEach insertRange/removeRange），animateTo 包的是数据变更：行出现/消失与让位随之插值
 const GROUP_FOLD_ANIM_MS: number = 300;
 
-// 扁平列表项（LazyForEach 单数组三类行：kind = 'group' | 'file' | 'more'）。★ 键含可变展示态
-// （规范 §3 主通道「键变重建」）：组头的件数/占用/已载数/展开态随交互与删除变化，键不变则
-// LazyForEach 只 diff 不重建，卡面会停在旧值。
+// 扁平列表项（LazyForEach 单数组三类行：kind = 'group' | 'file' | 'more'）。★ 键含可变展示态（规范 §3 主通道「键变重建」）：组头件数/占用/已载数/展开态随交互与删除变化，键不变则 LazyForEach 只 diff 不重建，卡面停在旧值。
 interface ManageItem {
   key: string;
   kind: string;
@@ -139,7 +123,7 @@ function moreItemOf(group: ManageItem): ManageItem {
 }
 
 // 扁平项数据源（LazyForEach 契约）。变更一律走 notifyDataReloaded：键含可变展示态，键变者
-// 重建、未变者复用——列表规模有界（已加载组 + 已展开组行），全量通知开销可忽略
+// 重建、未变者复用——列表规模有界，全量通知开销可忽略
 class ManageDataSource implements IDataSource {
   private list: ManageItem[] = [];
   private listeners: DataChangeListener[] = [];
@@ -163,7 +147,7 @@ class ManageDataSource implements IDataSource {
     }
   }
 
-  // 只读视图（页面侧滑切集合装配 / 计数用）
+  // 只读视图（图片滑切集合装配 / 计数用）
   items(): ManageItem[] {
     return this.list;
   }
@@ -268,14 +252,16 @@ class ManageDataSource implements IDataSource {
 
 @Component
 export struct AttachmentManagePage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI、不上行；写库照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
-  // 路由栈（普通成员——PageMapBuilder 注入；行点击开查看器二级页用）
+  // 路由栈（PageMapBuilder 注入；行点击开查看器二级页用）
   pathStack: NavPathStack = new NavPathStack();
-  // 首载完成标记（false = 总显「正在统计…」不显 0——官方【推荐】加载态不误导，存储页先例）
+  // 首载完成标记（false = 显「正在统计…」不显 0——官方【推荐】加载态不误导）
   @State private loaded: boolean = false;
   @State private loadFailed: boolean = false;
-  // 顶部合计（进页取一次；删除后本地递减——拍板 4 不重复聚合）
+  // 顶部合计（进页取一次；删除后本地递减——不重复聚合）
   @State private totalFiles: number = 0;
   @State private totalBytes: number = 0;
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
@@ -293,8 +279,7 @@ export struct AttachmentManagePage {
   private deleting: boolean = false;
   // 沙箱根（absPath 拼接用；进页取上下文时写入）
   private filesDir: string = '';
-  // 删除确认弹窗（构造在组件成员位——坑7 约束；动态文案经 openDeleteConfirm 重建，
-  // 先例 StoragePage.openConfirm）
+  // 删除确认弹窗（组件成员位构造——坑7；动态文案经 openDeleteConfirm 重建）
   private confirmCtrl: CustomDialogController = new CustomDialogController({
     systemMaterial: overlayMaterial(),
     builder: ConfirmDialog({
@@ -336,6 +321,9 @@ export struct AttachmentManagePage {
     this.source.setAll([]);
     Promise.all([queryAttachmentGroups(PAGE_GROUPS, 0), queryAttachmentTotal()])
       .then((results: [AttachmentGroupRow[], AttachmentTotalRow]): void => {
+        if (this.departed) {
+          return;
+        }
         const rows: ManageItem[] = [];
         for (const group of results[0]) {
           rows.push(groupItemOf(group));
@@ -347,6 +335,9 @@ export struct AttachmentManagePage {
         this.loaded = true;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.loadFailed = true;
         const err: BusinessError = e as BusinessError;
         hilog.error(DOMAIN, TAG, '附件聚合查询失败：code %{public}d %{public}s',
@@ -360,13 +351,10 @@ export struct AttachmentManagePage {
       });
   }
 
-  // 一级续批（List.onReachEnd 触底自动续）：首载未完成/在途/已到底都直接返回；返回不足一批
-  // = 到底即停，之后不再触发（有界红线口径）。★ 2026-09-15 全面自检笔补去重：一级排序键是
-  // **体积**（可变聚合值）——已加载组被删件后 bytes 回落，在新排序里可能后移，按位置续批
-  // 会把已在列表的组再带回来（同一会话出现两个组头、各自独立展开与删除；两卡状态完全一致
-  // 时键全同 = LazyForEach 重复键行为未定义）。去重丢弃已加载组；残留限制如实记账 =
-  // 「漏组」仍在（漂移使个别未加载组落到本批已消费位置之前即被跳过）——offset 式分页对
-  // 可变排序键的固有面，重进页面自愈，结构性收口另议
+  // 一级续批（onReachEnd 触底）：未完成/在途/已到底直接返回；返回不足一批 = 到底即停。
+  // ★ 去重：一级排序键是**体积**（可变聚合值）——已加载组被删件后 bytes 回落可能后移，按位置续批
+  // 会把已在列表的组再带回来（重复组头、键全同时 LazyForEach 行为未定义），故丢弃已加载组；
+  // 残留限制如实记账 =「漏组」仍在（offset 式分页对可变排序键的固有面，重进页面自愈）
   private loadMoreGroups(): void {
     if (this.loading || this.groupsExhausted || !this.loaded || this.loadFailed) {
       return;
@@ -387,6 +375,9 @@ export struct AttachmentManagePage {
         this.source.appendItems(items);
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         const err: BusinessError = e as BusinessError;
         hilog.error(DOMAIN, TAG, '会话分组续批失败：code %{public}d %{public}s',
           typeof err.code === 'number' ? err.code : -1, (e as Error).message);
@@ -419,6 +410,9 @@ export struct AttachmentManagePage {
     this.groupBusy = true;
     queryAttachmentsByConversation(group.conversationId, PAGE_FILES, 0)
       .then((rows: AttachmentListRow[]): void => {
+        if (this.departed) {
+          return;
+        }
         const at: number = this.source.indexOfConversation(group.conversationId);
         if (at < 0) {
           hilog.warn(DOMAIN, TAG, '展开回填时会话组已不在列表：%{public}s', group.conversationId);
@@ -428,9 +422,8 @@ export struct AttachmentManagePage {
         for (const row of rows) {
           children.push(fileItemOf(row, this.filesDir));
         }
-        // 2026-09-17 折叠动画统一笔：数据变更（子行入列 + 组头键变）包进 animateTo——行出现
-        // 与其余行让位随之插值（本页是 LazyForEach 行增删式折叠，非条件渲染）。展开须等
-        // 查询返回，动画在数据到位后播（点击不被阻塞）
+        // 数据变更（子行入列 + 组头键变）包进 animateTo——行出现与让位随之插值（本页是
+        // LazyForEach 行增删式折叠，非条件渲染）。展开须等查询返回，动画在数据到位后播
         this.getUIContext().animateTo({ duration: GROUP_FOLD_ANIM_MS, curve: Curve.EaseInOut },
           (): void => {
             group.loaded = rows.length;
@@ -444,6 +437,9 @@ export struct AttachmentManagePage {
           });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         const err: BusinessError = e as BusinessError;
         hilog.error(DOMAIN, TAG, '单组附件查询失败：code %{public}d %{public}s',
           typeof err.code === 'number' ? err.code : -1, (e as Error).message);
@@ -456,8 +452,7 @@ export struct AttachmentManagePage {
       });
   }
 
-  // 折叠：移出该组全部子行（含「显示更多」行）——行对象即丢弃，再展开重新取第一批。
-  // 2026-09-17 折叠动画统一笔：数据变更（子行移出 + 组头键变）包进 animateTo（同展开路）
+  // 折叠：移出该组全部子行（含「显示更多」行）——行对象即丢弃，再展开重新取第一批
   private collapseGroup(group: ManageItem): void {
     const at: number = this.source.indexOfConversation(group.conversationId);
     if (at < 0) {
@@ -506,6 +501,9 @@ export struct AttachmentManagePage {
         }
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         const err: BusinessError = e as BusinessError;
         hilog.error(DOMAIN, TAG, '组内续批失败：code %{public}d %{public}s',
           typeof err.code === 'number' ? err.code : -1, (e as Error).message);
@@ -542,8 +540,7 @@ export struct AttachmentManagePage {
   }
 
   // 删除执行：行走 ChatDb 委托入口（附件行 + 文件成对，页面不碰文件原语）→ 成功原地移除；
-  // 失败中文 toast 不静默（P0-1）——注意按附件行 id 删（一条消息可挂多件，按 messageId 删
-  // 会误伤同消息其余附件）
+  // 失败中文 toast 不静默。★ 按附件行 id 删——一条消息可挂多件，按 messageId 删会误伤其余附件
   private async doDelete(item: ManageItem): Promise<void> {
     if (this.deleting) {
       return;
@@ -551,8 +548,14 @@ export struct AttachmentManagePage {
     this.deleting = true;
     try {
       await deleteAttachments([item.fileId]);
+      if (this.departed) {
+        return;
+      }
       this.dropFileRow(item);
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       const err: BusinessError = e as BusinessError;
       hilog.error(DOMAIN, TAG, '附件删除失败：code %{public}d %{public}s',
         typeof err.code === 'number' ? err.code : -1, (e as Error).message);
@@ -564,8 +567,7 @@ export struct AttachmentManagePage {
     }
   }
 
-  // 页内移除单行（拍板 4：删完原地移除不重查库）：文件行移除 → 组头件数/体积递减 → 归零组
-  // 行消失 → 顶部合计回落；「显示更多」行按 loaded < count 现算存在性
+  // 页内移除单行（删完原地移除不重查库）：文件行移除 → 组头件数/体积递减 → 归零组行消失 → 顶部合计回落；「显示更多」行按 loaded < count 现算存在性
   private dropFileRow(item: ManageItem): void {
     const index: number = this.source.indexOfKey(item.key);
     if (index < 0) {
@@ -602,11 +604,11 @@ export struct AttachmentManagePage {
     }
   }
 
-  // 点开预览（行点击；删除键另有独立热区）：存在性现检（单次 syscall，非轮询、不做灰态）→
+  // 点开预览（行点击；删除键另有独立热区）：存在性现检（单次 syscall，不轮询、不做灰态）→
   // 文档类走系统预览共享件 → 图片按「同一会话已加载图片行」滑切 → 文本单件
   private openPreview(item: ManageItem): void {
     if (!fs.accessSync(item.absPath)) {
-      // 「行在文件不在」（沿第三轮拍板语义）：点击时现检 + 中文提示
+      // 「行在文件不在」：点击时现检 + 中文提示
       this.getUIContext().getPromptAction().showToast({ message: '文件已不在本机' });
       return;
     }
@@ -640,11 +642,9 @@ export struct AttachmentManagePage {
     }
   }
 
-  // 打开查看器（二级页 push 单点收敛）：★ 本页不写共享广播键——列表行是**类型图标**、无缩略图
-  // （决明「附件管理用不了共享元素动画」即在这一点），键由查看器内部随页写、由查看器页销毁时清；
-  // push 与连点防重入在共享件 openAttachmentViewer 内（与会话页共用同一入口）
+  // 打开查看器（二级页 push 单点收敛）：★ 本页不写共享广播键——列表行是**类型图标**、无缩略图（决明「附件管理用不了共享元素动画」即在此），键由查看器内部随页写、销毁时清；连点防重入在共享件 openAttachmentViewer 内。animated=true：本页无共享元素绑定，走官方默认 push/pop 转场
   private openViewer(items: AttachmentBrief[], startIndex: number): void {
-    openAttachmentViewer(this.pathStack, items, startIndex);
+    openAttachmentViewer(this.pathStack, items, startIndex, true);
   }
 
   // 顶部合计文本（加载态不显 0；失败显失败——存储页同口径）
@@ -659,94 +659,102 @@ export struct AttachmentManagePage {
   }
 
   // ── 列表行 ──
-  // 组头行（整卡可点 = 展开/折叠；右侧 = 件数与占用）
+  // 组头行（整卡可点 = 展开/折叠；右侧 = 件数与占用）。★ 蒙层边距：卡底 Column 四周 padding 4，壳 padding 10 回添（下同）
   @Builder
   GroupRow(item: ManageItem) {
-    Button() {
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.chevron_down'))
-          .fontSize(16)
-          .fontColor([cardDescColor()])
-          .rotate({ angle: item.expanded ? 180 : 0 })
-        Text(item.title)
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(cardTitleColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-        Text(item.count + ' 件 · ' + formatBytes(item.bytes))
-          .fontSize(13)
-          .fontColor(cardDescColor())
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-    }
-    .type(ButtonType.Normal)
-    .width('100%')
-    .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
-    .padding(14)
-    .onClick((): void => {
-      this.toggleGroup(item);
-    })
-  }
-
-  // 附件行（整卡可点 = 预览；右上删除键独立热区不串——先例 ChatAttachmentStrip 两热区）。
-  // 名称 + 类型/大小/时间副行；不渲染缩略图（解码成本与内存有界优先，书 §2.2 展示面）
-  @Builder
-  FileRow(item: ManageItem) {
-    Button() {
-      Row({ space: 10 }) {
-        Column({ space: 3 }) {
-          Text(item.name)
+    Column() {
+      Button() {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(16)
+            .fontColor([cardDescColor()])
+            .rotate({ angle: item.expanded ? 180 : 0 })
+          Text(item.title)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor(cardTitleColor())
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(extLabel(item.name) + ' · ' + formatFileSize(item.size) + ' · ' +
-            formatConvTime(item.createdAt))
+            .layoutWeight(1)
+          Text(item.count + ' 件 · ' + formatBytes(item.bytes))
             .fontSize(13)
             .fontColor(cardDescColor())
-            .maxLines(1)
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        // 行内图标键（删除类）：无底 TEXTUAL + font_secondary，禁四件套——行内按钮规范 §1 表
-        Button() {
-          SymbolGlyph($r('sys.symbol.trash'))
-            .fontSize(18)
-            .fontColor([$r('sys.color.font_secondary')])
-        }
-        .buttonStyle(ButtonStyleMode.TEXTUAL)
-        .onClick((): void => {
-          this.openDeleteConfirm(item);
-        })
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
       }
+      .type(ButtonType.Normal)
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(CARD_RADIUS)
+      .padding(10)
+      .onClick((): void => {
+        this.toggleGroup(item);
+      })
     }
-    .type(ButtonType.Normal)
     .width('100%')
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
-    .padding(14)
-    .onClick((): void => {
-      this.openPreview(item);
-    })
+    .borderRadius(CARD_RADIUS)
+    .padding(4)
   }
 
-  // 组尾「显示更多」行（内容区文字键 = fallbackButton* 双态，行内按钮规范 §1 表第 2 行；
-  // 单键不套卡片——列表卡片规范 §4.3「单键禁独立卡」）
+  // 附件行（整卡可点 = 预览；右上删除键独立热区不串——先例 ChatAttachmentStrip 两热区）。名称 + 类型/大小/时间副行；不渲染缩略图（解码成本与内存有界优先）
+  @Builder
+  FileRow(item: ManageItem) {
+    Column() {
+      Button() {
+        Row({ space: 10 }) {
+          Column({ space: 3 }) {
+            Text(item.name)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(extLabel(item.name) + ' · ' + formatFileSize(item.size) + ' · ' +
+              formatConvTime(item.createdAt))
+              .fontSize(13)
+              .fontColor(cardDescColor())
+              .maxLines(1)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          // 行内图标键（删除类）：无底 TEXTUAL + font_secondary，禁四件套——行内按钮规范 §1 表
+          Button() {
+            SymbolGlyph($r('sys.symbol.trash'))
+              .fontSize(18)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .buttonStyle(ButtonStyleMode.TEXTUAL)
+          .onClick((): void => {
+            this.openDeleteConfirm(item);
+          })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+      }
+      .type(ButtonType.Normal)
+      .width('100%')
+      .backgroundColor(Color.Transparent)
+      .borderRadius(CARD_RADIUS)
+      .padding(10)
+      .onClick((): void => {
+        this.openPreview(item);
+      })
+    }
+    .width('100%')
+    .backgroundColor(cardBg(this.appColorMode))
+    .borderRadius(CARD_RADIUS)
+    .padding(4)
+  }
+
+  // 组尾「显示更多」行（轻动作文字键：无底 TEXTUAL + font_secondary，展开类轻动作不占实底档；单键不套卡片——列表卡片规范 §4.3「单键禁独立卡」）
   @Builder
   MoreRow(item: ManageItem) {
     Row() {
       Button('显示更多')
-        .fontColor(fallbackButtonFont(this.contentFallback, true))
-        .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, true))
-        .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, true))
-        .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
+        .buttonStyle(ButtonStyleMode.TEXTUAL)
+        .fontColor($r('sys.color.font_secondary'))
         .onClick((): void => {
           this.loadMoreFiles(item);
         })
@@ -769,12 +777,12 @@ export struct AttachmentManagePage {
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Center)
   }
 
-  // 失败态卡（三条失败路径同置 loadFailed；重试走 load 单一路径——P0-1 不静默不假成功）
+  // 失败态卡（三条失败路径同置 loadFailed；重试走 load 单一路径——不静默不假成功）
   @Builder
   FailCard() {
     Column({ space: 10 }) {
@@ -792,30 +800,21 @@ export struct AttachmentManagePage {
     }
     .width('100%')
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
   Content() {
-    // 列表页骨架（同族：ProviderPage/SearchEnginePage/MemorySortPage/自检页等）：Stack 顶
-    // 对齐承载滚动层；滚动层 List 铺满整页、顶/底留白走官方 offset——内容上滚
-    // 滑入标题栏渐变模糊蒙层背后被透出 = 顶部光感接上（2026-09-15 决明报障修复）
-    // ★ 2026-09-15 查看器二级页化笔后本 Stack 只承载滚动层（原为查看器全屏模态挂载点，
-    // 模态随本笔退役）
-    // ★ 合计条**随内容滚动**（List 首项，不悬浮）：纯信息行不做悬浮件——固定条与滚上来的
-    // 卡片观感割裂（2026-09-15 决明真机指令；同族悬浮件一律是交互件〔分段胶囊〕，纯信息行
-    // 无悬浮先例，勿回迁）
+    // 列表页骨架：Stack 顶对齐承载滚动层；List 铺满整页、顶/底留白走官方 offset——内容上滚滑入
+    // 标题栏渐变模糊蒙层背后（顶部光感接上）。★ 合计条**随内容滚动**（List 首项，不悬浮）：纯信息
+    // 行不做悬浮件，固定条与滚上来的卡片观感割裂；同族悬浮件一律是交互件〔分段胶囊〕，勿回迁。
+    // 失败/空态同为 List 内条件项（不在 List 外另立分支：短内容也可拖、回弹滑入蒙层）。
+    // ★ 官方 LazyForEach 限制「不建议容器内混排 ListItem / ForEach / LazyForEach」：本页是「固定
+    // 前导项 + 条件项」形态，先例 = 消息列表（ChatPageContent 同结构，真机长期在用）——若真机出现
+    // 滚动/复用异常，此项列第一嫌疑；换法 = 特殊行并入数据源 kind，使 List 内只剩 LazyForEach
     Stack({ alignContent: Alignment.Top }) {
-      // 滚动层 = List 铺满整页；失败/空态同为 **List 内条件项**（不在 List 外另立分支：
-      // 短内容也上下可拖、回弹时短暂滑入标题栏蒙层——SearchEnginePage 空态条件项同款
-      // 定稿口径）；触底自动续批由 onReachEnd 触发，守卫（加载中/到底停/首载未完成）
-      // 全在 loadMoreGroups 内
-      // ★ 官方 LazyForEach 使用限制「不建议容器内混排 ListItem / ForEach / LazyForEach」
-      //（2026-09-15 自检轮查证）：本页为「固定前导项 + 条件项」形态，先例同款 = 消息列表
-      //（ChatPageContent 同结构，真机长期在用）——若真机出现滚动/复用异常，此项列第一
-      // 嫌疑；换法 = 特殊行并入数据源 kind，使 List 内只剩 LazyForEach
       List({ space: CARD_SPACING }) {
         // 顶部合计（首项，随内容滚动；左内距由 List 的左右 padding 统一承担）
         ListItem() {
@@ -849,12 +848,10 @@ export struct AttachmentManagePage {
       .width('100%')
       .height('100%')
       .padding({ left: 16, right: 16 })
-      // ★ 顶/底留白走官方 offset（留白属滚动内容；容器 padding = 视口缩进会裁掉内容
-      //   ——坑9 根因，见 Content 头注释，勿回迁）
+      // ★ 顶/底留白走官方 offset（留白属滚动内容；容器 padding = 视口缩进会裁内容——坑9，勿回迁）
       .contentStartOffset(Math.max(this.topPad, 0))
       .contentEndOffset(this.bottomPad + 16)
-      // 滚动内容不足视口时顶对齐（坑18：List/Scroll align 默认可垂直居中）+ 短内容
-      // 也上下可拖（回弹时内容短暂滑入标题栏蒙层、光感可见——ProviderPage 同款口径）
+      // 滚动内容不足视口时顶对齐（坑18：List/Scroll align 默认可垂直居中）+ 短内容也可拖
       .align(Alignment.TopStart)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .scrollBar(BarState.Off)
@@ -862,8 +859,7 @@ export struct AttachmentManagePage {
         this.loadMoreGroups();
       })
 
-      // 附件查看器（★ 2026-09-15 二级页化笔：改导航栈内二级页 push——本层不再挂弹层/模态，
-      // 文档类不进查看器，分派直走系统预览窗）
+      // 附件查看器自本层退役（二级页 push；文档类直走系统预览窗）
     }
     .width('100%')
     .height('100%')
@@ -876,5 +872,9 @@ export struct AttachmentManagePage {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

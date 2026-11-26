@@ -6,7 +6,10 @@
   "author": "jueming",
   "license": "Apache-2.0",
   "dependencies": {
-    "@lidary/markdown": "^3.0.5"
+    "libcodeexec": "file:./src/main/cpp/types/libcodeexec",
+    "libqjsengine": "file:./src/main/cpp/types/libqjsengine",
+    "libpyengine": "file:./src/main/cpp/types/libpyengine",
+    "libnodeengine": "file:./src/main/cpp/types/libnodeengine"
   },
   "devDependencies": {},
   "dynamicDependencies": {}

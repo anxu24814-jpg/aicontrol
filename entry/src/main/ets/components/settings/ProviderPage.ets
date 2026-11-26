@@ -1,56 +1,47 @@
-// 服务商管理列表页（2026-08-30 反馈轮 2 起自包 PageShell 壳——★ 坑16·2026-08-30 刷新
-// 链定稿：刷新 = reload（菜单「刷新」键 / 详情页·排序页 onPop / 开关启停 / 删除回调）
-// 成功自增 cardEpoch → ForEach 键含纪元整卡重建 → 卡内自拉重跑；旧 tick 广播在 push
-// 页内 @StorageProp @Watch 实测不触发已删、徽章 @Builder 值参快照已改 ForEach 重建；图片参考
-// 形态对齐）：标题栏下分段胶囊悬浮吸顶（2026-08-30 反馈轮 9 领导指令——已启用/已停用
-// 两分段，日志页成熟实现同款 SegmentBar；开关启停 reload 后卡片按 enabled 归段）+
-// 服务商卡片 List（官方 List({space})
-// 设置列表卡片口径）—— 每卡 = 名称 + Base URL 副行 + 徽章行（OpenAI 兼容 /
-// N 模型 / 已停用）+ 启用开关 + 四点菜单键（编辑/分享/删除——2026-09-03 加「分享」，
-// 单家导出唯一入口 = 编排 exportShareConfig，ProviderShareFlow.ets；2026-09-20 高级页
-// 同名导出按钮随卡退役后本项即全应用唯一单家导出入口）。★ 长按拖拽已移除
-//（2026-08-30 反馈轮 6，领导方案——坑10 浮起被列表内容区裁切且 dragPreview 无效，排序
-// 独立成页：标题栏更多菜单「排序」push ProviderSortPage 长按排序；卡上拖拽手柄随之
-// 移除防误导）。列表顶/底留白全量
-// 走官方 contentStartOffset/contentEndOffset（反馈轮 3 接入光感、轮 4 摘双轨全量化，坑9，
-// 真机确认；轮 9 起始偏移 = 分段胶囊悬浮位下方）——卡片上滚依次穿过胶囊背板与标题栏
-// 蒙层两道光感。
-// 入口结构（入口放服务商管理卡片——领导指令）：设置页「服务商管理」行卡 push 本页；
-// 本页标题栏（ProviderTitleMenu 域件）——★ 2026-09-22 决明「标题栏更多菜单，新建键移出与
-// 更多形成双键胶囊，参考消息页实现，功能不变」：HDS 路径右上角 = 合并胶囊〔＋新建服务商 |
-// ⋯更多〕（新建 = push 详情页新建态〔恒传空串，坑12〕/ 更多 = 弹菜单四项 = 刷新〔手动重拉〕/
-// 分享配置〔批量打包已启用服务商 exportShareAll〕/ 导入配置〔importShareConfig，预览分服务商〕/
-// 排序〔push 排序页〕）；回退路径 = 官方菜单数组两键同序；点卡片 push 编辑态；删除 =
-// ConfirmDialog（官方实底，与删除会话/删除模型同款）→ deleteProvider 事务级联 + Asset key
-// 清理 + 当前选择失效（解析侧另有兜底）。
-// 刷新通道（2026-08-30 收敛前为 onShown + 广播双保险——多轮不可靠后领导拍板去自动链，
-// 改手动刷新键；历史见变更记录当日节）。★ 坑17·2026-08-30 全链统一：自动刷新恢复 =
-// onPop（子页 pop 必带 result——保存/删除 pop({ saved/deleted: true })、排序页
-// onBackPressed 拦截 → pop({ saved: true })；onPop 触发条件官方 d.ts 实锤，见
-// PromptEditPage 注释）。
-// ★ 裁剪口径（对照参考图）：余额徽章不做（领导明确）；顶部聊天键不做（aicontrol 聊天即
-// 主页签，语义重复）。
+// 服务商管理列表页（自包 PageShell 壳）：
+// 结构 = 标题栏下分段胶囊悬浮吸顶（已启用/已停用两分段，SegmentBar；开关启停 reload 后卡片按
+// enabled 归段）+ 服务商卡片 List。每卡 = 名称 + Base URL 副行 + 徽章行（OpenAI 兼容 / N 模型 /
+// 已停用）+ 启用开关 + 行尾四点键菜单（编辑 / 分享 / 打开官网——仅内置家显示，判据见
+// menuCallbacks）；删除统一走行左滑确认链（菜单「删除」已退役）。
+// ★ 单家导出唯一入口 = exportShareConfig（ProviderShareFlow.ets）——高级页同名按钮退役后本菜单
+//   项即全应用唯一单家导出入口。
+// ★ 长按拖拽原位排序：本页 List 挂 .clip(false) + ForEach 挂官方 onMove——内边距与卡宽零改；
+//   排序页 ProviderSortPage 已退役（其转向理由 = 坑10 浮起被列表裁切，由 clip(false) 消解）。
+//   拖拽落定 = 数据源按「可见行槽位回填」重排 + 全量回写 sortOrder（落库序是全局序，列表按分段
+//   过滤显示——语义见 applyDragMove）。卡上不留拖拽手柄。
+// 列表顶/底留白全量走官方 contentStartOffset/contentEndOffset（坑9；起始偏移 = 分段胶囊悬浮位
+// 下方）——卡片上滚依次穿过胶囊背板与标题栏蒙层两道光感。
+// 入口结构：设置页「服务商管理」行卡 push 本页；标题栏（ProviderTitleMenu 域件）= 右上角
+// 合并胶囊〔＋新建服务商 | ⋯更多〕（新建 = push 详情页新建态〔恒传空串，坑12〕/ 更多 = 弹菜单 =
+// 分享配置〔exportShareAll〕/ 导入配置〔importShareConfig〕/ 价格模板——「刷新」项已撤，与进页/
+// 返回重拉及写动作自刷重复）。点卡片 push 编辑态；删除 =
+// ConfirmDialog（官方实底）→ deleteProvider 事务级联 + Asset key 清理 + 当前选择失效（解析侧兜底）。
+// 刷新通道：★ 坑17·onPop（子页 pop 必带 result）为保存路径可靠原语；★ onShown 兜底并存（坑25
+// 「每次页面显示触发含 pop 返回」）——编辑页自动查余额只写库不 pop result，裸返回的余额联动归
+// 本通道；reload 防重入门见 reloading 注释。
+// ★ 裁剪口径（对照参考图）：余额徽章不做；顶部聊天键不做（聊天即主页签，语义重复）。
 import { SegmentButtonV2Items } from '@kit.ArkUI';
-import { HdsNavigationMenuContentOptions } from '@kit.UIDesignKit';
-import { ConfigurationConstant } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { PageShell } from '../../common/PageShell';
 import { whenReady } from '../../common/store/ChatDb';
 import { SETTING_TITLE_PROVIDER } from '../../common/SettingSearch';
 import {
   deleteProvider, ProviderRow,
-  queryProviders, setProviderEnabled
+  queryProviders, saveProviderOrder, setProviderEnabled
 } from '../../common/store/ProviderDb';
 import { removePoolKeys } from '../../common/store/KeyStore';
 import { queryProviderKeys, ProviderKeyRow } from '../../common/store/ProviderKeyDb';
 import { ENDPOINT_CHAT, PROTOCOL_OPENAI } from '../../common/providers/AiTypes';
+import { providerOfficialSite } from '../../common/providers/ProviderCatalog';
+import { launchExternalLink } from '../../common/ExternalLink';
 import { KEY_PICK_ROTATE } from '../../common/store/ProviderKeyDb';
 import { IMMERSIVE_LEVEL_KEY, overlayMaterial } from '../../common/ImmersiveLevel';
 import {
-  CARD_SPACING, CARD_PANEL_WIDTH, SEGMENT_BAR_HEIGHT, TITLE_BAR_MASK_EXTRA_HEIGHT,
+  CARD_SPACING, SEGMENT_BAR_HEIGHT, TITLE_BAR_MASK_EXTRA_HEIGHT,
   MORE_MENU_ANCHOR_RIGHT, MORE_MENU_BUTTON_BOTTOM_INSET, badgeBg, cardBg, cardDescColor,
-  cardTitleColor
+  cardTitleColor, CARD_RADIUS
 } from '../../common/Theme';
-import { SegmentBar } from '../SegmentBar';
+import { PageTopSegmentBand } from '../SegmentBar';
 import { ConfirmDialog } from '../chat/ConfirmDialog';
 import { InputDialog } from '../chat/InputDialog';
 import {
@@ -58,52 +49,56 @@ import {
 } from './ProviderCardMenu';
 import { exportShareAll, exportShareConfig, importShareConfig } from './ProviderShareFlow';
 
+import { RowSwipeDelete, SwipeGroup } from '../RowSwipeDelete';
 import { ProviderCardItem } from './ProviderCardItem';
 import {
   PROVIDER_TITLE_MENU_ANCHOR_ID, ProviderTitleBarKeys, ProviderTitleMenuCallbacks,
-  ProviderTitleMenuHost, providerMoreMenuNav
+  ProviderTitleMenuHost
 } from './ProviderTitleMenu';
-import { ROUTE_PROVIDER_DETAIL_PAGE, ROUTE_PROVIDER_SORT_PAGE } from '../../common/RouteNames';
+import { ROUTE_PRICE_TEMPLATE_PROVIDERS_PAGE, ROUTE_PROVIDER_DETAIL_PAGE } from '../../common/RouteNames';
 
-// （坑16·2026-08-30：列表广播键与行内 tick 键均已删——push 页内订阅不触发；刷新链
-// 定稿见文件头注释）
 @Component
 export struct ProviderPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI、不上行（数据层意图照常完成）
+  private departed: boolean = false;
   // 顶部留白（vp，PageMapBuilder 注入——首卡落标题栏蒙层下方）
   @Prop topPad: number = 0;
   // 底部留白（vp = 避让区高，PageMapBuilder 注入——列表尾卡不压手势条）
   @Prop bottomPad: number = 0;
-  // 官方路由栈（「+」键 push 详情页新建态 / 卡片跳转编辑态）
   pathStack: NavPathStack = new NavPathStack();
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // 沉浸光感总档（2026-09-22 合并胶囊笔新增）：标题栏自绘键须显式下发档位（PageShell 自订阅
-  // 同名键但覆盖层组件不在其参数链上），菜单宿主弹出亦消费同一值——一处订阅两处共用
+  // 沉浸光感总档（标题栏自绘键与菜单宿主共用——覆盖层组件不在 PageShell 参数链上）
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-  // 分段选中（0 已启用 / 1 已停用——2026-08-30 反馈轮 9 领导指令；SegmentBar @Link 双向）
+  // 分段选中（0 已启用 / 1 已停用；SegmentBar @Link 双向）
   @State private segIndex: number = 0;
-  // 分段选项（纯展示普通成员——SegmentBar 契约，变化场景无）
+
+  // 标题栏下方带承载：胶囊经官方 bottomBuilder 承载，内容区件在 API 26 不出材质，
+  // 迁入标题栏生效区即恢复光感。几何全在 PageTopSegmentBand（带顶 = 标题栏下沿不是 topPad）
+  @Builder
+  TopSegmentBand() {
+    PageTopSegmentBand({
+      items: this.segItems,
+      selectedIndex: $segIndex
+    })
+  }
+
   private segItems: SegmentButtonV2Items = new SegmentButtonV2Items([
     { text: '已启用' },
     { text: '已停用' }
   ]);
   @State private rows: ProviderRow[] = [];
   @State private hintText: string = '';
-  // 卡片重建纪元（坑16·2026-08-30：reload 成功自增 → ForEach 键含纪元 → 整卡重建 →
-  // 卡内 aboutToAppear 自拉重跑；替代 push 页内实测不触发的 tick 广播，与复活的
-  // onPop 回 reload 组成当前唯一刷新链）
+  // 卡片重建纪元（坑16：reload 成功自增 → ForEach 键含纪元 → 整卡重建 → 卡内 aboutToAppear 自拉重跑）
   @State private cardEpoch: number = 0;
   // 删除确认弹窗控制器（★ 组件成员位——坑7：普通类成员构造 open() 静默无效）
   private confirmCtrl: CustomDialogController | null = null;
-  // 口令弹窗控制器（分享导出「包含密钥」档用；★ askPassphrase 同款样板现两处
-  //（本页 / DataSyncPage）——2026-09-20 高级页迁移卡退役后原第三处随卡删除；共享化须把
-  // 控制器构造移出组件方法，落坑7 家族，暂不提取，已登记技术债务清单（偿还时机 =
-  // 真机在场提取并同轮验弹窗））
+  // 口令弹窗控制器（分享导出「包含密钥」档用）。★ askPassphrase 样板全仓两处（本页 / DataSyncPage）
+  // ——共享化须把控制器构造移出组件方法，落坑7 家族，已登记技术债务清单
   private passCtrl: CustomDialogController | null = null;
 
-  // 口令输入弹窗（resolve 文本 / 用户取消 resolve null——Promise 恒 settle，编排侧判空）
-  // ★ 两个取消口都要接（2026-09-10 报障修复）：onCancel = 弹窗内「取消」键（程序化 close，
-  // 不触发控制器级 cancel——原只有 cancel 时此键让 Promise 永挂、busy 卡死置灰）；
-  // cancel = 返回键/点遮罩/Esc（d.ts 原文）。少接一个就有一种取消姿势把按钮锁死。
+  // 口令输入弹窗（resolve 文本 / 取消 resolve null——Promise 恒 settle）。★ 两个取消口都要接：
+  // onCancel = 弹窗内「取消」键（程序化 close，不触发控制器级 cancel——只接 cancel 时此键让 Promise
+  // 永挂、busy 卡死置灰）；cancel = 返回键/点遮罩/Esc。少接一个就有一种姿势锁死按钮
   private askPassphrase(title: string, placeholder: string): Promise<string | null> {
     return new Promise<string | null>((resolve: (value: string | null) => void) => {
       this.passCtrl = new CustomDialogController({
@@ -132,10 +127,15 @@ export struct ProviderPage {
   }
   // 卡片菜单节点宿主（init/open/dispose 成对，见 ProviderCardMenu.ets）
   private cardMenu: ProviderCardMenuHost = new ProviderCardMenuHost();
-  // 标题栏更多菜单节点宿主（新建/排序两项，见 ProviderTitleMenu.ets）
+  // 标题栏更多菜单节点宿主（init/open/dispose 成对，见 ProviderTitleMenu.ets）
   private titleMenu: ProviderTitleMenuHost = new ProviderTitleMenuHost();
-  // 菜单删除目标（确认弹窗回调持引用）
   private pendingDelete: ProviderRow | null = null;
+  // 行左滑删除互斥组（RowSwipeDelete 单源下发；reload / 拖拽落定 / 滚动开始三路收口）
+  private swipeGroup: SwipeGroup = new SwipeGroup();
+  // reload 防重入门：保存返回时 onPop 与 onShown 双通道各触发一次 reload → queryProviders 双拉
+  // + cardEpoch 双自增。进行中直接 return 只消重复执行，不破「onPop 可靠原语 + onShown 兜底」
+  // 双链并存结构；whenReady 恒不 reject、query 两支均复位，flag 无悬挂路径
+  private reloading: boolean = false;
 
   aboutToAppear(): void {
     this.reload();
@@ -144,6 +144,7 @@ export struct ProviderPage {
   }
 
   aboutToDisappear(): void {
+    this.departed = true;
     this.cardMenu.dispose();
     this.titleMenu.dispose();
   }
@@ -152,25 +153,45 @@ export struct ProviderPage {
     return { id: '', name: '', baseUrl: '', enabled: true, sortOrder: 0, createdAt: 0,
       balanceEnabled: false, balanceLastText: '', protocol: PROTOCOL_OPENAI, headers: '',
       endpoint: ENDPOINT_CHAT, promptCacheEnabled: false, promptCacheTtl: '5m', bodyOverrides: '',
-      keyPickMode: KEY_PICK_ROTATE };
+      keyPickMode: KEY_PICK_ROTATE, builtin: false };
   }
 
   private reload(): void {
-    // DB 就绪守卫（2026-08-30 与 ChatSessionList 同族竞态修复）：DB 未就绪直查抛「数据库
-    // 未就绪」且提示钉死；先等 whenReady 再拉，init 失败提示重启（缓存 false 无重试）
+    // 防重入门：进行中直接 return（双通道并存下的重复执行只跑一次）
+    if (this.reloading) {
+      return;
+    }
+    this.reloading = true;
+    // DB 就绪守卫：DB 未就绪直查抛「数据库未就绪」且提示钉死；先等 whenReady 再拉，init 失败
+    // 提示重启（缓存 false 无重试）
     whenReady().then((ok: boolean): void => {
+      if (this.departed) {
+        this.reloading = false;
+        return;
+      }
       if (!ok) {
+        this.reloading = false;
         this.hintText = '数据库初始化失败，请重启应用重试';
         return;
       }
       queryProviders()
         .then((rows: ProviderRow[]): void => {
+          this.reloading = false;
+          if (this.departed) {
+            return;
+          }
           this.rows = rows; // 一次性赋值（状态修改合并为一次刷新）
           this.hintText = '';
+          // 列表整组重拉即收口行左滑展开态（RowSwipeDelete 键含纪元整卡重建，双保险）
+          this.swipeGroup.collapse();
           // 坑16：纪元自增进 ForEach 键 → 全卡重建 → 卡内自拉重跑（计数/余额随库刷新）
           this.cardEpoch += 1;
         })
         .catch((e: Object): void => {
+          this.reloading = false;
+          if (this.departed) {
+            return;
+          }
           this.hintText = '服务商列表读取失败：' + (e as Error).message;
         });
     });
@@ -180,23 +201,24 @@ export struct ProviderPage {
   private menuCallbacks(row: ProviderRow): ProviderCardMenuCallbacks {
     const callbacks: ProviderCardMenuCallbacks = {
       item: row,
+      // 「打开官网」准入（只适用内置服务商）：builtin 与官网表域名**双条件**——内置行的 Base URL
+      // 可在详情页改写，改成中转站后域名不再代表这家，映射落空即空串 = 菜单整项不渲染（fail-safe）
+      siteUrl: row.builtin ? providerOfficialSite(row.baseUrl) : '',
       onEdit: (item: ProviderRow): void => {
         this.openDetail(item.id);
       },
       onShare: (item: ProviderRow): void => {
         this.shareProvider(item);
       },
-      onDelete: (item: ProviderRow): void => {
-        this.openDeleteConfirm(item);
+      onOpenSite: (item: ProviderRow): void => {
+        this.openOfficialSite(item);
       }
     };
     return callbacks;
   }
 
-  // 分享（2026-09-03 卡片菜单项）：单家导出唯一实现 = ProviderShareFlow.ets 导出的
-  // exportShareConfig（对话框三选 → 缺失确认 → 口令 → 加密/序列化 → 沙箱文件 → 系统分享
-  // 面板；2026-09-20 高级页同名按钮随迁移卡退役，本项自此为该编排全应用唯一入口）；
-  // 失败/取消均函数内部兜底（P0-1）
+  // 分享：单家导出唯一实现 = exportShareConfig（对话框三选 → 缺失确认 → 口令 → 加密/序列化 →
+  // 沙箱文件 → 系统分享面板）；失败/取消均函数内部兜底（P0-1）
   private shareProvider(item: ProviderRow): void {
     if (item.id === '') {
       return;
@@ -206,18 +228,53 @@ export struct ProviderPage {
         this.askPassphrase(title, placeholder));
   }
 
+  // 打开官网：内置家跳各家开放平台控制台。准入已在 menuCallbacks 裁定——本方法只做「查表 →
+  // 取宿主上下文 → 交统一外链出口」；★ 用户主动点击场景失败给中文提示不静默（隐私政策页同口径）；
+  // 地址查空直接返回（防御：正常不达）
+  private openOfficialSite(item: ProviderRow): void {
+    const siteUrl: string = providerOfficialSite(item.baseUrl);
+    if (siteUrl === '') {
+      return;
+    }
+    try {
+      // 宿主上下文走 UIContext 形态（禁全局 getContext）
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      launchExternalLink(context, siteUrl, (): void => {
+        if (this.departed) {
+          return;
+        }
+        this.getUIContext().getPromptAction().showToast({ message: '无法打开官网，请稍后重试' });
+      });
+    } catch (e) {
+      if (this.departed) {
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({ message: '无法打开官网，请稍后重试' });
+    }
+  }
+
   private openCardMenu(row: ProviderRow): void {
     this.cardMenu.open(this.getUIContext(), this.menuCallbacks(row),
       AppStorage.get<number>(IMMERSIVE_LEVEL_KEY) ?? 0);
   }
 
-  // 开关落库 + 本地行同步（失败回滚态提示——重拉恢复真值，P0-1 不静默）
+  // 开关落库 + 本地行同步（失败回滚态提示——重拉恢复真值，P0-1 不静默）。★ 停用即解绑：停用会
+  // 解除引用它的模型选择（助手绑定 / 会话覆盖 / 功能模型 8 槽），有解除时给回执（用户得知道那些
+  // 槽位为什么变成「未选择」）
   private toggleProvider(row: ProviderRow, isOn: boolean): void {
     setProviderEnabled(row.id, isOn)
-      .then((): void => {
+      .then((cleared: number): void => {
+        if (!this.departed && cleared > 0) {
+          this.getUIContext().getPromptAction().showToast({
+            message: '已停用，引用它的模型选择已解除'
+          });
+        }
         this.reload();
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '操作失败：' + (e as Error).message });
         this.reload();
       });
@@ -242,8 +299,8 @@ export struct ProviderPage {
     this.confirmCtrl.open();
   }
 
-  // 删除执行：先查池条目 id 集 → 库内事务级联（服务商行 + 模型行 + key 池行）→ Asset
-  // 池条目成对清理 → 当前选择失效 → 本地重拉 + toast；任一步失败 toast 可重试（P0-1）
+  // 删除执行：查池条目 id → 库内事务级联（服务商行 + 模型行 + key 池行）→ Asset 池条目成对清理
+  //（数据层照常完成，判守只在 UI 动作前）→ 当前选择失效 → 重拉 + toast
   private async deletePending(): Promise<void> {
     const row: ProviderRow | null = this.pendingDelete;
     this.pendingDelete = null;
@@ -256,72 +313,67 @@ export struct ProviderPage {
       const keyIds: string[] = keyRows.map((key: ProviderKeyRow): string => key.id);
       await deleteProvider(row.id);
       await removePoolKeys(row.id, keyIds);
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '已删除「' + row.name + '」' });
       this.reload();
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '删除失败：' + (e as Error).message });
     }
   }
 
-  // 标题栏 ＋ 键（2026-09-22 自「更多」菜单移出，动作一字未动）：新建服务商 = push 详情页
-  // 新建态。★ 恒传空串，勿传 null——坑12 真机实锤（null 被详情页读作编辑 id →「新建秒退」
-  // + 不存在 toast；参数契约 string 见下方 openDetail）
+  // 标题栏 ＋ 键：新建服务商 = push 详情页新建态。★ 恒传空串，勿传 null——坑12 真机实锤（null
+  // 被详情页读作编辑 id →「新建秒退」+ 不存在 toast；参数契约 string）
   private openAdd(): void {
     this.openDetail('');
   }
 
-  // 详情页跳转（卡片点击 = 编辑态携 id；标题栏 ＋ 键新建 = 新建态空串）。★ 勿回传 null：
-  // 参数契约 = string，null 曾被详情页误读为编辑 id 致「新建秒退」（轮 7 修复，
-  // ProviderDetailPage 注释；坑12）
-  // ★ 坑16·2026-08-30 onPop 复活：返回即 reload（纪元自增 → 整卡重建重拉）——此前
-  //「去自动链」拍板针对的真凶是徽章 @Builder 值参快照 + tick 广播 push 页内不触发，
-  // 并非 onPop 本身（hilog 取证：卡内 load 赋值成功、徽章仍冻结首帧值）；onPop 走
-  // Navigation 官方回调链，不经过 @BuilderParam content 传播
+  // 详情页跳转（卡片点击 = 编辑态携 id；＋ 键新建 = 新建态空串）。★ 勿回传 null：参数契约 =
+  // string，null 曾被误读为编辑 id 致「新建秒退」（坑12）。
+  // ★ onPop 返回即 reload（纪元自增 → 整卡重建重拉），官方回调链不经过 @BuilderParam content
+  // 传播；★ onShown 兜底并存（裸返回无 result 的重拉归 onShown），本回调保留为保存路径可靠原语
   private openDetail(providerId: string): void {
     this.pathStack.pushPathByName(ROUTE_PROVIDER_DETAIL_PAGE, providerId, (): void => {
       this.reload();
     });
   }
 
-  // 标题栏「更多」菜单回调（刷新/批量分享/批量导入/排序四项；★ 2026-09-22 起「新建服务商」
-  // 不经本接口——改由覆盖层 ＋ 键直连 openAdd；坑72：显式接口构造禁匿名对象字面量）
+  // 价格模板管理入口：push 无参——选择页自拉服务商全集（含停用与内置），点行再携 providerId 进
+  // 原模板列表页；本页无联动数据，返回无参 pop 不挂 onPop（坑17 口径）
+  private openPriceTemplates(): void {
+    this.pathStack.pushPathByName(ROUTE_PRICE_TEMPLATE_PROVIDERS_PAGE, null);
+  }
+
+  // 标题栏「更多」菜单回调（分享配置 / 批量导入 / 价格模板三项；「新建」由覆盖层 ＋ 键直连
+  // openAdd；「排序」随排序页退役改原位拖拽；「刷新」已撤，见文件头；坑72：禁匿名对象字面量）
   private titleCallbacks(): ProviderTitleMenuCallbacks {
     const callbacks: ProviderTitleMenuCallbacks = {
-      // 手动刷新键（坑16·2026-08-30 复活自动链：reload 重拉行 + cardEpoch 自增进
-      // ForEach 键整卡重建——卡内自拉派生数据随重建执行；旧 tick 广播在 push 页内
-      // @StorageProp @Watch 实测不触发已删）
-      onRefresh: (): void => {
-        this.reload();
-        this.getUIContext().getPromptAction().showToast({ message: '已刷新' });
-      },
       onShareAll: (): void => {
         this.shareAllProviders();
       },
       onImportAll: (): void => {
         this.importProviders();
       },
-      onSort: (): void => {
-        // 排序页 push（坑16·2026-08-30 onPop 复活：排序返回即 reload——序变与卡内
-        // 派生数据一并刷新；复活理由见 openDetail 注释）
-        this.pathStack.pushPathByName(ROUTE_PROVIDER_SORT_PAGE, null, (): void => {
-          this.reload();
-        });
+      onPriceTemplates: (): void => {
+        this.openPriceTemplates();
       }
     };
     return callbacks;
   }
 
-  // 批量分享（2026-09-07 标题菜单「分享配置」）：打包全部已启用服务商——编排 =
-  // ProviderShareFlow.exportShareAll（与单服务商 exportShareConfig 同一对话框三选语义；
-  // 口令弹窗回调就地注入，askPassphrase 为本页既有方法零重复）；失败/取消均编排内兜底
+  // 批量分享：打包全部已启用服务商——编排 = exportShareAll（与单家 exportShareConfig 同一对话框
+  // 三选语义；口令弹窗回调就地注入本页 askPassphrase）
   private shareAllProviders(): void {
     exportShareAll(this.getUIContext(),
       (title: string, placeholder: string): Promise<string | null> =>
         this.askPassphrase(title, placeholder));
   }
 
-  // 批量导入（2026-09-07 标题菜单「导入配置」）：选文件 → 解析 → 预览分服务商 → 逐家
-  // 新增；onDone = 列表 reload（纪元自增整卡重建，与刷新键同通道——导入的副本即刻上屏）
+  // 批量导入：选文件 → 解析 → 预览分服务商 → 逐家新增；onDone = 列表 reload（导入的副本即刻上屏）
   private importProviders(): void {
     importShareConfig(this.getUIContext(),
       (title: string, placeholder: string): Promise<string | null> =>
@@ -331,9 +383,9 @@ export struct ProviderPage {
       });
   }
 
-  // 标题栏覆盖层（HDS 路径：右上角合并胶囊〔＋新建服务商 | ⋯更多〕）——组件内 @Builder 挂载
-  // 是硬约束（坑30：全局 @Builder 被官方 titleBar napi 直接调用时无视图上下文，启动即闪退）；
-  // 键件与几何在 components/settings/ProviderTitleMenu.ets，本页只注入三参（档位 + 两动作）
+  // 标题栏覆盖层（右上角合并胶囊〔＋新建服务商 | ⋯更多〕）——组件内 @Builder 挂载是
+  // 硬约束（坑30：全局 @Builder 被官方 titleBar napi 直接调用时无视图上下文，启动即闪退）；
+  // 键件与几何在 ProviderTitleMenu.ets，本页只注入三参
   @Builder
   TitleBarKeys() {
     ProviderTitleBarKeys({
@@ -347,32 +399,92 @@ export struct ProviderPage {
     })
   }
 
-  // 标题栏更多菜单弹出（胶囊右热区 action；锚点 = Content 内隐形锚点本页唯一 id——锚点右缘
-  // 与 ⋯ 键右缘同值 16，故「更多」必须是胶囊右热区/菜单数组末键）
+  // 标题栏更多菜单弹出（胶囊右热区 action；锚点右缘与 ⋯ 键右缘同值 16，故「更多」必须是胶囊
+  // 右热区末键）
   private openTitleMenu(): void {
     this.titleMenu.open(this.getUIContext(), this.titleCallbacks(), this.immersiveLevel);
   }
 
-  // 当前分段可见行（0 已启用 / 1 已停用）：开关启停 reload 重拉后行按 enabled 归段——
-  // 卡片从当前分段消失、另一分段可见（领导口径「卡变到对应部分」）；分段切换 = 状态过滤
-  // 即时生效无需 pop 再 push；详情页开关改动后 pop 回来 = onPop 自动 reload 归段
-  //（坑16·2026-08-30 复活）
-  private visibleRows(): ProviderRow[] {
-    return this.rows.filter((row: ProviderRow): boolean =>
-      this.segIndex === 0 ? row.enabled : !row.enabled);
+  // 分段可见性判据（单源：visibleRows 过滤与拖拽槽位回填共用——两处分家会让「拖拽落定后的
+  // 显示序」与「可见行集合」失步）
+  private inCurrentSegment(row: ProviderRow): boolean {
+    return this.segIndex === 0 ? row.enabled : !row.enabled;
   }
 
-  // 列表内容起始偏移（分段胶囊悬浮位下方——胶囊顶 = topPad − 蒙层渐隐边缘 8 + 胶囊高
-  // 40 + 间距 28，LogPageContent/ProviderDetailPage 吸顶三段构成同款）
+  // 当前分段可见行（0 已启用 / 1 已停用）：开关启停 reload 后行按 enabled 归段——卡片从当前分段
+  // 消失、另一分段可见；分段切换 = 状态过滤即时生效；详情页改动 pop 回来 = onPop 自动 reload 归段
+  private visibleRows(): ProviderRow[] {
+    return this.rows.filter((row: ProviderRow): boolean => this.inCurrentSegment(row));
+  }
+
+  // 原位拖拽落定：onMove 上报的 from/to 是**可见行数组**（当前分段过滤后）的下标，而落库序
+  // sortOrder 是**全量全局序**——直接对 this.rows 做 splice 会落错位置。语义 = 可见行在自己占的
+  // 槽位内换位：全量序中属于当前分段的位置按新可见序逐个回填，另一分段的行相对位置一动不动
+  //（例：[A启 B停 C启] 在已启用段把 C 拖到 A 前 → [C启 B停 A启]）。回写 = saveProviderOrder 全量 ids
+  private applyDragMove(from: number, to: number): void {
+    const visible: ProviderRow[] = this.visibleRows();
+    if (from === to || from < 0 || to < 0 || from >= visible.length || to >= visible.length) {
+      return;
+    }
+    const nextVisible: ProviderRow[] = visible.slice();
+    const moved: ProviderRow = nextVisible.splice(from, 1)[0];
+    nextVisible.splice(to, 0, moved);
+    let cursor: number = 0;
+    const nextAll: ProviderRow[] = this.rows.slice();
+    for (let i = 0; i < nextAll.length; i++) {
+      if (this.inCurrentSegment(nextAll[i])) {
+        nextAll[i] = nextVisible[cursor];
+        cursor++;
+      }
+    }
+    this.rows = nextAll;
+    // 拖拽落定行序重排，展开行随重排移动观感错乱——一并收口
+    this.swipeGroup.collapse();
+    saveProviderOrder(nextAll.map((row: ProviderRow): string => row.id))
+      .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
+        this.getUIContext().getPromptAction().showToast({ message: '排序保存失败：' + (e as Error).message });
+      });
+  }
+
+  // 列表内容起始偏移（分段胶囊悬浮位下方——胶囊顶 = topPad − 蒙层渐隐边缘 8 + 胶囊高 40 + 28）
   private listStartOffset(): number {
     return Math.max(this.topPad - 8, 0) + SEGMENT_BAR_HEIGHT + 28;
   }
 
-  // 列表内容（坑39 红线：@BuilderParam content 位挂组件内 @Builder 方法）。外层 Stack
-  // 顶部对齐三层：标题栏更多菜单隐形锚点（几何 = 日志页「按钮下沿」公式，坑11；★ 右缘
-  // MORE_MENU_ANCHOR_RIGHT(16) 与标题栏键右避让 TITLE_BAR_EDGE_INSET(16) 恒同值——锚点右缘
-  // = ⋯ 热区右缘，两常量单边改动即菜单横偏）+ 内容
-  // 滚动层（List）+ 分段胶囊悬浮层（后声明在上）
+  // 左滑删除入口（RowSwipeDelete 单源）：按 id 查行走既有确认链；菜单「删除」退役后本入口为唯一删除路径
+  private askDeleteById(id: string): void {
+    const row: ProviderRow | undefined =
+      this.rows.find((item: ProviderRow): boolean => item.id === id);
+    if (row !== undefined) {
+      this.openDeleteConfirm(row);
+    }
+  }
+
+  @Builder
+  ProviderCard(row: ProviderRow) {
+    ProviderCardItem({
+      row: row,
+      // modelCount/balance 派生展示由卡内自拉——本装配不传派生值；刷新 = onPop/onShown → reload
+      // → 纪元键整卡重建
+      menuAnchorId: PROVIDER_CARD_MENU_ID_PREFIX + row.id,
+      onOpen: (tapped: ProviderRow): void => {
+        this.openDetail(tapped.id);
+      },
+      onToggle: (toggled: ProviderRow, isOn: boolean): void => {
+        this.toggleProvider(toggled, isOn);
+      },
+      onMenu: (menuRow: ProviderRow): void => {
+        this.openCardMenu(menuRow);
+      }
+    })
+  }
+
+  // 列表内容（坑39 红线：@BuilderParam content 位挂组件内 @Builder 方法）。外层 Stack 两层：
+  // 标题栏更多菜单隐形锚点（几何 = 日志页「按钮下沿」公式，坑11；★ MORE_MENU_ANCHOR_RIGHT(16)
+  // 与 TITLE_BAR_EDGE_INSET(16) 恒同值——单边改动即菜单横偏）+ 滚动层
   @Builder
   Content() {
     Stack({ alignContent: Alignment.Top }) {
@@ -388,28 +500,34 @@ export struct ProviderPage {
       .margin({ top: Math.max(this.topPad - TITLE_BAR_MASK_EXTRA_HEIGHT - MORE_MENU_BUTTON_BOTTOM_INSET, 0) })
       List({ space: CARD_SPACING }) {
         ForEach(this.visibleRows(), (row: ProviderRow) => {
-          // 条目层无圆角/拖拽属性（2026-08-30 反馈轮 6：拖拽移除后条目轮廓塑形与浮起
-          // 背板均无消费方——圆角由卡片自身承担；历史口径见坑2/坑10）
+          // ★ 条目层同挂 borderRadius(16)——**拖拽快照的矩形底靠它消**（真机实拍：长按后卡片圆角
+          // 处露出一圈极淡的直角蒙层；删了即复发）。条目宽 = 卡宽，两处圆角同值即逐边重合
           ListItem() {
-            ProviderCardItem({
-              row: row,
-              // （2026-08-30 自持有重构：modelCount/balance 派生展示改卡内自拉——本装配
-              // 不传派生值；刷新 = 菜单「刷新」键/子页 onPop → reload → 纪元键整卡重建）
-              menuAnchorId: PROVIDER_CARD_MENU_ID_PREFIX + row.id,
-              onOpen: (tapped: ProviderRow): void => {
-                this.openDetail(tapped.id);
+            // 行左滑删除层：卡满行宽（List padding 左右 16 收窄）→ cardInset 0；内置行不可删
+            //（数据层硬拦截——无删除能力即不挂左滑）；展开态不进键
+            RowSwipeDelete({
+              rowId: row.id,
+              swipeEnabled: !row.builtin,
+              group: this.swipeGroup,
+              cardInset: 0,
+              content: (): void => {
+                this.ProviderCard(row)
               },
-              onToggle: (toggled: ProviderRow, isOn: boolean): void => {
-                this.toggleProvider(toggled, isOn);
-              },
-              onMenu: (menuRow: ProviderRow): void => {
-                this.openCardMenu(menuRow);
+              onSwipeDelete: (rowId: string): void => {
+                this.askDeleteById(rowId);
               }
             })
           }
-          // 坑16：键含 cardEpoch——reload 成功纪元自增 → 整卡重建 → 卡内自拉重跑（替代
-          // push 页内实测不触发的 tick 广播）；行身份仍 = row.id（纪元全局同变不影响 diff）
+          .borderRadius(CARD_RADIUS)
+          // 坑16：键含 cardEpoch——reload 成功纪元自增 → 整卡重建 → 卡内自拉重跑；行身份仍 =
+          // row.id（纪元全局同变不影响 diff）
         }, (row: ProviderRow): string => row.id + '|' + this.cardEpoch)
+          // ★ 原位拖拽排序：官方 onMove（仅适用于 List）；离手上报 from/to = 可见行下标 →
+          // applyDragMove 槽位回填 + 落库。拖拽期间禁改数据源（官方红线：离手前改会让落位动画
+          // 错乱）——本回调只在离手后跑
+          .onMove((from: number, to: number): void => {
+            this.applyDragMove(from, to);
+          })
 
         if (this.rows.length === 0 && this.hintText === '') {
           ListItem() {
@@ -425,11 +543,10 @@ export struct ProviderPage {
             .width('100%')
             .padding(24)
             .backgroundColor(cardBg(this.appColorMode))
-            .borderRadius(16)
+            .borderRadius(CARD_RADIUS)
             .alignItems(HorizontalAlign.Start)
           }
         }
-        // 分段空态：有服务商但当前分段无（全部在另一段——开关归段后可能出现）
         if (this.rows.length > 0 && this.visibleRows().length === 0 && this.hintText === '') {
           ListItem() {
             Text(this.segIndex === 0 ? '暂无已启用的服务商' : '暂无已停用的服务商')
@@ -439,7 +556,7 @@ export struct ProviderPage {
               .width('100%')
               .padding(24)
               .backgroundColor(cardBg(this.appColorMode))
-              .borderRadius(16)
+              .borderRadius(CARD_RADIUS)
           }
         }
         if (this.hintText !== '') {
@@ -453,54 +570,49 @@ export struct ProviderPage {
       }
       .width('100%')
       .height('100%')
-      // ★ 顶/底留白走官方 contentStartOffset/contentEndOffset（offset 属滚动内容：卡片
-      // 上滚滑入分段胶囊背板与标题栏蒙层背后被模糊透出 = 双道光感；List padding 顶/底 =
-      // 视口缩进会裁掉内容 = 坑9 根因勿回迁。归零条款按显示区长度读、短内容偏移不归零
-      // ——坑9 勘误 2026-08-30 真机确认；起始偏移轮 9 起 = 分段胶囊悬浮位下方
-      //（listStartOffset）
+      // ★ 顶/底留白走官方 offset（属滚动内容，卡片可滑入胶囊背板与标题栏蒙层背后 = 双道光感；
+      // List padding 顶/底 = 视口缩进会裁掉内容 = 坑9 根因勿回迁）
       .contentStartOffset(this.listStartOffset())
       .contentEndOffset(this.bottomPad + 16)
-      // 左右 16 = 卡片水平居中收窄（反馈轮 2「卡不居中」修复）；顶/底禁用 padding（见上）
+      // 左右 16 = 卡片水平居中收窄；顶/底禁用 padding（见上）
       .padding({ left: 16, right: 16 })
-      // 短内容也上下可拖（反馈轮 2「上下无法滚动」修复——alwaysEnabled，会话列表同款；
-      // offset 轨下拖拽回弹时卡片短暂滑入蒙层、光感亦可见）+ 滚动条常关
+      // ★ 关裁剪（核心一行）：List 的水平 padding = 视口缩进，长按拖拽浮起的卡片会被这圈边界削成
+      // 直边（坑10 根因），官方对 onMove 的预览无旋钮（dragPreview 只对 onDragStart 生效）——解法
+      // 只在几何：关掉列表自身裁剪。代价面 = 内容与回弹也会越出列表边界（上缘出屏、下缘落避让区、
+      // 左右为屏缘）。
+      // ★ 勿回删本行：删掉即复发坑10
+      .clip(false)
+      // 短内容也上下可拖（alwaysEnabled，会话列表同款）+ 滚动条常关
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .scrollBar(BarState.Off)
-
-      // ── 分段胶囊悬浮固定层（Stack 顶层后声明在上；已启用/已停用——2026-08-30 反馈
-      // 轮 9 领导指令，日志页/详情页成熟实现同款：官方 CapsuleSegmentButtonV2 背板沉浸
-      // 材质 colorInvert，内容上滚从胶囊背后穿过模糊透出）；位置 = 标题栏下沿 + 蒙层
-      // 渐隐边缘 8vp（LogPageContent 同款）──
-      Column() {
-        SegmentBar({
-          items: this.segItems,
-          selectedIndex: $segIndex
-        })
-      }
-      .width(CARD_PANEL_WIDTH)
-      .margin({ top: Math.max(this.topPad - 8, 0) })
+      // 滚动开始即收口行左滑展开态（会话列表/五库同口径）
+      .onScrollStart((): void => {
+        this.swipeGroup.collapse();
+      })
     }
   }
 
   build() {
     PageShell({
       title: SETTING_TITLE_PROVIDER,
-      // 标题栏两键（★ 2026-09-22 决明「新建键移出与更多形成双键胶囊，参考消息页实现」）：
-      // 〔＋新建服务商〕= push 详情页新建态 /〔⋯更多〕= 弹菜单（刷新 / 分享配置 / 导入配置 /
-      // 排序）。HDS 路径 = 官方标题栏自定义区覆盖层合并胶囊〔＋|⋯〕（键件 = ProviderTitleBarKeys，
-      // menuHds 传 null，keepStackTitle = true 保住主标题「服务商管理」）；回退路径 =
-      // 官方菜单数组两键（menuNav，形态与覆盖层不同 = 无 stackBuilder 机制所限）
+      // 标题栏两键：〔＋新建服务商〕= push 详情页新建态 /〔⋯更多〕= 弹菜单（分享配置 / 导入配置 /
+      // 价格模板）。标题栏 = 覆盖层合并胶囊（键件 = ProviderTitleBarKeys，menuHds 传 null，
+      // keepStackTitle = true 保主标题）
       menuHds: null,
       titleBarStack: (): void => {
         this.TitleBarKeys();
       },
       keepStackTitle: true,
-      menuNav: providerMoreMenuNav((): void => {
-        this.openAdd();
-      }, (): void => {
-        this.openTitleMenu();
-      }),
-      // 坑16·2026-08-30：仍不传 onShown（页显重拉无需求——菜单键/onPop 已覆盖回链）
+      // 标题栏下方带承载（分段胶囊经官方 bottomBuilder 承载）
+      titleBarBottom: (): void => {
+        this.TopSegmentBand();
+      },
+      // onShown 兜底重拉：每次页面显示含 pop 返回即重拉（坑25「onShown 是可靠姿势」；与 onPop
+      // 两链并存 + reload 防重入门——保存返回双通道只执行一次，见 reloading 注释）。编辑页自动
+      // 查余额只写库不 pop result，裸返回的余额数字联动归本通道
+      onShown: (): void => {
+        this.reload();
+      },
       content: (): void => {
         this.Content()
       }

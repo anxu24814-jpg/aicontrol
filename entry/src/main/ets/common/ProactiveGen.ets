@@ -1,77 +1,62 @@
-// 主动消息服务（2026-09-12 主动消息第一笔「触发链底层」，任务书-主动消息-20260912；
-// 方案档 docs/方案-主动消息-20260912.md——RikkaHub「场景描述一次请求」骨架 + astrbot
-// 「空闲检测 + 随机抖动」时机策略）：进程级独立域，顶层函数模块，不持页面/组件引用、
-// 不触 UI，全吞错误 hilog 留痕；呈现 = 落库后 bump SESSION_LIST_RELOAD_KEY + 写呈现层
-// 两键（笔 2：未读红点 PROACTIVE_UNREAD_CONV_KEY + 横幅驱动 PROACTIVE_BANNER_KEY——红点
-// 随列表刷新与键订阅自然上屏，横幅由 Index 根 Stack 常驻 ProactiveBanner 消费；系统通知
-// 归后台方案档，会话页实时上屏不做〔§1.2〕）。
+// 主动消息服务：进程级独立域顶层函数模块，不持页面/组件引用、不触 UI，全吞错误
+// hilog 留痕；呈现 = 落库后 bump SESSION_LIST_RELOAD_KEY + 写呈现层两键（未读红点
+// PROACTIVE_UNREAD_CONV_KEY + 横幅 PROACTIVE_BANNER_KEY——红点随列表刷新与键订阅上屏，
+// 横幅由 Index 根 Stack 常驻 ProactiveBanner 消费；系统通知与会话页实时上屏不做）。
 // · 触发链：EntryAbility.onForeground 写 APP_FOREGROUND_KEY 后调 onAppForeground()
-//   （fire-and-forget）→ 冷启动闸（PREF_LOADED_KEY 未放行 = 首拍早于 loadContent 回调
-//   persistProp 注册区，直读开关必得缺省会把开着的开关误判关闭吞掉首拍——2026-09-13
-//   冷启动排期笔，决明拍板「冷启动也应加入排期，用户不会专门试挂后台」：挂起待
-//   notifyProactiveKeysRegistered 放行补排，ProviderPresetSeed 门闩同形态）→ 按冷却期
-//   排一次 setTimeout 检查（单发，非 setInterval——性能红线；冷却未过排到冷却期满的
-//   时刻，已过排随机静默期——1 分钟至用户档上限，上限滑轨可调默认 5 分钟）→ 到点
-//   runProactiveCheck() 走守卫序 → 解析归属
-//   助手（当前助手）→ 组装请求 → requestTitleText → 建新会话落库（标题 + 横幅 + 红点）
-//   → 广播 → logTaskUsage → 写 PROACTIVE_SENT_AT_KEY。
-// · 守卫序六条（全过才发，任一不过 hilog 留痕即返，无静默落库路径）：①总开关开
-//   ②应用在前台（运行态键）③当日已发 < 每日最多档（PROACTIVE_SENT_AT_KEY 滚动数组按
-//   toLocalDayKey 计当日条数，上限读 PROACTIVE_DAILY_LIMIT_KEY 用户可调）④距最近
-//   一次发送 ≥ 冷却间隔档（now - max(数组)）⑤归属助手合格（当前助手 ACTIVE_ASSISTANT_KEY
-//   解析，空/行删回退内置默认助手——发送链「全局默认」兜底同口径；memoryInject 关 =
-//   不发话，控制台助手经此守卫自然排除，无显式特判）⑥防打扰（最近活跃会话 updatedAt
-//   距 now 不足 2 分钟 = 用户正在和任何助手聊天，本轮跳过——原「目标会话活跃窗口」
-//   在新会话形态下的语义延续，改判全局最近活跃）。★ 原④免打扰时段（23:00~8:00）已撤——2026-09-12
-//   决明拍板「取消 23~8 点不触发的限制」：触发源只有回前台一条，夜间触发必是用户夜间
-//   在用应用，夜间消息可接受。
-// · ★ 建新会话形态（2026-09-13 决明拍板，替代原「最近活跃已有会话」形态——真机首条
-//   成功后决明指令「我希望是建新会话」；三项拍板 = AskUserQuestion 一道收敛）：归属 =
-//   当前选择的助手；内容 = 只靠长期记忆（旧会话上下文方向待「助手跨会话读取记忆」
-//   机制落地后再接，届时回本域扩 buildProactivePrompt 历史段）；标题 = 首句内容自动
-//   截断（20 字符惯例，titleSource='' 占位态——用户后续在会话里发言时标题链可再升级）。
-//   会话行 = 懒建语义消费（nextMessageId('conv') 本地生成 id → insertMessage 带
-//   assistantId 建 ChatDb.ensureConversation 行，零新增建行函数）。
-// · 时机语义（任务书 §二.2 拍板）：静默期到点时应用已后台/冻结则本轮自然流失（下次
-//   onForeground 重排）；守卫不过同样流失，不追赶不积攒；开启开关本身不触发任何立即
-//   发送；进程被杀后不触发，下次打开按冷却期补判。
-// · 关停与触发源（2026-09-12 决明拍板「不做点击让 agent 发消息」）：★只有定时自动链
-//   一个触发源——无 sendProactiveNow 类手动触发导出、页内无触发键；开关行关闭时调
-//   cancelProactiveSchedule() 清已排句柄即时生效（切后台不必清句柄——守卫②兜住误
-//   触发，清句柄只用于用户关开关）；已落消息不回收。
-// · 请求形态（★ 一次请求成形，不两段式）：system 段 = 系统提示词（ChatPromptState 同
-//   链解析）+ 记忆块（composeMemoryBlock 30 条/2000 字双封顶，与发送链同值常量本域
-//   自持——ChatSendCtrl 侧为组件私有禁跨向 import）+ 场景段（当前本地时间/「以助手身份
-//   主动开启一段新对话」约束）；★ 新会话零历史：上下文 = 空（不读任何旧会话消息——
-//   决明拍板「只靠长期记忆」，旧会话方向见「建新会话形态」注）。★ 实查勘误（任务书
-//   §1.2 补）：requestTitleText 传输层吃单串 prompt（TitleApi.buildTitleBody 固定单条
-//   user 消息），消息列表不可直传——本域先用 RequestInject 三件套在消息列表语义上完成
-//   组装（注入位置与顺序红线与发送链同构，断言可钉），末尾 toProactivePrompt 序列化为
-//   「system 前导段」结构化文本单串再入通道（TitleApi 零改动）。
-// · 组装顺序红线（sse-assert/断言族同源）：appendSystemMemory 必须在
-//   composeSendMessages **之后**调用——后者 system 分支遇「历史已含 system」整体跳过，
-//   提前调用会把会话/助手/系统提示词吞掉；场景段（appendSystemScene）在
-//   appendSystemMemory 之后并入 system 尾部。
-// · 模型与计费：端点复用记忆两键（resolveMemoryModel——未配置 = 功能未启用，与记忆
-//   整理同口径不回退标题模型）；用量 purpose='proactive' 自动进费用统计页分组；
-//   输出上限不设（PROACTIVE_MAX_OUTPUT = 0 对齐记忆链拍板——2026-09-12 真机三轮实锤
-//   200 硬帽掐死思考模型思考段致正文恒空，见常量注）；失败退避重试照 MemoryGen
-//   （2/4/8s ×3，仅 isRetryable 状态码），请求失败不落任何消息（P0-1，禁静默半截入库）。
-// · ★ common → components 跨向 import 两处（ChatPromptState / SESSION_LIST_RELOAD_KEY）
-//   为任务书 §1.1/§三.1 钦点：前者是「load 纯 DB 解析链非组件态，模块级自持单实例
-//   串行复用」的既定设计（ChatSendCtrl 每实例一持是组件域口径，本域进程级一持），
-//   后者是广播键单一来源禁裸字符串——均只取符号不触 UI，登记在案。
+//   （fire-and-forget）→ 冷启动闸（坑17：首拍早于 persistProp 注册区，见
+//   pendingForegroundSchedule 注；决明拍板「冷启动也应加入排期」）→ 按冷却期排一次
+//   setTimeout 检查（单发非 setInterval——性能红线；冷却未过排到期满时刻，已过排随机
+//   静默期 1 分钟至用户档上限）→ 到点 runProactiveCheck() 守卫序 → 解析归属助手 →
+//   组装请求 → requestTitleText → 建新会话落库 → 广播 → logTaskUsage → 写
+//   PROACTIVE_SENT_AT_KEY。
+// · 守卫序六条（全过才发，任一不过留痕即返，无静默落库路径）：①总开关开 ②应用在前台
+//   （运行态键）③当日已发 < 每日最多档（PROACTIVE_SENT_AT_KEY 滚动数组按 toLocalDayKey
+//   计当日条数，上限用户可调）④距最近一次发送 ≥ 冷却间隔档（now - max(数组)）
+//   ⑤归属助手合格（当前助手 ACTIVE_ASSISTANT_KEY 解析，空/行删回退内置默认助手——
+//   发送链「全局默认」兜底同口径；memoryInject 关 = 不发话）⑥防打扰（最近活跃会话
+//   updatedAt 距 now 不足 2 分钟 = 用户正在和任何助手聊天，本轮跳过——全局最近活跃
+//   语义）。★ 原免打扰时段（23:00~8:00）已撤——决明拍板「夜间触发必是用户夜间在用
+//   应用，夜间消息可接受」。
+// · ★ 建新会话形态（决明拍板，替代原「最近活跃已有会话」形态）：归属 = 当前选择的
+//   助手；内容 = 只靠长期记忆（旧会话上下文待跨会话记忆机制落地后再接）；标题 = 首句
+//   20 字符截断（titleSource='' 占位态——用户后续发言时标题链可再升级）；会话行 =
+//   懒建语义（nextMessageId('conv') 本地生成 id，请求成功才落库建行）。
+// · 时机语义：静默期到点已后台/冻结或守卫不过则本轮流失（下次 onForeground 重排），
+//   不追赶不积攒；开启开关本身不触发立即发送；进程被杀后不触发。
+// · 关停与触发源（决明拍板「不做点击让 agent 发消息」）：★只有定时自动链一个触发源
+//   ——无手动触发导出、页内无触发键；开关关闭即时生效（cancelProactiveSchedule，切
+//   后台不必清句柄——守卫②兜住）；已落消息不回收。
+// · 请求形态（★一次请求成形，不两段式）：system 段 = 系统提示词（ChatPromptState 同链
+//   解析）+ 记忆块（composeMemoryBlock 双封顶，与发送链同值常量本域自持——ChatSendCtrl
+//   侧组件私有禁跨向 import）+ 场景段；★ 新会话零历史（决明拍板「只靠长期记忆」）。
+//   ★ 勘误：requestTitleText 传输层吃单串 prompt（TitleApi.buildTitleBody 固定单条
+//   user 消息），消息列表不可直传——先用 RequestInject 三件套在消息列表语义上组装
+//   （注入位置与顺序红线与发送链同构，断言可钉），末尾 toProactivePrompt 序列化为
+//   单串再入通道（TitleApi 零改动）。
+// · 组装顺序红线（单源细则见 buildProactivePrompt 注）：appendSystemMemory 必须在
+//   composeSendMessages 之后，提前调用会把系统提示词吞掉；场景段在其后并入 system 尾。
+// · 模型与计费：端点复用记忆两键（resolveMemoryModel——未配置 = 功能未启用，不回退
+//   标题模型）；用量 purpose='proactive' 进费用统计分组；输出上限不设（对齐记忆链
+//   拍板，见常量注）；失败退避重试照 MemoryGen（2/4/8s ×3，仅可重试状态码），请求
+//   失败不落任何消息（P0-1 禁静默半截入库）。
+// · common → components 跨向 import 已清零（ChatPromptState 迁 common/chat/、广播键
+//   迁 AppBroadcastKeys）——本域对 components 层零 import；单实例语义与进程级一持
+//   不变（ChatSendCtrl 每实例一持是组件域口径）。
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  ConversationRow, insertMessage, isReady, nextMessageId, nextRowCreatedAt,
+  ConversationRow, isReady, nextMessageId, nextRowCreatedAt,
   queryConversations, setConversationTitle
 } from './store/ChatDb';
-import { nextRowSeq } from './store/MessageSeqDb';
+import { bornGraphConversation } from './chat/ChatContextSource';
+import { ORIGIN_SEND, prepareRun, commitRunUnit, finishRun,
+  RUN_STATUS_FINISHED, RUN_STATUS_RUNNING } from './store/MessageBranchDb';
+import { sharedRdbStore } from './store/ChatDb';
 import {
-  ACTIVE_ASSISTANT_KEY, ASSISTANT_DEFAULT_ID, AssistantRow, queryAssistant,
-  queryAssistants
+  ACTIVE_ASSISTANT_KEY, ASSISTANT_DEFAULT_ID, AssistantRow,
+  queryAssistant, queryAssistants
 } from './store/AssistantDb';
-import { requestTitleText, TitleRequestResult } from './providers/TitleApi';
+import { READ_TIMEOUT_MS, requestTitleText, resolveFunctionalThinking,
+  TitleRequestResult } from './providers/TitleApi';
 import { TitleEndpoint, resolveTitleEndpoint, isRetryable } from './TitleGen';
 import { loadPoolKey } from './store/KeyStore';
 import { logTaskUsage } from './store/UsageStatsDb';
@@ -80,48 +65,35 @@ import { queryAssistantMemories, queryMemories, MEMORY_SCOPE_ASSISTANT } from '.
 import { composeMemoryBlock, MemoryEntryItem } from './MemoryText';
 import { isMemoryEnabled, MemoryModelPick, resolveMemoryModel } from './MemoryGen';
 import {
-  appendSystemMemory, composeSendMessages, PromptInjectConfig
+  appendSystemBlock, composeSendMessages, PromptInjectConfig
 } from './providers/RequestInject';
-import { ChatPromptState } from '../components/chat/ChatPromptState';
-import { SESSION_LIST_RELOAD_KEY } from '../components/chat/ChatSessionList';
+import { ChatPromptState } from './chat/ChatPromptState';
+import { PROACTIVE_UNREAD_CONV_KEY, SESSION_LIST_RELOAD_KEY } from './AppBroadcastKeys';
 import { PREF_LOADED_KEY } from './AppPreferences';
 
+import {
+  PROACTIVE_DAILY_LIMIT_DEFAULT, PROACTIVE_DAILY_LIMIT_KEY, PROACTIVE_DAILY_LIMIT_OPTIONS,
+  PROACTIVE_ENABLED_KEY, PROACTIVE_INTERVAL_DEFAULT, PROACTIVE_INTERVAL_HOURS_KEY,
+  PROACTIVE_INTERVAL_OPTIONS, PROACTIVE_QUIET_MAX_DEFAULT, PROACTIVE_QUIET_MAX_KEY,
+  PROACTIVE_QUIET_MAX_OPTIONS } from './ProactiveConfig';
 const DOMAIN: number = 0x71C4;
 const TAG: string = 'ProactiveGen';
 
-// ── 行为常量（除三个频次档外全部写死不进 UI；任务书 §三.1；静默期上限滑轨化见下）──
-// 间隔档（小时，ProactivePage 滑轨八档——2026-09-12 决明指令弹窗改卡内滑轨，数组序 =
-// 滑轨档序，滑轨走索引映射 0~7；同日频次扩域笔加密短档 1/2/3/6/12，决明「按你的来」）
-export const PROACTIVE_INTERVAL_OPTIONS: number[] = [1, 2, 3, 4, 6, 8, 12, 24];
-export const PROACTIVE_INTERVAL_DEFAULT: number = 24;
-// 每日最多档（条，2026-09-12 决明追加「可用户设置发消息频次」——守卫③读键非写死；
-// 同日频次扩域笔扩连续域 1~10 条：滑轨直映 + 编辑键精确输入，档位域数组承载白名单
-// 校验域，resolveDailyLimit 与页面守卫同口径）
-export const PROACTIVE_DAILY_LIMIT_OPTIONS: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-export const PROACTIVE_DAILY_LIMIT_DEFAULT: number = 1;
-// 回前台静默期上限档（分钟，2026-09-13 决明「主动消息页增加滑轨，支持用户自行控制，
-// 类似已有的两个」——第三滑轨：原写死 1~5 分钟随机窗口的上限开放为八档非等距（数组序
-// = 滑轨档序，索引映射同间隔档），下限 1 分钟保持写死；默认 5 = 与原行为逐字节一致
-// 零回归。档位域数组同承载白名单校验域，resolveQuietMaxMinutes 与页面守卫同口径）
-export const PROACTIVE_QUIET_MAX_OPTIONS: number[] = [1, 2, 3, 5, 10, 15, 20, 30];
-export const PROACTIVE_QUIET_MAX_DEFAULT: number = 5;
+// ── 行为常量（除三个频次档外全部写死不进 UI；三条档位域数组与默认值外迁
+//    ./ProactiveConfig 叶子——与设置白名单 ToolPref 共享以切断反向依赖；KEEP 由档位
+//    末元派生，求值序天然安全）──
 // 回前台随机静默期下限（写死不进 UI——静默期到点要求仍在前台（守卫②），下限防回前台
-// 即刻被搭话；上限档可调见上，span = 上限 − 下限恒 ≥ 0〔档位域最小 1 = 下限〕。
-// 2026-09-12 频次扩域笔曾把原 10~30 分钟窗口缩为 1~5：长窗口是实际触发率第一瓶颈——
-// 该调优随上限滑轨化移交用户自担，原「真机观察观感过急时回调本档」回改条件作废）
+// 即刻被搭话；span = 上限 − 下限恒 ≥ 0，档位域最小 1 = 下限）
 const PROACTIVE_FOREGROUND_QUIET_MIN_MS: number = 1 * 60_000;
-// 防打扰窗口（最近活跃会话最新消息距 now 不足本窗口 = 用户正在和任何助手聊天，本轮
-// 跳过——原「目标会话活跃窗口」守卫在建新会话形态下的语义延续，改判全局最近活跃）
+// 防打扰窗口（最近活跃会话最新消息距 now 不足本窗口 = 用户正在聊天，本轮跳过——
+// 全局最近活跃语义）
 const PROACTIVE_ACTIVE_WINDOW_MS: number = 2 * 60_000;
-// 输出上限（0 = 不发 max_tokens 字段 = 模型按自身上限输出——2026-09-12 决明拍板对齐
-// 记忆链「不设思考预算上限，正文靠提示词约束」：真机三轮实锤 deepseek-flash 思考模型
-// completion 恰 200 全烧思考段、content 恒空 →「标题响应缺少正文」终败且 200 不可重试；
-// 正文长度由场景段「一两句」约束 + 横幅截断与空文本拦截兜底，不靠 max_tokens 卡。
-// anthropic 方言 0 = 必填兜底 131072（RequestCompose 三态；上限较小的老模型可能 400
-// 属既有留档行为，与记忆链同形）
+// 输出上限（0 = 不发 max_tokens 字段——决明拍板对齐记忆链「不设思考预算上限，正文靠
+// 提示词约束」：真机实锤思考模型 200 硬帽全烧思考段致正文恒空；正文长度由场景段 +
+// 截断与空文本拦截兜底；anthropic 方言 0 = 必填兜底 131072，与记忆链同形）
 const PROACTIVE_MAX_OUTPUT: number = 0;
-// 记忆注入双封顶（与 ChatSendCtrl.MEMORY_INJECT_MAX_COUNT/MAX_CHARS 同值——组件私有
-// 常量禁跨向 import，本域自持同值；两处同改）
+// 记忆注入双封顶（与 MemoryText.MEMORY_INJECT_MAX_COUNT/MAX_CHARS 同值——本域自持同值，
+// 两处同改）
 const PROACTIVE_MEMORY_MAX_COUNT: number = 30;
 const PROACTIVE_MEMORY_MAX_CHARS: number = 2000;
 // 退避重试（MemoryGen 同参数）：2^(n+1) 秒 = 2/4/8 共 3 次，仅可重试状态码
@@ -129,65 +101,47 @@ const MAX_PROACTIVE_RETRY: number = 3;
 const RETRY_BASE_SECONDS: number = 2;
 const MS_PER_HOUR: number = 3_600_000;
 
-// ── 持久与运行态键（persistProp 注册在 EntryAbility.onWindowStageCreate 回调内
-//    坑17 区，插入位置 = 全部既有 persistProp 之后、PREF_LOADED_KEY 置 1 之前——该键是
-//    「持久键注册完毕」闸信号；AppPreferences 两表登记见该文件—— SENT_AT 进排除表
-//    〔本机发送时间戳与使用痕迹四键同族〕；APP_FOREGROUND_KEY 非持久）──
-// 主动消息总开关（默认 false——用户显式开启才产生后台请求）
-export const PROACTIVE_ENABLED_KEY: string = 'proactiveEnabled';
-// 冷却间隔档（小时；值恒在 PROACTIVE_INTERVAL_OPTIONS 内，脏持久值回默认——
-// resolveIntervalHours 兜底）
-export const PROACTIVE_INTERVAL_HOURS_KEY: string = 'proactiveIntervalHours';
-// 每日最多档（条；值恒在 PROACTIVE_DAILY_LIMIT_OPTIONS 内，脏持久值回默认——
-// resolveDailyLimit 兜底）
-export const PROACTIVE_DAILY_LIMIT_KEY: string = 'proactiveDailyLimit';
-// 回前台静默期上限档（分钟；值恒在 PROACTIVE_QUIET_MAX_OPTIONS 内，脏持久值回默认——
-// resolveQuietMaxMinutes 兜底，2026-09-13 静默期滑轨笔）
-export const PROACTIVE_QUIET_MAX_KEY: string = 'proactiveQuietMaxMinutes';
-// 发送时刻滚动数组（毫秒时间戳升序；★为什么是数组：每日上限可调（1~10）后单时间戳
-// 无法算当日已发数——一键兼两用：冷却判据 = now - max(list) ≥ 间隔档；当日计数 =
-// list 内 toLocalDayKey === 今天 的条数。写入后滚动裁到最近 PROACTIVE_SENT_AT_KEEP 条
-// 〔= 每日上限最大值，有界红线〕；数组型持久键先例 EDIT_CROP_STATE_KEY/SEARCH_HISTORY_KEY）
+// ── 持久与运行态键（persistProp 注册在 EntryAbility.onWindowStageCreate 回调坑17 区，
+//    插入位置 = 全部既有 persistProp 之后、PREF_LOADED_KEY 置 1 之前——该键是「持久键
+//    注册完毕」闸信号；四枚持久键已外迁 ./ProactiveConfig，ToolPref / ProactivePage /
+//    EntryAbility 三处消费方直引叶子；SENT_AT 进 AppPreferences 排除表〔与使用痕迹
+//    四键同族〕；APP_FOREGROUND_KEY 非持久）──
+// 发送时刻滚动数组（毫秒时间戳升序；★为什么是数组：每日上限可调后单时间戳无法算当日
+// 已发数——一键兼两用：冷却判据 = now - max(list) ≥ 间隔档；当日计数 = list 内
+// toLocalDayKey === 今天 的条数。写入后滚动裁到最近 KEEP 条〔有界红线〕）
 export const PROACTIVE_SENT_AT_KEY: string = 'proactiveSentAt';
-// 滚动保留条数（数据有界：裁剪上界 = 每日档最大值——上限调小后旧时间戳仍在窗口内
-// 的边界自然正确，上限调大也有历史可数）
+// 滚动保留条数（= 每日档最大值：上限调小旧时间戳边界自然正确，调大有历史可数）
 const PROACTIVE_SENT_AT_KEEP: number =
   PROACTIVE_DAILY_LIMIT_OPTIONS[PROACTIVE_DAILY_LIMIT_OPTIONS.length - 1];
 // 应用前台运行态键（非持久，勿 persistProp——assert-proactive 钉在案）
 export const APP_FOREGROUND_KEY: string = 'appForeground';
-// ── 呈现层三键（2026-09-12 主动消息第二笔「应用内呈现层」）──
-// 未读会话持久键（string，默认 ''）：落库时写目标会话 id，用户进入该会话页
-// onPageShown 清空（ChatPage）——本机未读痕迹与 proactiveSentAt 同族，进 AppPreferences
-// 排除表不随备份走；消费方 = ChatSessionList 红点（@StorageProp 只读订阅）
-export const PROACTIVE_UNREAD_CONV_KEY: string = 'proactiveUnreadConv';
-// 横幅驱动键（运行态非持久，勿 persistProp）：值 = 三元组 JSON 串（toBannerPayload），
-// '' = 无横幅；消费方 = ProactiveBanner @StorageProp @Watch——键变即重挂（后到覆盖前条，
-// 不排队不堆叠）；切后台期间残留属已知限制（回前台重挂重新计时，任务书 §四）
+// ── 呈现层三键 ──
+// 未读键已迁零 import 叶子 ./AppBroadcastKeys（消费方 ChatSessionList 在 components 侧，
+// 定义位中性化消除反向依赖）；键名与语义逐字不变。
+// 横幅驱动键（运行态非持久，勿 persistProp）：值 = 载荷 JSON 串（convId/name/text +
+// 自增 seq——序号保证同内容重复横幅也触发 @Watch），'' = 无横幅；消费方 = ProactiveBanner
+// @StorageProp @Watch——键变即重挂（后到覆盖前条不排队）；切后台期间残留属已知限制
+//（回前台重挂重新计时）
 export const PROACTIVE_BANNER_KEY: string = 'proactiveBanner';
 // 横幅点击直达命令键（运行态非持久）：值 = convId + '#' + 自增序号（序号保证同会话重复
-// 命令也触发 @Watch——其只在值变化时回调）；发布方 = ProactiveBanner 点击，消费方 =
-// HomeNavigation @Watch → openSession（CONSOLE_ASK_CMD_KEY 命令键同族范式）
+// 命令也触发 @Watch）；发布方 = ProactiveBanner 点击，消费方 = HomeNavigation @Watch →
+// openSession（命令键同族范式）
 export const PROACTIVE_OPEN_CMD_KEY: string = 'proactiveOpenCmd';
 
 // 待排检查的 setTimeout 句柄（重排前必清旧——成对释放红线；到点自清 null）
 let checkTimer: number | null = null;
 // 检查在途标记（防 onForeground 高频重入双跑全链）
 let checkRunning: boolean = false;
-// 冷启动首拍挂起标记（2026-09-13 冷启动排期笔）：onForeground 首拍通常早于 loadContent
-// 回调（persistProp 注册区——坑 17 落位），总开关键尚未注册，直读会把开着的开关误判为
-// 关吞掉首拍排程；闸未放行时置位挂起，notifyProactiveKeysRegistered 放行后补排，放行前
-// 再次回前台幂等置位。loadContent 失败路径（err.code 早退）永不放行 = 标志随进程悬置：
-// 页面未加载应用不可用、排程语义无损，下次启动重判——无残留定时器无泄漏面
+// 冷启动首拍挂起标记：onForeground 首拍通常早于 loadContent 回调（persistProp 注册区
+// ——坑17 落位），总开关键尚未注册，直读会把开着的开关误判为关吞掉首拍；闸未放行时
+// 置位挂起，notifyProactiveKeysRegistered 放行后补排，放行前再次回前台幂等置位。
+// loadContent 失败路径（err.code 早退）永不放行 = 标志随进程悬置：页面未加载应用不可
+// 用、排程语义无损——无残留定时器无泄漏面
 let pendingForegroundSchedule: boolean = false;
-// 提示词解析域（任务书 §1.1：模块级自持单实例全程串行复用——load 是纯 DB 解析链，
-// 组件无关；禁 new 多实例）
-// ★ 2026-09-13 自检轮：改**惰性构建**（原为模块级 `const promptState = new ChatPromptState()`）。
-// 顶层构造要求「本模块体求值那一刻 ChatPromptState 模块体已求值完」——而 ChatPromptState 正在
-// 本域的 import 环内（本域 → ChatPromptState → ToolTypes → ToolPref → 回本域），该前提现今只由
-// 「谁先访问」维持：实查全仓 importer 仅本文件与 ChatSendCtrl 两处，后者先 import ToolTypes
-// 才迂回走通本域；任一新模块先于本域引 ChatPromptState，即重演顶层读未初始化绑定（坑50 家族
-// ——进页/启动 JsError 闪退）。改首次取用时构造 + 缓存复用：单实例语义不变（禁 new 多实例照旧），
-// 求值序与本域彻底解耦（ToolPref.setPrefWhitelist 同法）
+// 提示词解析域：单实例全程串行复用（load 是纯 DB 解析链，组件无关；禁 new 多实例）。
+// ★ 惰性构建（勿搬回模块顶层 const）：顶层构造要求「本模块体求值完」——本域顶层另有
+// 派生表达式，模块级构造会把求值序变成前置条件，易重演顶层读未初始化绑定的坑50 家族
+//（进页/启动 JsError 闪退）；原 import 环已解散，惰性构建仍保留防回游
 let promptStateCache: ChatPromptState | null = null;
 function promptState(): ChatPromptState {
   if (promptStateCache === null) {
@@ -196,17 +150,17 @@ function promptState(): ChatPromptState {
   return promptStateCache;
 }
 
-// 组装中间形态（与 RequestInject.InjectChatMessage 同构：role/content 两必填字段，
-// 结构兼容直穿 composeSendMessages/appendSystemMemory——后者未导出，
-// 调用方同构类型直穿是 ChatSendCtrl 既有先例；序列化只消费 role/content）
+// 组装中间形态（与 RequestInject.InjectChatMessage 同构：role/content 两必填字段，结构
+// 兼容直穿 composeSendMessages/appendSystemBlock——后者未导出，同构类型直穿是
+// ChatSendCtrl 既有先例；序列化只消费 role/content）
 interface ProactiveHistoryMsg {
   role: string;
   content: string;
 }
 
 // 归属助手载体（resolveProactiveOwner 产出——建新会话形态下无目标会话，横幅显示名 =
-// 归属助手名 owner.name）；memoryScope（v35，2026-09-20 助手级记忆）随行携带——记忆块
-// 选库判据（'assistant' = 该助手自己的库，'global' = 全局库），与注入/沉淀三链同口径
+// owner.name）；memoryScope 随行携带——记忆块选库判据（'assistant' = 该助手自己的库，
+// 'global' = 全局库），与注入/沉淀链同口径
 interface ProactiveOwner {
   assistantId: string;
   assistantName: string;
@@ -229,8 +183,7 @@ export function resolveIntervalHours(): number {
   return PROACTIVE_INTERVAL_DEFAULT;
 }
 
-// 生效每日最多档（UI 滑轨限定 1~10 连续域；脏持久值回默认 1——守卫③读键非写死，
-// 2026-09-12 决明「可用户设置发消息频次」，同日频次扩域笔自 1/2/3 三档扩宽）
+// 生效每日最多档（UI 滑轨限定 1~10 连续域；脏持久值回默认 1——守卫③读键非写死）
 export function resolveDailyLimit(): number {
   const stored: number = AppStorage.get<number>(PROACTIVE_DAILY_LIMIT_KEY) ??
     PROACTIVE_DAILY_LIMIT_DEFAULT;
@@ -242,8 +195,7 @@ export function resolveDailyLimit(): number {
   return PROACTIVE_DAILY_LIMIT_DEFAULT;
 }
 
-// 生效静默期上限档（分钟；UI 滑轨限定八档非等距，脏持久值回默认 5——排程读键非写死，
-// 2026-09-13 静默期滑轨笔；与 resolveIntervalHours 同构白名单兜底）
+// 生效静默期上限档（分钟；UI 滑轨限定八档非等距，脏持久值回默认 5；白名单兜底同上）
 export function resolveQuietMaxMinutes(): number {
   const stored: number = AppStorage.get<number>(PROACTIVE_QUIET_MAX_KEY) ??
     PROACTIVE_QUIET_MAX_DEFAULT;
@@ -255,7 +207,7 @@ export function resolveQuietMaxMinutes(): number {
   return PROACTIVE_QUIET_MAX_DEFAULT;
 }
 
-// 发送时刻数组现读（持久层 number[] 一维数组；缺省回 []——从未发过）
+// 发送时刻数组现读（缺省回 []——从未发过）
 function sentAtList(): number[] {
   return AppStorage.get<number[]>(PROACTIVE_SENT_AT_KEY) ?? [];
 }
@@ -271,8 +223,7 @@ function maxSentAt(list: number[]): number {
   return max;
 }
 
-// 压入发送时刻并滚动裁剪（升序保留最近 PROACTIVE_SENT_AT_KEEP 条——数据有界红线；
-// 裁剪上界 = 每日档最大值，与档位联动见常量注释）
+// 压入发送时刻并滚动裁剪（升序保留最近 KEEP 条——数据有界红线）
 function pushSentAt(at: number): void {
   const list: number[] = sentAtList();
   list.push(at);
@@ -282,23 +233,31 @@ function pushSentAt(at: number): void {
   AppStorage.setOrCreate<number[]>(PROACTIVE_SENT_AT_KEY, list);
 }
 
-// ── 呈现层载荷与命令键工具（笔 2；写侧 = 本域落库尾段与 ProactiveBanner 点击，读侧 =
+// ── 呈现层载荷与命令键工具（写侧 = 本域落库尾段与 ProactiveBanner 点击，读侧 =
 //    ProactiveBanner / HomeNavigation——分隔符与 JSON 结构单源在本域）──
 
-// 横幅载荷三元组（单键 JSON 串原子更新，防三键竞态半态；解析侧容错回 null = 不显示）
+// 横幅载荷（单键 JSON 串原子更新，防多键竞态半态；解析侧容错回 null = 不显示）。
+// seq = 进程级自增序号——@Watch 只在值变化时回调，7 秒自动收起后键仍持旧值，同内容
+// 重复横幅无序号会写同串静默吞掉
 export interface ProactiveBannerPayload {
   convId: string;
   name: string;
   text: string;
+  seq: number;
 }
 
-// 序列化（落库尾段调用：助手名 + 首行截断文本）
+// 序列化（助手名 + 首行截断 + 自增 seq：读前值 +1，脏值回 0 重计——键非持久，进程内恒递增）
 export function toBannerPayload(convId: string, name: string, text: string): string {
-  const payload: ProactiveBannerPayload = { convId: convId, name: name, text: text };
+  const prev: ProactiveBannerPayload | null =
+    parseBannerPayload(AppStorage.get<string>(PROACTIVE_BANNER_KEY) ?? '');
+  const prevSeq: number = prev !== null ? prev.seq : 0;
+  const payload: ProactiveBannerPayload =
+    { convId: convId, name: name, text: text, seq: prevSeq + 1 };
   return JSON.stringify(payload);
 }
 
-// 解析（ProactiveBanner 消费；容错：空串/坏 JSON/字段缺失或类型不符回 null）
+// 解析（ProactiveBanner 消费 + 序号自增读前值；容错：空串/坏 JSON/字段缺失或类型不符
+// 回 null——缺序号的载荷不显示）
 export function parseBannerPayload(raw: string): ProactiveBannerPayload | null {
   if (raw === '') {
     return null;
@@ -306,7 +265,7 @@ export function parseBannerPayload(raw: string): ProactiveBannerPayload | null {
   try {
     const parsed: ProactiveBannerPayload = JSON.parse(raw) as ProactiveBannerPayload;
     if (typeof parsed.convId !== 'string' || typeof parsed.name !== 'string' ||
-      typeof parsed.text !== 'string') {
+      typeof parsed.text !== 'string' || typeof parsed.seq !== 'number') {
       return null;
     }
     return parsed;
@@ -315,12 +274,24 @@ export function parseBannerPayload(raw: string): ProactiveBannerPayload | null {
   }
 }
 
-// 横幅首行截断（任务书 §二：首行 + 按字符截断 + 省略号；渲染侧 Text maxLines(1) 再兜底）
+// 定长截断的安全切点（代理对防护）：emoji 等增补平面字符占两码元，substring 按码元
+// 硬切会留下孤立代理字符上屏乱码——照 SkillText.safeCutIndex 口径本地一份（不为小
+// 函数扩 import 面）
+function safeProactiveCut(text: string, max: number): number {
+  if (text.length <= max) {
+    return text.length;
+  }
+  const last: number = text.charCodeAt(max - 1);
+  return (last >= 0xD800 && last <= 0xDBFF) ? max - 1 : max;
+}
+
+// 横幅首行截断（首行 + 按字符截断 + 省略号；渲染侧 Text maxLines(1) 再兜底）
 const PROACTIVE_BANNER_PREVIEW_MAX: number = 50;
 function toBannerPreview(text: string): string {
   const firstLine: string = text.split('\n')[0];
   return firstLine.length > PROACTIVE_BANNER_PREVIEW_MAX ?
-    firstLine.substring(0, PROACTIVE_BANNER_PREVIEW_MAX) + '…' : firstLine;
+    firstLine.substring(0, safeProactiveCut(firstLine, PROACTIVE_BANNER_PREVIEW_MAX)) + '…' :
+    firstLine;
 }
 
 // 横幅点击命令派发（'#' 分隔 convId 与自增序号——序号让同会话重复点击也触发 @Watch；
@@ -338,9 +309,8 @@ export function parseProactiveOpenCmd(raw: string): string {
 }
 
 // 回前排程入口（EntryAbility.onForeground 一行 fire-and-forget）：先过冷启动闸——
-// PREF_LOADED_KEY 未放行（首拍早于 persistProp 注册区，此时读开关必得缺省）置挂起标记
-// 即返，已放行清标记走总开关早退后排程；开关关闭即时生效由 cancelProactiveSchedule
-// 承接（ProactivePage 开关行调用）
+// PREF_LOADED_KEY 未放行（首拍早于 persistProp 注册区）置挂起标记即返，已放行清标记
+// 走总开关早退后排程；开关关闭即时生效由 cancelProactiveSchedule 承接
 export function onAppForeground(): void {
   if ((AppStorage.get<number>(PREF_LOADED_KEY) ?? 0) !== 1) {
     pendingForegroundSchedule = true;
@@ -351,9 +321,8 @@ export function onAppForeground(): void {
   scheduleProactiveIfEnabled();
 }
 
-// 冷启动闸放行通知（EntryAbility loadContent 回调主动消息六键 persistProp 注册完毕后
-// 调用——ProviderPresetSeed.notifyPresetSeedKeyRegistered 同款门闩形态）：有挂起的首拍
-// 才补排，无挂起（热启动 / 回调先于 onForeground 的极端序）幂等即返
+// 冷启动闸放行通知（loadContent 回调各键 persistProp 注册完毕后调用）：有挂起的首拍
+// 才补排，无挂起（热启动/回调先于 onForeground 的极端序）幂等即返
 export function notifyProactiveKeysRegistered(): void {
   if (!pendingForegroundSchedule) {
     return;
@@ -371,9 +340,8 @@ function scheduleProactiveIfEnabled(): void {
   scheduleProactiveCheck();
 }
 
-// 清已排检查（开关行关闭时调——定时器不残留；在途请求不中断：已扣费的在途请求完成仍
-// 落库（首次成功路径落库前无开关复查，属「已发起请求收尾」语义）；重试路径守卫全重查
-// ——开关已关则①拦下不再重试）
+// 清已排检查（开关行关闭时调——定时器不残留；在途请求不中断：已扣费请求完成仍落库，
+// 重试路径守卫全重查——开关已关则①拦下）
 export function cancelProactiveSchedule(): void {
   if (checkTimer !== null) {
     clearTimeout(checkTimer);
@@ -382,8 +350,8 @@ export function cancelProactiveSchedule(): void {
   }
 }
 
-// 排一次检查（任务书 §二.2 顺延口径）：冷却未过 → 排到冷却期满的时刻；已过 → 排
-// 随机静默期 1~5 分钟。到点应用已后台则守卫②拦下（本轮流失，下次回前台重排）
+// 排一次检查：冷却未过 → 排到冷却期满的时刻；已过 → 排随机静默期 1 分钟至用户档上限。
+// 到点应用已后台则守卫②拦下（本轮流失，下次回前台重排）
 function scheduleProactiveCheck(): void {
   if (checkTimer !== null) {
     clearTimeout(checkTimer);
@@ -397,9 +365,9 @@ function scheduleProactiveCheck(): void {
     delayMs = cooldownEnd - now;
     hilog.info(DOMAIN, TAG, '主动消息排程至冷却期满（%{public}d 毫秒后）', delayMs);
   } else {
-    // 随机静默期窗口 = 1 分钟（写死下限）至用户档上限（resolveQuietMaxMinutes——上限
-    // 滑轨可调，2026-09-13 静默期滑轨笔）；span 恒 ≥ 0（档位域最小 1 = 下限，取 1 即
-    // 固定 1 分钟无随机）。随机化时机全由本档承担，冷却判据用整档不另抖——§1.2 勘误 5
+    // 随机静默期窗口 = 写死下限 1 分钟至用户档上限（resolveQuietMaxMinutes）；span 恒
+    // ≥ 0（档位域最小 1 = 下限，取 1 即固定 1 分钟）。随机化时机全由本档承担，冷却判据
+    // 用整档不另抖
     const quietMaxMinutes: number = resolveQuietMaxMinutes();
     const span: number = quietMaxMinutes * 60_000 - PROACTIVE_FOREGROUND_QUIET_MIN_MS;
     delayMs = PROACTIVE_FOREGROUND_QUIET_MIN_MS + Math.floor(Math.random() * span);
@@ -430,9 +398,8 @@ async function runProactiveCheck(): Promise<void> {
   }
 }
 
-// 守卫序 + 组装 + 发送（attempt 从 0 起；retryable 失败经 sleep 退避后递归重入——
-// 守卫全重查，与 MemoryGen 递归形态一致）。每个返回点均 hilog 留痕（验收：七守卫任一
-// 置假路径无静默落库）
+// 守卫序 + 组装 + 发送（attempt 从 0 起；retryable 失败经 sleep 退避后递归重入——守卫
+// 全重查，与 MemoryGen 递归形态一致；每个返回点均 hilog 留痕，无静默落库）
 async function runProactiveCheckInner(attempt: number): Promise<void> {
   const now: number = Date.now();
   // ① 总开关（排程后到点前用户关掉的竞态兜底——关闭链另有 cancelProactiveSchedule）
@@ -446,8 +413,7 @@ async function runProactiveCheckInner(attempt: number): Promise<void> {
     return;
   }
   const sentList: number[] = sentAtList();
-  // ③ 每日上限（本地自然日按 toLocalDayKey 计数当日条数，上限读 PROACTIVE_DAILY_LIMIT_KEY
-  // 用户可调档——2026-09-12 决明「可用户设置发消息频次」；数组空 = 从未发过）
+  // ③ 每日上限（toLocalDayKey 计当日条数，上限读档用户可调；数组空 = 从未发过）
   const todayKey: string = toLocalDayKey(now);
   let todayCount: number = 0;
   for (const ts of sentList) {
@@ -461,8 +427,8 @@ async function runProactiveCheckInner(attempt: number): Promise<void> {
       todayCount, dailyLimit);
     return;
   }
-  // ④ 冷却间隔（距最近一次发送 ≥ 间隔档——守卫③已拦「今天发满」，此处再拦「跨天但
-  // 未满档」，如 4 小时档上午发过下午到点的回前台重排场景；max 0 = 从未发过视为已过）
+  // ④ 冷却间隔（距最近一次发送 ≥ 间隔档——③拦「今天发满」，此处拦「跨天未满档」；
+  // max 0 = 从未发过视为已过）
   const intervalMs: number = resolveIntervalHours() * MS_PER_HOUR;
   const lastSent: number = maxSentAt(sentList);
   if (now - lastSent < intervalMs) {
@@ -477,11 +443,10 @@ async function runProactiveCheckInner(attempt: number): Promise<void> {
   // ⑤ 归属助手（当前助手解析 + memoryInject 判定——resolveProactiveOwner 内）
   const owner: ProactiveOwner | null = await resolveProactiveOwner();
   if (owner === null) {
-    hilog.info(DOMAIN, TAG, '归属助手不合格（未开记忆注入），本轮跳过');
+    hilog.info(DOMAIN, TAG, '归属助手不合格（未开记忆注入或为控制台助手），本轮跳过');
     return;
   }
-  // ⑥ 防打扰（最近活跃会话 2 分钟内更新 = 用户正在聊天，任何助手都不打扰——建新
-  // 会话形态下原活跃窗口守卫的全局语义延续）
+  // ⑥ 防打扰（最近活跃会话 2 分钟内更新 = 用户正在聊天，任何助手都不打扰——全局语义）
   const newestAt: number = await latestConversationActivity();
   if (newestAt > 0 && now - newestAt < PROACTIVE_ACTIVE_WINDOW_MS) {
     hilog.info(DOMAIN, TAG, '最近会话 %{public}d 毫秒内有新消息（用户在聊天），本轮跳过',
@@ -508,22 +473,24 @@ async function runProactiveCheckInner(attempt: number): Promise<void> {
   }
   // 新会话 id 先行本地生成（懒建语义——请求成功才落库建行，失败则 id 弃用零残留）
   const convId: string = nextMessageId('conv');
-  // 组装（顺序红线：composeSendMessages → appendSystemMemory → appendSystemScene）
+  // 组装（顺序红线见 buildProactivePrompt 注）
   const prompt: string = await buildProactivePrompt(owner, convId, resolved.modelId);
-  // 末三形参：读超时与句柄回传走默认，第三位 taskLabel = 请求日志来源标签 + 失败文案用途
-  // 前缀（2026-09-23 请求日志笔；此前不传即错报「标题」）
+  // 末三形参：读超时与句柄回传走默认；taskLabel = 请求日志来源标签 + 失败文案前缀；
+  // 思考档位与读超时组装单源 TitleApi.resolveFunctionalThinking
+  const ft = resolveFunctionalThinking(resolved.baseUrl, resolved.modelId,
+    resolved.protocol, resolved.endpoint, READ_TIMEOUT_MS);
   const result: TitleRequestResult = await requestTitleText(resolved.baseUrl,
     resolved.modelId, resolved.protocol, resolved.endpoint, apiKey, prompt,
-    PROACTIVE_MAX_OUTPUT, undefined, undefined, '主动消息');
-  // 用量记账（HTTP 200 即已消耗 token，正文缺失也入账——MemoryGen 同口径；放在落库
-  // 之前，「请求成功但落库失败」不影响账本如实入账）
+    PROACTIVE_MAX_OUTPUT, ft.readTimeoutMs, undefined, '主动消息', ft.thinking, ft.offEnabled);
+  // 用量记账（HTTP 200 即已消耗 token，正文缺失也入账——MemoryGen 同口径；放在落库前，
+  // 「请求成功但落库失败」不影响账本如实入账）
   if (result.status === 200) {
     logTaskUsage('proactive', convId, picked.providerId, resolved.modelId,
       result.promptTokens, result.completionTokens, result.cachedTokens);
   }
   if (!result.ok) {
     // 失败分类照 MemoryGen：网络/5xx/429 退避重试（守卫全重查），401/403/配置类不重试；
-    // 终败只留痕，不落任何消息（P0-1 禁静默半截入库）
+    // 终败只留痕不落任何消息（P0-1）
     if (isRetryable(result.status) && attempt < MAX_PROACTIVE_RETRY) {
       const delaySeconds: number = Math.pow(RETRY_BASE_SECONDS, attempt + 1); // 2/4/8
       hilog.warn(DOMAIN, TAG, '主动消息请求失败(%{public}d)，%{public}d 秒后第 %{public}d 次重试',
@@ -535,49 +502,74 @@ async function runProactiveCheckInner(attempt: number): Promise<void> {
       result.status, result.errorMessage);
     return;
   }
-  // 空返回拦截（★自检轮补）：返回文本 trim 后为空亦视为失败不落库——防空 assistant
-  // 消息上屏与空横幅（ok=true 只保证非空串，纯空白仍可能）
+  // 空返回拦截：ok=true 只保证非空串，trim 后纯空白仍可能——视为失败不落库（防空
+  // assistant 消息上屏与空横幅）
   if (result.text.trim() === '') {
     hilog.warn(DOMAIN, TAG, '主动消息返回空文本，不落库');
     return;
   }
-  // 建新会话落库（懒建语义消费：insertMessage 带 assistantId 首条建行
-  // ChatDb.ensureConversation——零新增建行函数；一次性 status 'done' 完整 assistant
-  // 消息——非流式无需 finalizeMessage）
-  // 行时间走单调分配器（★ 2026-09-21 消息存储机制改造笔 2 债务②收口：原写裸 Date.now()）；
-  // 本会话恒为新 id（上方 nextMessageId('conv')）⇒ 分配器无记账 ⇒ 本行 seq 恒 0（会话首行）。
-  // sentAt 兼作下方 pushSentAt 的冷却基准——分配器值 ≈ now 且单调，冷却判据（now − lastSent
-  // 与日键计数）语义不变
+  // 落库（bornGraphConversation 出生即 graph：单事务 = 建行含归属助手绑定 + 空分支 +
+  // 置 migrateState/activeBranchId）：①出生 ②prepareRun 无用户输入形态（userContent=''
+  // ——不建 user 节点，首条即 assistant）③commitRunUnit 落首条 assistant 节点（seq 由
+  // 命令内铸造）④finishRun 收终态。任一步失败 = 本轮放弃不落消息（fail-closed，P0-1；
+  // 出生失败行已建但零消息，sweepEmptyConversations 会清空行）。行时间走单调分配器
+  //（sentAt 兼作冷却基准——分配器值 ≈ now 且单调，冷却判据与日键计数语义不变）
   const sentAt: number = nextRowCreatedAt();
-  await insertMessage({
-    id: nextMessageId('msg'),
+  const branchId: string = await bornGraphConversation(convId, owner.assistantId, '', null);
+  if (branchId === '') {
+    hilog.warn(DOMAIN, TAG, '主动消息会话出生失败（行已在或事务失败），本轮放弃不落消息');
+    return;
+  }
+  const runId: string = nextMessageId('run');
+  await prepareRun(sharedRdbStore(), {
+    runId: runId,
     conversationId: convId,
-    role: 'assistant',
-    content: result.text,
-    reasoning: '',
-    status: 'done',
-    createdAt: sentAt,
-    seq: nextRowSeq(convId)
-  }, owner.assistantId);
-  // 会话标题 = 首句截断（titleSource='' 占位态——用户后续在该会话发言时标题链可再
-  // 升级；20 字符省略号惯例与 TitleGen.TITLE_PLACEHOLDER_MAX_CHARS 同形，本域自持）
+    branchId: branchId,
+    assistantId: owner.assistantId,
+    userContent: '',
+    origin: ORIGIN_SEND,
+    now: sentAt
+  });
+  const committed: boolean = await commitRunUnit(sharedRdbStore(), {
+    runId: runId,
+    expectedRevision: 0,
+    checkpoint: '',
+    output: { content: result.text, reasoning: '', role: 'assistant', stepIndex: 1,
+      nodeStatus: 'done', updateNodeId: '',
+      // runStatus 显式化（缺省即 RUNNING——此处恒 running，语义零变化）
+      runStatus: RUN_STATUS_RUNNING }, // CommitUnitOutput 形参（插行 done + 更新路径关）
+    now: nextRowCreatedAt(),
+    origin: ORIGIN_SEND
+  });
+  if (!committed) {
+    hilog.warn(DOMAIN, TAG, '主动消息节点提交冲突（revision 不符），本轮放弃');
+    return;
+  }
+  await finishRun(sharedRdbStore(), {
+    runId: runId,
+    finalStatus: RUN_STATUS_FINISHED,
+    diagnosticContent: '',
+    now: Date.now()
+  });
+  // 会话标题 = 首句截断（titleSource='' 占位态——用户后续发言时标题链可再升级；20 字符
+  // 省略号惯例，本域自持）
   await setConversationTitle(convId, toProactiveTitle(result.text), '');
   // 会话列表刷新广播（呈现面=列表；会话页恰好开着不当场自动上屏属预期——§1.2 勘误 3）
   bumpSessionListReload();
-  // 压入发送时刻（滚动裁到最近 PROACTIVE_SENT_AT_KEEP 条 = 每日档最大值，数据有界）
+  // 压入发送时刻（滚动裁剪——数据有界）
   pushSentAt(sentAt);
-  // 呈现层两键（笔 2）：未读红点（进会话页 onPageShown 清）+ 横幅（助手名 + 首行截断；
-  // 前台守卫②保证落库恒在前台——切后台竞态下键残留属已知限制，回前台重挂重新计时）
+  // 呈现层两键：未读红点（进会话页 onPageShown 清）+ 横幅（助手名 + 首行截断；前台
+  // 守卫②保证落库恒在前台——切后台竞态下键残留属已知限制，回前台重挂重新计时）
   AppStorage.setOrCreate<string>(PROACTIVE_UNREAD_CONV_KEY, convId);
   AppStorage.setOrCreate<string>(PROACTIVE_BANNER_KEY, toBannerPayload(
     convId, owner.assistantName, toBannerPreview(result.text)));
   hilog.info(DOMAIN, TAG, '主动消息已落库新会话 conv=%{public}s', convId);
 }
 
-// 归属助手解析（★ 建新会话形态拍板「归属 = 当前选择的助手」）：ACTIVE_ASSISTANT_KEY
-// 读当前助手 → 行删/键空回退内置默认助手（发送链四级兜底「全局默认」同口径）→
-// memoryInject 判定（关 = 不在其名下发话，来历不明防线同前；控制台助手经此守卫自然
-// 排除，无显式特判）。不合格回 null。
+// 归属助手解析（★建新会话形态「归属 = 当前选择的助手」）：ACTIVE_ASSISTANT_KEY 读当前
+// 助手 → 行删/键空回退内置默认助手（发送链「全局默认」兜底同口径）→ memoryInject
+// 判定（关 = 不在其名下发话）。不合格回 null。（原「控制台助手排除」分支已随控制台
+// 合并笔退役）
 async function resolveProactiveOwner(): Promise<ProactiveOwner | null> {
   const pickedId: string = AppStorage.get<string>(ACTIVE_ASSISTANT_KEY) ??
     ASSISTANT_DEFAULT_ID;
@@ -589,12 +581,12 @@ async function resolveProactiveOwner(): Promise<ProactiveOwner | null> {
   if (!row.memoryInject) {
     return null;
   }
+  // （原「控制台助手排除」分支已随 2026-10-25 控制台合并笔退役）
   return { assistantId: row.id, assistantName: row.name, memoryScope: row.memoryScope };
 }
 
 // 防打扰判据（守卫⑥）：全助手集查最近活跃会话（updatedAt 降序首行——懒建语义下
-// updatedAt 随消息 touch 维护 ≈ 最新消息时刻），空表回 0 = 无会话不打扰。原「目标
-// 会话活跃窗口」在建新会话形态下的全局语义延续：用户正在和任何助手聊天都不打扰
+// updatedAt 随消息 touch 维护 ≈ 最新消息时刻），空表回 0 = 无会话不打扰
 async function latestConversationActivity(): Promise<number> {
   const assistants: AssistantRow[] = await queryAssistants();
   const assistantIds: string[] = [];
@@ -607,22 +599,22 @@ async function latestConversationActivity(): Promise<number> {
 }
 
 // 会话标题截断（20 字符省略号——TitleGen 占位标题同形惯例：压空白规整后截断，多行
-// 回复的换行在规整时折叠；空白规整同款）
+// 换行在规整时折叠）
 const PROACTIVE_TITLE_MAX_CHARS: number = 20;
 function toProactiveTitle(text: string): string {
   const squeezed: string = text.replace(/\s+/g, ' ').trim();
   return squeezed.length > PROACTIVE_TITLE_MAX_CHARS ?
-    squeezed.substring(0, PROACTIVE_TITLE_MAX_CHARS) + '…' : squeezed;
+    squeezed.substring(0, safeProactiveCut(squeezed, PROACTIVE_TITLE_MAX_CHARS)) + '…' :
+    squeezed;
 }
 
-// 请求组装（★顺序红线：composeSendMessages → appendSystemMemory → appendSystemScene
-// ——appendSystemMemory 必须在 composeSendMessages 之后，提前调用会把会话/助手/系统
-// 提示词吞掉〔composeSendMessages 的 system 分支遇已含 system 整体跳过〕，RequestInject
-// 注释与断言族互证）：★ 新会话零历史（决明拍板「只靠长期记忆」）——历史恒空数组，
-// composeSendMessages 的 system 注入分支照常产出提示词位（拼接式分支 target<0 原样
-// 返回不伪造，RequestInject 既有容错）；提示词注入（ChatPromptState 同链 load +
-// applyVariables，变量替换取当下时刻；load 新 id 无行 → effectiveAssistantId =
-// 当前助手，与落库归属同源）→ 记忆块并 system 位 → 场景段并 system 尾 → 序列化单串
+// 请求组装（★顺序红线：composeSendMessages → 记忆块 → 场景段——appendSystemMemory
+// 必须在 composeSendMessages 之后，提前调用会把系统提示词吞掉〔其 system 分支遇已含
+// system 整体跳过〕，RequestInject 注释与断言族互证）：★ 新会话零历史（决明拍板
+// 「只靠长期记忆」）——历史恒空数组，composeSendMessages 的 system 注入分支照常产出
+// 提示词位；ChatPromptState 同链 load + applyVariables（变量替换取当下时刻；load 新 id
+// 无行 → effectiveAssistantId = 当前助手，与落库归属同源）→ 记忆块并 system 位 →
+// 场景段并 system 尾 → 序列化单串
 async function buildProactivePrompt(owner: ProactiveOwner, convId: string,
   modelId: string): Promise<string> {
   const history: ProactiveHistoryMsg[] = [];
@@ -631,18 +623,19 @@ async function buildProactivePrompt(owner: ProactiveOwner, convId: string,
   const config: PromptInjectConfig | null =
     state.applyVariables(state.config(), modelId);
   const composed: ProactiveHistoryMsg[] = composeSendMessages(history, config);
+  // appendSystemMemory 薄转出改直调 appendSystemBlock（不带尾段标记——记忆块属稳定段，
+  // 形制等价零变化）
   const withMemory: ProactiveHistoryMsg[] =
-    appendSystemMemory(composed, await buildProactiveMemoryBlock(owner));
+    appendSystemBlock(composed, await buildProactiveMemoryBlock(owner));
   const withScene: ProactiveHistoryMsg[] =
     appendSystemScene(withMemory, buildSceneSection(Date.now()));
   return toProactivePrompt(withScene);
 }
 
-// 记忆块（发送链 buildMemoryBlock 同口径：记忆总开关关/库空 → ''（appendSystemMemory
-// 对空串原样返回零回归）；30 条/2000 字双封顶——与发送链同值）。
-// ★ v35（2026-09-20 助手级记忆）：按归属助手作用域选库——'assistant' = 该助手自己的库
-//（queryAssistantMemories），'global' = 全局库原路径（存量行为逐字节不变）；与发送链/
-// 沉淀链/工具链四路同源同口径（ownerId 空 = 全局兜底，与发送链同判据）
+// 记忆块（发送链同口径：记忆总开关关/库空 → ''（appendSystemBlock 对空串原样返回零
+// 回归）；30 条/2000 字双封顶同值）。★ 按归属助手作用域选库——'assistant' = 该助手
+// 自己的库（queryAssistantMemories），'global' = 全局库（queryMemories）；与发送链/
+// 沉淀链/工具链同源同口径（ownerId 空 = 全局兜底）
 async function buildProactiveMemoryBlock(owner: ProactiveOwner): Promise<string> {
   if (!isMemoryEnabled()) {
     return '';
@@ -661,16 +654,15 @@ async function buildProactiveMemoryBlock(owner: ProactiveOwner): Promise<string>
   return composeMemoryBlock(items, PROACTIVE_MEMORY_MAX_COUNT, PROACTIVE_MEMORY_MAX_CHARS);
 }
 
-// 场景段（建新会话形态：当前本地时间 + 主动开启新对话约束——原「距上一条用户消息
-// 时长」句随旧会话形态退役，无对话记录段时该句失去指代对象。「不要复述本段场景描述」
-// 防模型把时间念出来）
+// 场景段（当前本地时间 + 主动开启新对话约束；「不要复述本段场景描述」防模型把时间
+// 念出来）
 function buildSceneSection(now: number): string {
   return '当前时间是 ' + formatLocalTime(now) +
     '。请以助手身份主动开启一段新对话，说一两句自然的话，不要复述本段场景描述。';
 }
 
-// 场景段并入 system 尾部（appendSystemMemory 同形态：首条 system 合并 content 尾部，
-// 无 system 首位插入——连续两条 system 会撞 Anthropic/Gemini 交替约束，故必合并不另插）
+// 场景段并入 system 尾部（首条 system 合并 content 尾部，无 system 首位插入——连续
+// 两条 system 会撞 Anthropic/Gemini 交替约束，故必合并不另插）
 function appendSystemScene(history: ProactiveHistoryMsg[],
   scene: string): ProactiveHistoryMsg[] {
   if (history.length > 0 && history[0].role === 'system') {
@@ -688,9 +680,8 @@ function appendSystemScene(history: ProactiveHistoryMsg[],
   return injected;
 }
 
-// 组装列表 → 单串 prompt（requestTitleText 传输层吃单串——文件头「请求形态」注）：
-// system 消息按序作前导段（提示词 → 记忆块 → 场景段），user/assistant 交替以
-// 「用户:/助手:」前缀展平为对话记录段
+// 组装列表 → 单串 prompt（requestTitleText 传输层吃单串——见文件头「请求形态」注）：
+// system 消息按序作前导段，user/assistant 以「用户:/助手:」前缀展平为对话记录段
 function toProactivePrompt(history: ProactiveHistoryMsg[]): string {
   const sections: string[] = [];
   const turns: string[] = [];

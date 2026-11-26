@@ -1,6 +1,6 @@
-// 服务商与模型配置读取工具域（2026-09-13 任务书-工具补齐三件-20260913 §2.1）。
-// 一个内置工具 get_provider_config（defaultEnabled=false + console-exclusive 反向拦截——
-// 仅控制台助手可用，同 get_usage_stats 族）：
+// 服务商与模型配置读取工具域。一个内置工具 get_provider_config
+//（defaultEnabled=false + console-exclusive 反向拦截——仅控制台助手可用，同
+// get_usage_stats 族）：
 // · 无参 = 概览：服务商清单（逐家启用态 / 协议 / 接口形态 / 模型数 / 密钥条目数 / 自定义头与
 //   自定义体布尔 / 余额开关）+ 当前会话生效连接（四级兜底链，读法与 ChatPageLoad.reloadConn
 //   同链）+ 全局默认两键 + 未配置价格的模型数；
@@ -14,8 +14,9 @@
 //   坏 JSON（全局截断的结构化裁剪只认搜索类载荷，其余载荷走硬切）。
 // 边界：数据读取在 ProviderDb / ProviderKeyDb / ChatDb / AssistantDb，本文件只做工具协议层
 //   （schema / desc / 校验纯函数 / 载荷组装纯函数 / 执行器）；校验与双封顶纯函数自包含可直跑
-//   （断言脚本剥 import 后机械求值，searchHelpTopics 同款姿势）。
+//   （断言脚本剥 import 后机械求值）。
 import { ToolExecutor } from './ToolContracts';
+import { ToolExecutionContext } from '../chat/MessageContracts';
 import { ActiveConnectionInfo, DEFAULT_MODEL_KEY, DEFAULT_PROVIDER_KEY, MODEL_CAP_LABELS,
   ModelRow, ProviderRow, capLabels, effectiveCaps, hasCustomBody, hasCustomHeaders, queryAllModels,
   queryModels, queryProviders, resolveActiveConnection } from '../store/ProviderDb';
@@ -24,7 +25,6 @@ import { ASSISTANT_DEFAULT_ID, AssistantRow, queryAssistant,
   queryConversationAssistantId } from '../store/AssistantDb';
 import { ConversationOverride, queryConversationOverride } from '../store/ChatDb';
 import { parsePriceConfig } from '../store/CostStatsCalc';
-import { CHAT_ACTIVE_CONV_KEY } from './ToolChatSearch';
 
 // 工具名常量 TOOL_GET_PROVIDER_CONFIG 归口 ToolTypes.ets（注册/反向拦截/seed 同源引用）。
 
@@ -43,11 +43,12 @@ export const GET_PROVIDER_CONFIG_SCHEMA: string =
 // 文案守宪法「面向用户文案写作规约」精神——无冒号分号括号连环与等号分列）
 export function buildGetProviderConfigDesc(): string {
   return '读取本应用的服务商与模型配置。只读查询，不修改任何内容。不传 provider 时返回服务商' +
-    '概览，含每家的启用状态、协议、接口形态、模型数量、密钥条目数量、是否配置了自定义请求头' +
-    '或自定义请求体、余额查询开关，另附当前会话正在使用的服务商与模型，以及全局默认模型。' +
-    '用户询问配置了几个服务商、都有哪些服务商、现在用的是哪个模型时调用。传 provider 时返回' +
-    '该服务商的模型清单，含名称、模型标识、是否启用、是否收藏、能力标签与是否已配置价格，' +
-    '用户询问某个服务商有哪些模型、哪些模型没配价格时调用。清单最多展示 ' +
+    '概览，含每家的唯一标识 id、启用状态、是否内置、协议、接口形态、模型数量、密钥条目数量、' +
+    '是否配置了自定义请求头或自定义请求体、余额查询开关，另附当前会话正在使用的服务商与模型，' +
+    '以及全局默认模型。用户询问配置了几个服务商、都有哪些服务商、现在用的是哪个模型时调用。' +
+    '需要创建、修改或删除服务商与模型时，先用本工具取得目标服务商的 id 再调用管理工具。' +
+    '传 provider 时返回该服务商的模型清单，含名称、模型标识、是否启用、是否收藏、' +
+    '能力标签与是否已配置价格，用户询问某个服务商有哪些模型、哪些模型没配价格时调用。清单最多展示 ' +
     PROVIDER_MODEL_LIST_MAX + ' 个模型，超出部分只给数量。模型能力标签取值有 ' +
     MODEL_CAP_LABELS.join('、') + '。密钥只返回条目数量与启用数量，不返回密钥内容。' +
     '回答服务商与模型配置前先调用本工具查实，不要凭记忆或猜测回答。';
@@ -102,6 +103,9 @@ export function locateProvidersByName(rows: ProviderRow[], name: string): Provid
 // ── 载荷结构（概览与清单两态；键集合被断言恰等钉死——多键少键均红）──
 
 export interface ProviderSummaryPayload {
+  // id = 服务商行 id：管理工具族（manage_providers 等）的定位参数单源——AI 先经本概览
+  // 取得 id 再调管理工具，不按名猜
+  id: string;
   name: string;
   enabled: boolean;
   protocol: string;
@@ -113,6 +117,8 @@ export interface ProviderSummaryPayload {
   customHeaders: boolean; // headers 列只判有无，不回内容
   customBody: boolean; // bodyOverrides 列只判有无，不回内容
   balanceEnabled: boolean;
+  // 内置服务商标记（v52）：true = 出厂预置行，不可删除只能停用（管理工具据此拒绝删除）
+  builtin: boolean;
 }
 
 export interface ProviderActivePayload {
@@ -201,7 +207,7 @@ export function buildProviderModelsPayload(providerName: string, models: Provide
 // 零改状态零广播（查询走 ProviderDb / ProviderKeyDb / ChatDb / AssistantDb 既有函数，
 // ResultSet 由各层 close；本文件只读 AppStorage 的两个中转键）
 export class GetProviderConfigExecutor implements ToolExecutor {
-  async execute(argsJson: string): Promise<string> {
+  async execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     const v: GetProviderConfigValidation = validateGetProviderConfigArgs(argsJson);
     if (!v.ok) {
       return JSON.stringify({ error: v.error });
@@ -210,17 +216,17 @@ export class GetProviderConfigExecutor implements ToolExecutor {
     if (v.provider !== '') {
       return this.buildModelsResult(providers, v.provider);
     }
-    return this.buildOverviewResult(providers);
+    return this.buildOverviewResult(providers, ctx.conversationId);
   }
 
   // 概览态：密钥条目逐家查 + 全量模型一次拉齐本地分组计数（免逐家模型查询）+ 当前会话
   // 生效连接（会话链解析失败不阻断整份概览——该段回 null 并在 note 说明）
-  private async buildOverviewResult(providers: ProviderRow[]): Promise<string> {
+  private async buildOverviewResult(providers: ProviderRow[], convId: string): Promise<string> {
     const keyTasks: Promise<ProviderKeyRow[]>[] =
       providers.map((row: ProviderRow): Promise<ProviderKeyRow[]> => queryProviderKeys(row.id));
     const keyLists: ProviderKeyRow[][] = await Promise.all(keyTasks);
     const models: ModelRow[] = await queryAllModels();
-    const active: ProviderActivePayload | null = await this.resolveSessionActive();
+    const active: ProviderActivePayload | null = await this.resolveSessionActive(convId);
     const modelCounts: Map<string, number> = new Map();
     const enabledCounts: Map<string, number> = new Map();
     let unpriced: number = 0;
@@ -244,6 +250,7 @@ export class GetProviderConfigExecutor implements ToolExecutor {
         }
       }
       summaries.push({
+        id: row.id,
         name: row.name,
         enabled: row.enabled,
         protocol: row.protocol,
@@ -254,7 +261,8 @@ export class GetProviderConfigExecutor implements ToolExecutor {
         enabledKeyCount: enabledKeys,
         customHeaders: hasCustomHeaders(row),
         customBody: hasCustomBody(row),
-        balanceEnabled: row.balanceEnabled
+        balanceEnabled: row.balanceEnabled,
+        builtin: row.builtin
       });
     }
     let note: string = '需要某个服务商的模型清单时，可再传 provider 参数查询。';
@@ -312,13 +320,13 @@ export class GetProviderConfigExecutor implements ToolExecutor {
     return { providerName: providerName, modelName: modelId };
   }
 
-  // 当前会话生效连接（只读）：会话 id 走 ChatSendCtrl 每次发送现写的中转键（CHAT_ACTIVE_CONV_KEY），
-  // 读法与 ChatPageLoad.reloadConn 同链——会话级覆盖 + 会话归属助手 + 四级兜底链。中转键缺失
+  // 当前会话生效连接（只读）：会话 id 由调用方经执行上下文传入
+  // （ToolExecutionContext.conversationId；旧 CHAT_ACTIVE_CONV_KEY 中转键已退役），读法与
+  // ChatPageLoad.reloadConn 同链——会话级覆盖 + 会话归属助手 + 四级兜底链。会话 id 缺失
   // 或链上任一步失败 = 该段回 null（不阻断整份概览，note 说明）；四级链全落空同样回 null。
   // 无行会话（还没落库）按默认助手归属解析，与发送链兜底一致。★ 方法名与 ProviderDb 的
   // resolveActiveConnection 刻意区分（同名会让「模块级函数调用」与「自身递归」难辨）
-  private async resolveSessionActive(): Promise<ProviderActivePayload | null> {
-    const convId: string = AppStorage.get<string>(CHAT_ACTIVE_CONV_KEY) ?? '';
+  private async resolveSessionActive(convId: string): Promise<ProviderActivePayload | null> {
     if (convId === '') {
       return null;
     }

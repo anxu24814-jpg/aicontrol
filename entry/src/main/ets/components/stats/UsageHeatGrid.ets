@@ -1,26 +1,14 @@
-// 热力图满日历网格纯展示组件（2026-09-07「满日历」方案新增，近七天带状/近三十天日历
-// 网格共用——职责缝 = 「行表 × 7 列 Grid 网格 + 少/多图例」一件独立事；全部档周列仍走
-// UsageHeatMap（用户已满意的 53 列横滚形态，零改动）。为什么新组件而非改 UsageHeatMap：
-// 两形态数据组织不同（行表 vs 周列）、交互不同（满铺 vs 超宽横滚），同文件会引入分支，
-// 拆出后各自一句话说清职责、且不动已验证件（反碎片下限①职责缝 + 「为何不并入页面」式
-// 理由在案）。
+// 热力图满日历网格纯展示组件（近七天带状/近三十天日历网格共用；全部档周列仍走 UsageHeatMap
+// 已验证的横滚形态零改动）——两形态数据组织（行表 vs 周列）与交互（满铺 vs 横滚）不同，
+// 拆件各自一句话说清职责、不动已验证件（反碎片下限①职责缝在案）。
 // ★ 满铺实现（零数值计算）：行 = Row({space:6}) 内 7 格 Column layoutWeight(1) 均分 +
-//   aspectRatio(1) = 正方形格子自动铺满（官方通用属性：仅设 width + aspectRatio 时
-//   height = width/aspectRatio——d.ts:20532 实锤）；行数由数据决定（七天 = 1 行 7 列带状、
-//   三十天 = 6 行 7 列日历网格），卡高自然随档——不设死参数数字，防贴线挤压。
-//   ★2026-09-07 决明三调：间距 8→6 + 网格/图例左右 padding 16（对齐卡 padding），格子
-//   ~34vp→~31vp 略小、圆角 3→6→10→8（当前 8，≈26%）——详见组件内注释。
-//   ★ 不用 Grid 的原因（官方 FAQ-arkui-241 实锤）：Grid 高度不随 GridItem 内容自适应
-//   （height auto 也不撑起、不设高 = 与父同高），列数不定场景需手动算高或换 List lanes
-//   ——一层 Column>Row 常规布局零此坑，且与「图例行」同構简单直白。
-// · 数据 @Link 下发（坑16：PageShell.content @BuilderParam 内禁 @Prop——与 UsageHeatMap
-//   同通道）；行表由页面分档构建（七天 = [axis]、三十天 = splitIntoCalendarRows(axis)）；
-//   null 格 = 透明保位格（周一对齐/尾行补位，同周列口径）；深浅色自订阅 appColorMode。
-// · 图例已移除（★2026-09-07 决明调位后拍板撤销：「少→多」图例曾迁入页面标题行右上，
-//   最终版 = 页面与两组件均不再含图例，零残留——口径见 UsageStatsPage 卡头注释）。
-// ★ 2026-09-07 新增（决明「点击格子气泡展示当天消息总数与总 token」）：格子 onClick +
-//   bindPopup 同款交互（与 UsageHeatMap 全同——气泡内容/选中态/查消息数逻辑两组件
-//   重复第 2 次，达到「重复 2 次以上提取」下限前暂不提炼，第三处再抽共有组件或函数）。
+// aspectRatio(1) 正方形自动铺满（官方：仅设 width + aspectRatio 时 height = width/比例），
+// 行数由数据决定卡高自然随档。★ 不用 Grid（官方 FAQ-arkui-241 实锤：Grid 高度不随
+// GridItem 内容自适应，列数不定需手动算高）——一层 Column>Row 常规布局零此坑。
+// 数据 @Link 下发（坑16：PageShell.content @BuilderParam 内禁 @Prop——与 UsageHeatMap
+// 同通道）；行表由页面分档构建；null 格 = 透明保位格（周一对齐/尾行补位）。图例已撤销
+//（两组件与页面均零残留）。点击格 bindPopup 气泡与 UsageHeatMap 全同（重复第 2 次暂不
+// 提炼，第三处再抽共有件）。
 import { DayValue, fmtCompact, heatLevel } from '../../common/store/UsageStatsCalc';
 import { cardBg, cardDescColor, cardTitleColor, usageHeatColor } from '../../common/Theme';
 import { overlayMaterial } from '../../common/ImmersiveLevel';
@@ -86,17 +74,12 @@ export struct UsageHeatGrid {
 
   build() {
     Column() {
-      // 行表网格：行 = Column({space:6}) 顺序，列 = Row({space:6}) 内 7 格均分；网格与图例
-      // 左右各 16vp 内边距（= 卡片 padding 同宽对齐——2026-09-07 决明三调「格与间距同时
-      // 略小一点保持协调」：间距 8→6、格（~34vp→~31vp）缩小时总宽 < 卡宽，左右 16 边距
-      // 让内容与卡 padding 视觉层一致，避免「缩进悬空」观感）
+      // 行表网格：左右各 16vp 内边距与卡 padding 对齐（格缩小后总宽 < 卡宽，防「缩进悬空」观感）
       Column({ space: 6 }) {
         ForEach(this.rows, (row: (DayValue | null)[], rowIndex: number): void => {
           Row({ space: 6 }) {
             ForEach(row, (cell: DayValue | null, colIndex: number): void => {
-              // null = 范围外空位：透明保位格（layoutWeight+aspectRatio 同上保对位）
-              // ★2026-09-07 决明三轮反馈「7/30 格子圆角略大一点」→ 3→6→10→8：满日历大格
-              //   （~31vp）圆角 8（≈26% 圆角比例；全部档 12vp 小格仍 3 不动）
+              // null = 范围外空位：透明保位格；满日历大格（~31vp）圆角 8（全部档小格仍 3）
               Column()
                 .layoutWeight(1)
                 .aspectRatio(1)
@@ -108,8 +91,8 @@ export struct UsageHeatGrid {
                     this.toggleCell(cell);
                   }
                 })
-                // 点击气泡：宿主 = 该格；popupColor 卡底色同深浅色；onStateChange 关态
-                // 同步清选中（点外 autoCancel 关闭）——UsageHeatMap 同款配置
+                // 点击气泡：宿主 = 该格；onStateChange 关态同步清选中（点外 autoCancel 关闭）
+                //——UsageHeatMap 同款配置
                 .bindPopup(cell !== null && this.selectedCell !== null &&
                   this.selectedCell.day === cell.day, {
                   builder: this.cellTip(),

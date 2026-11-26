@@ -1,0 +1,355 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-markdown-preview-runner' https://markdown-preview.invalid/mermaid.min.js; style-src 'unsafe-inline'; img-src data: blob:; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+<title>受限图表渲染器</title>
+<style>
+html,body{margin:0;min-height:100%;font-family:sans-serif}body{padding:12px;box-sizing:border-box;color:#202124;background:#fff}body[data-dark="true"]{color:#f1f1f1;background:#161616}#diagram{overflow:auto;min-height:80px}#diagram>svg{max-width:none;height:auto}#status{font:14px/1.5 sans-serif;white-space:pre-wrap}
+</style>
+<script src="https://markdown-preview.invalid/mermaid.min.js"></script>
+</head>
+<body>
+<p id="status">正在准备离线图表</p>
+<div id="diagram"></div>
+<script nonce="markdown-preview-runner">
+'use strict';
+(() => {
+  // 页内只含受信任壳；输入始终是字符串实参，不写 script/HTML/eval，不接原生桥。
+  const sourceLimit = 16384;
+  const svgLimit = 1048576;
+  const svgNodeLimit = 12000;
+  const blockedInput = /%%\s*\{|(^|\n)\s*---(?:\r?\n|$)|\b(?:click|href|callback|call|config|securityLevel|htmlLabels|linkTarget|image|img|icon|style|classDef|linkStyle)\b|<\s*\/?\s*[a-zA-Z][^>]*>|<!|<\?|&(?:#|[a-zA-Z])/i;
+  const svgNamespace = 'http://www.w3.org/2000/svg';
+  const allowedTags = new Set(['svg','g','defs','symbol','marker','path','rect','circle','ellipse','line','polyline','polygon','text','tspan','textPath','title','desc','style','clipPath','linearGradient','radialGradient','stop','filter','feDropShadow','fedropshadow']);
+  const allowedAttributes = new Set(['id','class','x','y','x1','x2','y1','y2','cx','cy','r','rx','ry','width','height','d','points','viewBox','preserveAspectRatio','transform','fill','fill-opacity','fill-rule','stroke','stroke-width','stroke-opacity','stroke-dasharray','stroke-dashoffset','stroke-linecap','stroke-linejoin','stroke-miterlimit','opacity','font-family','font-size','font-weight','font-style','text-anchor','dominant-baseline','alignment-baseline','dx','dy','textLength','lengthAdjust','rotate','marker-start','marker-mid','marker-end','markerWidth','markerHeight','markerUnits','refX','refY','orient','clip-path','offset','stop-color','stop-opacity','gradientUnits','gradientTransform','spreadMethod','fx','fy','fr','role','aria-label','aria-roledescription','aria-labelledby','aria-describedby','focusable','tabindex','style','xmlns','name','clip-rule','transform-origin','filter','filterUnits','primitiveUnits','stdDeviation','flood-opacity','flood-color']);
+  const status = document.getElementById('status');
+  const target = document.getElementById('diagram');
+  let activeJob = '';
+  let disposed = false;
+
+  function publish(job, kind, message) {
+    if (disposed || job !== activeJob) return;
+    const detail = String(message || '').slice(0, 160);
+    status.textContent = kind === 'ok' ? '离线图表已生成' : '图表渲染失败。' + detail;
+    document.title = 'md-preview:' + job + ':' + kind + (kind === 'error' ? ':' + encodeURIComponent(detail) : '');
+  }
+
+  function safeCss(value) {
+    // 允许库生成的普通绘制样式和当前SVG内部片段引用，拒绝CSS转义/外部取数语法。
+    if (/[\\<]|\/\*|expression\s*\(|(?:javascript|vbscript|data|https?|file|resource)\s*:/i.test(value)) return false;
+    // Mermaid 11.16.0基础样式固定带@keyframes，后代选择器也包含>；它们不是外部资源入口。
+    const withoutKeyframes = value.replace(/@keyframes\s+[a-zA-Z0-9_-]+\s*\{/g, '{');
+    if (withoutKeyframes.includes('@')) return false;
+    const withoutFragments = withoutKeyframes.replace(/url\(\s*["']?#[a-zA-Z0-9_.:-]+["']?\s*\)/g, '');
+    return !/url\s*\(|image-set\s*\(/i.test(withoutFragments);
+  }
+
+  function checkedSvg(source) {
+    if (typeof source !== 'string' || source.length === 0 || source.length > svgLimit) {
+      throw new Error('图表结果超过预览限制或为空');
+    }
+    if (/<!DOCTYPE|<!ENTITY|<\?/i.test(source)) throw new Error('图表含外部文档声明');
+    const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
+    if (parsed.querySelector('parsererror')) throw new Error('图表结果格式无效');
+    const root = parsed.documentElement;
+    if (root.localName !== 'svg' || root.namespaceURI !== svgNamespace) throw new Error('图表结果不是SVG');
+    const elements = [root, ...Array.from(root.querySelectorAll('*'))];
+    if (elements.length > svgNodeLimit) throw new Error('图表元素数量超过预览限制');
+    for (const element of elements) {
+      if (element.namespaceURI !== svgNamespace || !allowedTags.has(element.localName)) {
+        throw new Error('图表含不支持的外部或交互元素');
+      }
+      if (element.localName === 'style' && !safeCss(element.textContent || '')) {
+        throw new Error('图表样式含外部内容');
+      }
+      for (const attribute of Array.from(element.attributes)) {
+        const name = attribute.name;
+        const value = attribute.value;
+        // 上游在普通图表写data-*编辑元数据，展示不需要它，剥除而非误判整张合法图失败。
+        if (name.startsWith('data-')) { element.removeAttribute(name); continue; }
+        if (!allowedAttributes.has(name) || (attribute.namespaceURI && name !== 'xmlns')) {
+          throw new Error('图表含不支持的属性');
+        }
+        if (name === 'style' || name === 'fill' || name === 'stroke' || name === 'clip-path' || name === 'filter' || name.startsWith('marker-')) {
+          if (!safeCss(value)) throw new Error('图表属性含外部内容');
+        }
+      }
+    }
+    // 导入检查后的独立DOM，不把未检查字符串再交innerHTML解析。
+    return document.importNode(root, true);
+  }
+
+  function start(job, source, darkMode) {
+    if (disposed || activeJob !== '' || typeof job !== 'string' || !/^markdown-body-[0-9]+$/.test(job)) return 'rejected';
+    activeJob = job;
+    if (typeof source !== 'string' || source.length === 0 || source.length > sourceLimit || blockedInput.test(source)) {
+      publish(job, 'error', '图表内容不符合受限预览规则');
+      return 'rejected';
+    }
+    if (!window.mermaid || typeof window.mermaid.render !== 'function') {
+      publish(job, 'error', '离线渲染资源未能加载');
+      return 'rejected';
+    }
+    document.body.setAttribute('data-dark', darkMode === true ? 'true' : 'false');
+    try {
+      // secure本身不接受输入覆盖，输入中的frontmatter/directive已在两侧拒绝。
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        theme: darkMode === true ? 'dark' : 'default',
+        htmlLabels: false,
+        flowchart: { htmlLabels: false },
+        maxTextSize: sourceLimit,
+        maxEdges: 500,
+        secure: ['secure','securityLevel','startOnLoad','maxTextSize','maxEdges','suppressErrorRendering','htmlLabels','theme','flowchart']
+      });
+      Promise.resolve(window.mermaid.render('diagram-' + job, source)).then((result) => {
+        if (disposed || job !== activeJob) return;
+        const svg = checkedSvg(result.svg);
+        target.replaceChildren(svg);
+        // 不调用bindFunctions，图表只展示，不获得交互/回调执行权限。
+        publish(job, 'ok', '');
+      }).catch((error) => {
+        if (disposed || job !== activeJob) return;
+        target.replaceChildren();
+        publish(job, 'error', error instanceof Error ? error.message : '离线渲染失败');
+      });
+    } catch (error) {
+      target.replaceChildren();
+      publish(job, 'error', error instanceof Error ? error.message : '离线渲染失败');
+    }
+    // 同步确认，不把Promise返回给runJavaScript误当成最终SVG/成功信号。
+    return 'accepted';
+  }
+
+  // ── 导出模式（2026-10-17 Mermaid 内联渲染笔）───────────────────────────────
+  // 与 start 共用同一准入、同一 initialize 配置、同一 checkedSvg 输出校验；通过后把校验过
+  // 的 SVG 克隆成显式像素尺寸位图，经 canvas 转 PNG dataURL 存 window，由 ArkTS 侧
+  // runJavaScriptExt 拉取（无 JavaScriptProxy 桥）。产物不插入可见区域，不新增网络/文件/
+  // 存储能力；img-src 放宽到 blob: 仅为 canvas 位图绘制服务——blob URL 只能由本页固定脚本
+  // 创建，输入源码无法取得脚本执行权（connect-src/font-src/media-src 仍 'none'，宿主侧
+  // blockNetwork(true) 双保险）。
+  const exportLimit = 8 * 1024 * 1024;
+  const exportEdgeLimit = 4096;
+  // 导出模式页内阶段探针：宿主侧会打每一枚 title，排障时置 true 可定位卡在哪一步。
+  const debugStage = false;
+  function stage(name) {
+    if (debugStage) document.title = 'stage:' + name;
+  }
+
+  // 只认纯数值长度。parseFloat('100%') 会得到 100，把百分比宽当成 100px 会让画布极小、
+  // 内容被裁掉——必须显式排除带单位的值。
+  function numericLength(value) {
+    if (typeof value !== 'string') return 0;
+    const match = value.trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/);
+    return match === null ? 0 : parseFloat(match[1]);
+  }
+
+  function svgPixelSize(svgNode) {
+    const viewBox = (svgNode.getAttribute('viewBox') || '').trim().split(/[\s,]+/);
+    if (viewBox.length === 4) {
+      const width = parseFloat(viewBox[2]);
+      const height = parseFloat(viewBox[3]);
+      if (width > 0 && height > 0) return { width: width, height: height };
+    }
+    const width = numericLength(svgNode.getAttribute('width'));
+    const height = numericLength(svgNode.getAttribute('height'));
+    if (width > 0 && height > 0) return { width: width, height: height };
+    // 兜底：部分图（甘特）既无 viewBox 也无数值宽高，只有几何包围盒可用。getBBox 取
+    // user unit 几何、与视口像素无关；但根 <svg> 的 getBBox 在无 viewBox 时会退化到视口，
+    // 故按直接子元素逐个求并集（真机实测：直接取根会把 1600×1600 视口当内容，产物几乎全白）。
+    const measured = measureSvg(svgNode);
+    if (measured !== null) return measured;
+    throw new Error('图表缺少可测尺寸 viewBox=' + (svgNode.getAttribute('viewBox') || 'none') +
+      ' width=' + (svgNode.getAttribute('width') || 'none'));
+  }
+
+  function measureSvg(svgNode) {
+    const host = document.createElement('div');
+    host.setAttribute('style', 'position:absolute;left:-20000px;top:0;width:1600px;height:1600px;overflow:hidden');
+    document.body.appendChild(host);
+    try {
+      const probe = svgNode.cloneNode(true);
+      host.appendChild(probe);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const child of Array.from(probe.children)) {
+        if (typeof child.getBBox !== 'function') continue;
+        const box = child.getBBox();
+        if (!box || box.width <= 0 || box.height <= 0) continue;
+        minX = Math.min(minX, box.x);
+        minY = Math.min(minY, box.y);
+        maxX = Math.max(maxX, box.x + box.width);
+        maxY = Math.max(maxY, box.y + box.height);
+      }
+      if (maxX > minX && maxY > minY) {
+        return { width: maxX - minX, height: maxY - minY, x: minX, y: minY };
+      }
+    } catch (error) {
+      return null;
+    } finally {
+      document.body.removeChild(host);
+    }
+    return null;
+  }
+
+  // SVG 字符串 → 可绘制位图。走 **内联 data: URL**：blob: 在宿主 blockNetwork(true) 下会被
+  // 当取数请求拦掉（真机实测 createImageBitmap 直接失败、<img> 则静默不回调），data: 不进
+  // 网络栈、不产生任何请求，配合 CSP img-src data: 即可。
+  function loadSvgImage(svgText) {
+    stage('bitmap-start');
+    return new Promise((resolve, reject) => {
+      let url = '';
+      try {
+        url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
+        stage('bitmap-url');
+      } catch (error) {
+        reject(new Error('图表位图不可用'));
+        return;
+      }
+      const image = new Image();
+      image.onload = () => {
+        stage('bitmap-loaded');
+        if (!image.width || !image.height) { reject(new Error('图表位图尺寸为空')); return; }
+        resolve(image);
+      };
+      image.onerror = () => {
+        stage('bitmap-error');
+        reject(new Error('图表位图加载失败'));
+      };
+      image.src = url;
+    });
+  }
+
+  function exportPng(svgNode, darkMode, scale, watermark) {
+    return new Promise((resolve, reject) => {
+      const size = svgPixelSize(svgNode);
+      const copy = svgNode.cloneNode(true);
+      // 位图解码需要内在尺寸确定：mermaid 输出常为 width="100%"，必须显式补数值。
+      copy.setAttribute('width', String(size.width));
+      copy.setAttribute('height', String(size.height));
+      // 包围盒兜底时内容起点可能不在 (0,0)：补 viewBox 把内容对齐到画布原点，避免偏移裁切。
+      if (typeof size.x === 'number' && typeof size.y === 'number') {
+        copy.setAttribute('viewBox', size.x + ' ' + size.y + ' ' + size.width + ' ' + size.height);
+      }
+      if (!copy.getAttribute('xmlns')) copy.setAttribute('xmlns', svgNamespace);
+      const serialized = new XMLSerializer().serializeToString(copy);
+      loadSvgImage(serialized).then((image) => {
+        try {
+          const longest = Math.max(size.width, size.height);
+          const ratio = Math.min(exportEdgeLimit, Math.max(1, Math.round(longest * scale))) / longest;
+          const canvasWidth = Math.max(1, Math.round(size.width * ratio));
+          const canvasHeight = Math.max(1, Math.round(size.height * ratio));
+          // AI 标识条（导出才加；内联显示不加）：与复制/CSV 的 aiContent 标识义务同源，
+          // 画在图表内容之外，不篡改渲染结果。
+          const barHeight = watermark ? Math.max(18, Math.round(22 * scale)) : 0;
+          const canvas = document.createElement('canvas');
+          canvas.width = canvasWidth;
+          canvas.height = canvasHeight + barHeight;
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('图表转码画布不可用');
+          if (barHeight > 0) {
+            context.fillStyle = darkMode ? '#161616' : '#ffffff';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+          }
+          context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
+          if (barHeight > 0) {
+            context.fillStyle = darkMode ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.45)';
+            context.font = Math.round(11 * scale) + 'px sans-serif';
+            context.textAlign = 'right';
+            context.textBaseline = 'middle';
+            context.fillText('AI 生成', canvas.width - Math.round(8 * scale), canvasHeight + barHeight / 2);
+          }
+          const data = canvas.toDataURL('image/png');
+          stage('encoded:' + data.length);
+          if (data.length > exportLimit) throw new Error('图表图片超过导出限制');
+          resolve({ data: data, width: canvasWidth, height: canvasHeight });
+        } catch (error) {
+          reject(error);
+        }
+      }).catch((error) => reject(error instanceof Error ? error : new Error('图表位图解码失败')));
+    });
+  }
+
+  function startExport(job, source, darkMode, scale, watermark) {
+    if (disposed || activeJob !== '' || typeof job !== 'string' || !/^markdown-body-[0-9]+$/.test(job)) return 'rejected';
+    activeJob = job;
+    window.__mermaidExports = {};
+    if (typeof source !== 'string' || source.length === 0 || source.length > sourceLimit || blockedInput.test(source)) {
+      publish(job, 'error', '图表内容不符合受限预览规则');
+      return 'rejected';
+    }
+    if (!window.mermaid || typeof window.mermaid.render !== 'function') {
+      publish(job, 'error', '离线渲染资源未能加载');
+      return 'rejected';
+    }
+    const ratio = typeof scale === 'number' && scale > 0 && scale <= 4 ? scale : 2;
+    const dark = darkMode === true;
+    document.body.setAttribute('data-dark', dark ? 'true' : 'false');
+    // 页内看门狗：任一步骤挂死（异步解码不回调）也必须让出作业位，否则同页后续图全部
+    // 'rejected'（真机实测：一张卡死会连带后面所有图都不出来）。宿主侧另有 15s 兜底。
+    setTimeout(() => {
+      if (job === activeJob) {
+        publish(job, 'error', '图表渲染超时');
+        activeJob = '';
+      }
+    }, 12000);
+    stage('start');
+    try {
+      // 配置与 start 逐项同源（改一处须同步另一处）：strict + 关 HTML 标签 + 固定上限 + secure 列表。
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        theme: dark ? 'dark' : 'default',
+        htmlLabels: false,
+        flowchart: { htmlLabels: false },
+        maxTextSize: sourceLimit,
+        maxEdges: 500,
+        secure: ['secure','securityLevel','startOnLoad','maxTextSize','maxEdges','suppressErrorRendering','htmlLabels','theme','flowchart']
+      });
+      Promise.resolve(window.mermaid.render('diagram-' + job, source)).then((result) => {
+        if (disposed || job !== activeJob) return undefined;
+        const svgNode = checkedSvg(result.svg);
+        // SVG 作位图绘制不加载外部字体；等系统字体就绪再转码，防首帧字形未定。
+        const ready = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+        return ready.then(() => exportPng(svgNode, dark, ratio, watermark === true)).then((payload) => {
+          if (disposed || job !== activeJob) return;
+          window.__mermaidExports[job] = payload;
+          publish(job, 'ok', '');
+          // 导出模式是**多任务复用同一页**（start 是一次一页的全屏预览，故不用清）。不清
+          // activeJob 会让同页第二张图起一律 'rejected'，表现为「只有第一张能出图」。产物
+          // 已存进 window.__mermaidExports[job]，清空作业位不影响已完成的拉取。
+          activeJob = '';
+        });
+      }).catch((error) => {
+        if (disposed || job !== activeJob) return;
+        publish(job, 'error', error instanceof Error ? error.message : '离线渲染失败');
+        activeJob = '';
+      });
+    } catch (error) {
+      publish(job, 'error', error instanceof Error ? error.message : '离线渲染失败');
+      activeJob = '';
+    }
+    // 同步确认（同 start）：完成信号只走 title 协议。
+    return 'accepted';
+  }
+
+  window.__mermaidExports = {};
+  window.MarkdownPreviewRunner = Object.freeze({ start, startExport });
+  window.addEventListener('pagehide', () => {
+    disposed = true;
+    activeJob = '';
+    window.__mermaidExports = {};
+    target.replaceChildren();
+    status.textContent = '';
+  }, { once: true });
+})();
+</script>
+</body>
+</html>

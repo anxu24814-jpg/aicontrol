@@ -1,31 +1,34 @@
-// 记忆存储域（2026-09-08 记忆域新建，照 PromptTemplateDb 域拆先例）：memories 表行读写。
-// 表结构/迁移在 ChatDbMigrate.ets（v20），语义：
+// 记忆存储域：memories 表行读写（表结构/迁移在 ChatDbMigrate.ets v20）。语义：
 // · 一行一条稳定事实；source 'auto' = 退出会话自动整理（MemoryGen）/ 'manual' = 记忆页
-//   手动添加（经记忆编辑页保存）；assistantId = 沉淀来源助手（'' = 无归属，仅展示用——
-//   删助手级联置空 clearMemoryAssistantRef，不删行）；conversationId = 来源会话（仅追溯，
-//   删会话不级联——记忆是跨会话资产）；
-// · 有界红线（宪法「数据有界」）：库内 ≤ MEMORY_MAX_TOTAL 条（自动整理达上限跳过新增
-//   + hilog；手动添加超限由记忆页「＋」新建键 push 前拦截提示）、单条 ≤ 500 字
-//   （MEMORY_CONTENT_MAX，解析侧截断 + 记忆编辑页 maxLength 同源）；
-// · 导出导入 = ExportImport EXPORT_TABLES 含 memories（列过滤天然跨版本兼容）；
-// · 记忆优化批量应用 = applyMemoryOptChanges（2026-09-11 记忆优化模型，一个事务内改内容 +
-//   删被并入行；校验在纯函数层 buildMemoryOptPlan，本层只落库）；
+//   手动添加；assistantId = 沉淀来源助手（'' = 无归属，仅展示用——删助手级联置空
+//   clearMemoryAssistantRef，不删行）；conversationId = 来源会话（仅追溯，删会话不级联——
+//   记忆是跨会话资产）。
+// · 有界红线（宪法「数据有界」）：库内 ≤ MEMORY_MAX_TOTAL 条（自动整理达上限跳过新增 +
+//   hilog；手动添加超限由记忆页「＋」新建键 push 前拦截）、单条 ≤ 500 字
+//   （MEMORY_CONTENT_MAX，解析侧截断 + 记忆编辑页 maxLength 同源）。
+// · 导出导入 = ExportImport EXPORT_TABLES 含 memories（列过滤天然跨版本兼容）。
+// · 记忆优化批量应用 = applyMemoryOptChanges（一个事务内改内容 + 删被并入行；校验在纯函数层
+//   buildMemoryOptPlan，本层只落库）。
 // · 纪元键 MEMORY_LIST_TICK_KEY：写点 = MemoryGen 整理成功（自动/手动两链同走
-//   runMemorySinking，收口一处）；读点 = MemoryPage @StorageProp @Watch（CONV_TITLE_TICK
-//   同款先例）。记忆页增删改不走广播——写点在同页（删）或子页（增改），onPop 重拉即达。
-// · 助手级记忆域（2026-09-20 助手级记忆，v35）：assistant_memories 表——assistant_id =
-//   **归属语义**（与 memories.assistantId 的「沉淀来源标注」语义刻意分离，两库不混注）；
-//   行 id 由 nextMessageId('asmem') 生成，形态 `asmem-<时间戳>-<序号>`（全局 `mem-` 同形）
-//   ——前缀只供人读，**跨库隔离的真实机制 = 定位集锁本库**（管理与检索面一律先按作用域
-//   查目标库，命中集合只在本库内；全仓无任何按 id 前缀判库的代码）。作用域
-//   二选一常量 MEMORY_SCOPE_*（助手列 assistants.memoryScope，'global' = 全局库 = memories
-//   表路径零改动）。上限同口径库级独立计数（MEMORY_MAX_TOTAL / MEMORY_CONTENT_MAX 复用）。
+//   runMemorySinking）；读点 = MemoryPage @StorageProp @Watch。记忆页增删改不走广播——写点在
+//   同页（删）或子页（增改），onPop 重拉即达。
+// · 助手级记忆域（v35）：assistant_memories 表——assistant_id = **归属语义**（与
+//   memories.assistantId 的「沉淀来源标注」刻意分离，两库不混注）；行 id 前缀 'asmem-' 只供
+//   人读，**跨库隔离的真实机制 = 定位集锁本库**（先按作用域查目标库，全仓无按 id 前缀判库的
+//   代码）。作用域二选一常量 MEMORY_SCOPE_*（assistants.memoryScope，'global' = 全局库 =
+//   memories 表路径零改动）。上限同口径库级独立计数。
 import { relationalStore } from '@kit.ArkData';
 import { nextMessageId, sharedRdbStore } from './ChatDb';
+import { runWriteQueued } from './DbWriteQueue';
 import { MemoryOptChange } from '../MemoryText';
 
 // 库内总条数上限（宪法数据有界；达上限自动整理跳过新增、手动添加拦截）
 export const MEMORY_MAX_TOTAL: number = 200;
+
+// 库满提示：满额写入闸（下方判定单源）与各入口产品文案同句单源——本件不得反向引
+// MemoryGen 取该句（其已引本件，坑50 零环红线），故常量落在本域、MemoryGen 再出口
+export const MEMORY_FULL_TIP: string =
+  '记忆已达上限 ' + MEMORY_MAX_TOTAL + ' 条，请先删除部分条目';
 
 // 记忆列表刷新广播键（AppStorage tick 递增；写点 = 记忆页写操作收口处，读点 = 记忆页
 // @StorageProp @Watch 重拉——退页自动整理回页可见）
@@ -61,9 +64,9 @@ function requireStore(): relationalStore.RdbStore {
 }
 
 // 全量记忆（卡片序 = 列表序 + 注入选取序 + 注入块排列序 + 优化序号基准，四路消费同源；
-// 三键排序：sortOrder 升序 → createdAt 升序 → content 升序——第二三键 = 并列条目确定性
-// 兜底，与旧 compareMemoryOrder 的 tiebreak 同口径，是「存量 sortOrder 全 0 时注入块字符串
-// 零漂移」的成立前提〔只双键时 SQL 对并列键返回序不定〕；上限 200 条自然有界无翻页）
+// 三键排序：sortOrder → createdAt → content 升序——第二三键 = 并列条目确定性兜底，是「存量
+// sortOrder 全 0 时注入块字符串零漂移」的成立前提〔只双键时 SQL 对并列键返回序不定〕；
+// 上限 200 条自然有界无翻页）
 export async function queryMemories(): Promise<MemoryRow[]> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('memories');
   predicates.orderByAsc('sortOrder');
@@ -132,11 +135,11 @@ export async function queryMemory(id: string): Promise<MemoryRow | null> {
   }
 }
 
-// 新增单条（上限守卫在调用方——自动链 MemoryGen 跳过 + 留痕、手动链记忆页「＋」新建键拦截 + toast）；
-// sortOrder = 当前 max + 1（落卡底——与用户新建/自动整理一致；查后即写非事务，与
-// insertProvider 的 max+1 同款窗口：并发插入极端下并列 sortOrder 由 createdAt/content
-// 兜底序收敛，不破坏确定性）。★ COALESCE 显式兜底空表（2026-09-12 复盘轮：MAX 空表
-// 返回一行 NULL，值读取对 NULL 的行为官方无文档——不赌未文档化行为，SQL 层显式归 0）
+// 新增单条（上限守卫在调用方——自动链 MemoryGen 跳过 + 留痕、手动链记忆页拦截 + toast）；
+// sortOrder = 当前 max + 1（落卡底，与用户新建/自动整理一致；查后即写非事务，与
+// insertProvider 的 max+1 同款窗口：并发极端下并列 sortOrder 由 createdAt/content 兜底序
+// 收敛）。★ COALESCE 显式兜底空表（MAX 空表返回一行 NULL，值读取对 NULL 的行为官方无
+// 文档——不赌未文档化行为，SQL 层显式归 0）
 export async function insertMemory(row: MemoryInsertInput): Promise<MemoryRow> {
   const now: number = Date.now();
   const maxResult: relationalStore.ResultSet =
@@ -198,9 +201,8 @@ export async function deleteMemory(id: string): Promise<void> {
   await requireStore().delete(predicates);
 }
 
-// 删助手级联置空（AssistantDb.deleteAssistantCascade 事务内调用——clearAssistantBinding
-// 同款口径）：该助手沉淀的记忆保留、assistantId 归空（来源标注消失，内容是跨会话资产
-// 不随助手删）
+// 删助手级联置空（deleteAssistantCascade 事务内调用）：该助手沉淀的记忆保留、assistantId
+// 归空（内容是跨会话资产不随助手删）
 export async function clearMemoryAssistantRef(assistantId: string): Promise<void> {
   const bucket: relationalStore.ValuesBucket = { 'assistantId': '' };
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('memories');
@@ -214,80 +216,79 @@ export function broadcastMemoryList(): void {
     (AppStorage.get<number>(MEMORY_LIST_TICK_KEY) ?? 0) + 1);
 }
 
-// ── 记忆优化批量应用（2026-09-11 记忆优化模型，方案-记忆整理优化-20260911 §6.5「事务」防线）──
-// 一次优化 = 若干条改动，每条 = 改写保留行内容（rewrite 的自身行 / merge 的首序号行）+
-// 删除被并入行（merge 的其余行）。全部打包进一个 RDB 事务：任一步失败 rollBack 整体回滚，
-// 中止即零改动，不产生「合并做了一半」的半成品库（deleteAssistantCascade 同款三件套）。
+// ── 记忆优化批量应用 ──
+// 一次优化 = 若干条改动，每条 = 改写保留行内容 + 删除被并入行，全部打包进一个 RDB 事务：
+// 任一步失败 rollBack 整体回滚，中止即零改动，不产生「合并做了一半」的半成品库。
 // ★ 上限与内容校验已在纯函数层完成（buildMemoryOptPlan：≤500 字 / 敏感过滤 / 去重键不撞车
-// / 改动量闸门），本层只落库不二次判定——两处判定 = 两处漂移面。
-// ★ 保留行缺失即抛错回滚（与 updateMemoryContent 的「affected === 0 抛错」同口径）：确认弹窗
-// 打开期间库可能被别处改动（自动整理落库 / 用户在别的入口删条目），若保留行已不在，继续执行
-// 就会「删掉被并入行却没人接住内容」= 静默丢数据；抛错 → rollBack → 整批零改动。
+//   / 改动量闸门），本层只落库不二次判定——两处判定 = 两处漂移面。
+// ★ 保留行缺失即抛错回滚（与 updateMemoryContent 同口径）：确认弹窗打开期间库可能被别处
+//   改动（自动整理落库 / 别的入口删条目），若保留行已不在，继续执行就会「删掉被并入行却
+//   没人接住内容」= 静默丢数据；抛错 → rollBack → 整批零改动。
 // ★ 卡序语义（v29）：改写保留行**原位不动**（sortOrder 不写）；删除被并入行后按改动后的
-// 查询序把剩余条目重排为 0..n-1 连续（同事务收尾）——相对次序不变仅去空洞，防删出空洞后
-// 并列 sortOrder 退化到 createdAt/content 兜底产生行为漂移（新插入的 max+1 也随之连续）。
-// 旧「优化后集中在注入序前段」假设（方案 R7）随卡序退役——注入窗口跟卡片序走
-// ★ 2026-09-22 记忆优化历史：第二参 snapshotNote = 历史页给人看的改动摘要（如「改写 3 条 ·
-// 合并 2 组」），事务**第一步**先整库存档（archiveBeforeOptInTx）。拍快照与改动同生同死——
-// 事务外先拍 = 优化失败会留下一份「什么都没变」的幽灵快照，白占一个名额；内联则优化成功
-// ⟺ 快照存在。早退不变：空改动不入库也不写快照
+//   查询序把剩余条目重排为 0..n-1 连续（同事务收尾）——相对次序不变仅去空洞，防删出空洞后
+//   并列 sortOrder 退化到 createdAt/content 兜底产生行为漂移（新插入的 max+1 也随之连续）；
+//   注入窗口跟卡片序走。
+// ★ snapshotNote = 历史页给人看的改动摘要；事务**第一步**先整库存档（archiveBeforeOptInTx）
+//——拍快照与改动同生同死（事务外先拍会留「什么都没变」的幽灵快照白占名额）；空改动不入库
+//   也不写快照
 export async function applyMemoryOptChanges(changes: MemoryOptChange[],
   snapshotNote: string): Promise<void> {
   if (changes.length === 0) {
     return;
   }
-  const db: relationalStore.RdbStore = requireStore();
-  const now: number = Date.now();
-  db.beginTransaction();
-  try {
-    await archiveBeforeOptInTx(db, MEMORY_SCOPE_GLOBAL, snapshotNote, MEMORY_SNAPSHOT_KIND_OPT);
-    for (const change of changes) {
-      const bucket: relationalStore.ValuesBucket = { 'content': change.text, 'updatedAt': now };
-      const keepPredicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('memories');
-      keepPredicates.equalTo('id', change.keepId);
-      const affected: number = await db.update(bucket, keepPredicates);
-      if (affected === 0) {
-        throw new Error('待改写的记忆行不存在（已被删除），优化未应用');
-      }
-      for (const id of change.deleteIds) {
-        const dropPredicates: relationalStore.RdbPredicates =
-          new relationalStore.RdbPredicates('memories');
-        dropPredicates.equalTo('id', id);
-        await db.delete(dropPredicates);
-      }
-    }
-    // 剩余条目去空洞重排（改动后的查询序 = 卡片序；sortOrder = 新数组下标）
-    const remainResult: relationalStore.ResultSet = await db.querySql(
-      'SELECT id FROM memories ORDER BY sortOrder ASC, createdAt ASC, content ASC');
-    const remainIds: string[] = [];
+  // ★ 写串行链入链：事务段包进全局写队列，快照读取与落库之间的并发写者由链排队消解
+  return runWriteQueued('applyMemoryOptChanges', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    const now: number = Date.now();
+    db.beginTransaction();
     try {
-      while (remainResult.goToNextRow()) {
-        remainIds.push(remainResult.getString(remainResult.getColumnIndex('id')));
+      await archiveBeforeOptInTx(db, MEMORY_SCOPE_GLOBAL, snapshotNote, MEMORY_SNAPSHOT_KIND_OPT);
+      for (const change of changes) {
+        const bucket: relationalStore.ValuesBucket = { 'content': change.text, 'updatedAt': now };
+        const keepPredicates: relationalStore.RdbPredicates =
+          new relationalStore.RdbPredicates('memories');
+        keepPredicates.equalTo('id', change.keepId);
+        const affected: number = await db.update(bucket, keepPredicates);
+        if (affected === 0) {
+          throw new Error('待改写的记忆行不存在（已被删除），优化未应用');
+        }
+        for (const id of change.deleteIds) {
+          const dropPredicates: relationalStore.RdbPredicates =
+            new relationalStore.RdbPredicates('memories');
+          dropPredicates.equalTo('id', id);
+          await db.delete(dropPredicates);
+        }
       }
-    } finally {
-      remainResult.close();
+      // 剩余条目去空洞重排（改动后的查询序 = 卡片序；sortOrder = 新数组下标）
+      const remainResult: relationalStore.ResultSet = await db.querySql(
+        'SELECT id FROM memories ORDER BY sortOrder ASC, createdAt ASC, content ASC');
+      const remainIds: string[] = [];
+      try {
+        while (remainResult.goToNextRow()) {
+          remainIds.push(remainResult.getString(remainResult.getColumnIndex('id')));
+        }
+      } finally {
+        remainResult.close();
+      }
+      for (let i = 0; i < remainIds.length; i++) {
+        const bucket: relationalStore.ValuesBucket = { 'sortOrder': i };
+        const predicates: relationalStore.RdbPredicates =
+          new relationalStore.RdbPredicates('memories');
+        predicates.equalTo('id', remainIds[i]);
+        await db.update(bucket, predicates);
+      }
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
     }
-    for (let i = 0; i < remainIds.length; i++) {
-      const bucket: relationalStore.ValuesBucket = { 'sortOrder': i };
-      const predicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('memories');
-      predicates.equalTo('id', remainIds[i]);
-      await db.update(bucket, predicates);
-    }
-    db.commit();
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
-  }
+  });
 }
 
-// ── 助手级记忆域（2026-09-20 助手级记忆，v35）：assistant_memories 表 CRUD，全部与全局
-// memories 函数同构——差异只有三处：查询带 assistantId 归属条件、行 id 前缀 'asmem-'
-// （连字符形态，仅供人读，非判库判据）、优化重排限定单助手库。行类型复用 MemoryRow
-// （列形状完全一致，UI 与纯函数两域零适配直吃）。
-// 上限守卫仍在调用方（自动链 MemoryGen / 手动链库管理页「＋」拦截），本层不二次判定
-// ── 与全局同口径：两处判定 = 两处漂移面
+// ── 助手级记忆域（v35）：assistant_memories 表 CRUD，全部与全局 memories 函数同构——差异
+// 只有三处：查询带 assistantId 归属条件、行 id 前缀 'asmem-'（仅供人读，非判库判据）、优化
+// 重排限定单助手库。行类型复用 MemoryRow（列形状完全一致，UI 与纯函数零适配直吃）。上限守卫
+// 仍在调用方——与全局同口径：两处判定 = 两处漂移面
 
 const ASSISTANT_MEMORY_COLUMNS: string[] = ['id', 'assistantId', 'content', 'source',
   'conversationId', 'createdAt', 'updatedAt', 'sortOrder'];
@@ -305,8 +306,8 @@ function readAssistantMemoryRow(result: relationalStore.ResultSet): MemoryRow {
   };
 }
 
-// 该助手库全量（排序三键与全局 queryMemories 同口径——sortOrder 升序 → createdAt 升序 →
-// content 升序，注入块字符串确定性的同款前提；上限 200 条自然有界无翻页）
+// 该助手库全量（排序三键与全局 queryMemories 同口径——注入块字符串确定性的同款前提；
+// 上限 200 条自然有界无翻页）
 export async function queryAssistantMemories(assistantId: string): Promise<MemoryRow[]> {
   const predicates: relationalStore.RdbPredicates =
     new relationalStore.RdbPredicates('assistant_memories');
@@ -359,8 +360,8 @@ export async function queryAssistantMemory(id: string): Promise<MemoryRow | null
 }
 
 // 新增单条（source='auto' 沉淀 / 'manual' 手动；sortOrder = **该助手库内** max + 1 落卡底，
-// 与全局同款查后即写非事务窗口——并发极端下并列由 createdAt/content 兜底序收敛）；
-// assistantId 归属由调用方传入（沉淀链 = 会话归属助手 / 手动链 = 库上下文）
+// 与全局同款非事务窗口——并发极端下并列由 createdAt/content 兜底序收敛）；assistantId 归属
+// 由调用方传入（沉淀链 = 会话归属助手 / 手动链 = 库上下文）
 export async function insertAssistantMemory(assistantId: string, content: string,
   source: string, conversationId: string): Promise<MemoryRow> {
   const now: number = Date.now();
@@ -394,8 +395,7 @@ export async function insertAssistantMemory(assistantId: string, content: string
   return full;
 }
 
-// 持久化该助手库卡片序（排序页整库回写 sortOrder = 数组下标；ids = 该助手库全量 id——
-// saveMemoryOrder 同形制，全库 ≤ 200 行逐行 UPDATE 开销可忽略）
+// 持久化该助手库卡片序（ids = 该助手库全量 id；saveMemoryOrder 同形制，≤ 200 行开销可忽略）
 export async function saveAssistantMemoryOrder(ids: string[]): Promise<void> {
   for (let i = 0; i < ids.length; i++) {
     const bucket: relationalStore.ValuesBucket = { 'sortOrder': i };
@@ -446,83 +446,85 @@ export function broadcastAssistantMemoryList(): void {
     (AppStorage.get<number>(ASSISTANT_MEMORY_LIST_TICK_KEY) ?? 0) + 1);
 }
 
-// ── 助手库优化批量应用（applyMemoryOptChanges 同构事务；差异 = 重排限定该助手库——
-// changes 里的 id 全部属于该库〔调用方按库出计划〕，去空洞重排的 SELECT 带 assistantId
-// 条件防跨库行被误重排）。校验在纯函数层 buildMemoryOptPlan，本层只落库——同款两处判定
-// = 两处漂移面纪律；保留行缺失即抛错回滚同口径。
-// ★ 2026-09-22 记忆优化历史：第三参 snapshotNote 语义同 applyMemoryOptChanges（历史页摘要）；
-// 事务**第一步**存档的库 = 本助手库（archiveBeforeOptInTx 按 libraryId 判库）
+// ── 助手库优化批量应用（applyMemoryOptChanges 同构事务；差异 = 重排限定该助手库——去空洞
+// 重排的 SELECT 带 assistantId 条件防跨库行被误重排；校验在纯函数层本层只落库、保留行缺失
+// 即抛错回滚同口径；snapshotNote 语义同彼，事务第一步存档的库 = 本助手库〔archiveBeforeOptInTx
+// 按 libraryId 判库〕）
 export async function applyAssistantMemoryOptChanges(assistantId: string,
   changes: MemoryOptChange[], snapshotNote: string): Promise<void> {
   if (changes.length === 0) {
     return;
   }
-  const db: relationalStore.RdbStore = requireStore();
-  const now: number = Date.now();
-  db.beginTransaction();
-  try {
-    await archiveBeforeOptInTx(db, assistantId, snapshotNote, MEMORY_SNAPSHOT_KIND_OPT);
-    for (const change of changes) {
-      const bucket: relationalStore.ValuesBucket = { 'content': change.text, 'updatedAt': now };
-      const keepPredicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('assistant_memories');
-      keepPredicates.equalTo('id', change.keepId);
-      const affected: number = await db.update(bucket, keepPredicates);
-      if (affected === 0) {
-        throw new Error('待改写的记忆行不存在（已被删除），优化未应用');
-      }
-      for (const id of change.deleteIds) {
-        const dropPredicates: relationalStore.RdbPredicates =
-          new relationalStore.RdbPredicates('assistant_memories');
-        dropPredicates.equalTo('id', id);
-        await db.delete(dropPredicates);
-      }
-    }
-    // 该助手库剩余条目去空洞重排（带归属条件——只重排本库，不触碰其他助手库行）
-    const remainResult: relationalStore.ResultSet = await db.querySql(
-      'SELECT id FROM assistant_memories WHERE assistantId = ? ' +
-      'ORDER BY sortOrder ASC, createdAt ASC, content ASC', [assistantId]);
-    const remainIds: string[] = [];
+  // ★ 2026-09-29 写串行链入链（applyMemoryOptChanges 同款）
+  return runWriteQueued('applyAssistantMemoryOptChanges', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    const now: number = Date.now();
+    db.beginTransaction();
     try {
-      while (remainResult.goToNextRow()) {
-        remainIds.push(remainResult.getString(remainResult.getColumnIndex('id')));
+      await archiveBeforeOptInTx(db, assistantId, snapshotNote, MEMORY_SNAPSHOT_KIND_OPT);
+      for (const change of changes) {
+        const bucket: relationalStore.ValuesBucket = { 'content': change.text, 'updatedAt': now };
+        const keepPredicates: relationalStore.RdbPredicates =
+          new relationalStore.RdbPredicates('assistant_memories');
+        keepPredicates.equalTo('id', change.keepId);
+        const affected: number = await db.update(bucket, keepPredicates);
+        if (affected === 0) {
+          throw new Error('待改写的记忆行不存在（已被删除），优化未应用');
+        }
+        for (const id of change.deleteIds) {
+          const dropPredicates: relationalStore.RdbPredicates =
+            new relationalStore.RdbPredicates('assistant_memories');
+          dropPredicates.equalTo('id', id);
+          await db.delete(dropPredicates);
+        }
       }
-    } finally {
-      remainResult.close();
+      // 该助手库剩余条目去空洞重排（带归属条件——只重排本库，不触碰其他助手库行）
+      const remainResult: relationalStore.ResultSet = await db.querySql(
+        'SELECT id FROM assistant_memories WHERE assistantId = ? ' +
+        'ORDER BY sortOrder ASC, createdAt ASC, content ASC', [assistantId]);
+      const remainIds: string[] = [];
+      try {
+        while (remainResult.goToNextRow()) {
+          remainIds.push(remainResult.getString(remainResult.getColumnIndex('id')));
+        }
+      } finally {
+        remainResult.close();
+      }
+      for (let i = 0; i < remainIds.length; i++) {
+        const bucket: relationalStore.ValuesBucket = { 'sortOrder': i };
+        const predicates: relationalStore.RdbPredicates =
+          new relationalStore.RdbPredicates('assistant_memories');
+        predicates.equalTo('id', remainIds[i]);
+        await db.update(bucket, predicates);
+      }
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
     }
-    for (let i = 0; i < remainIds.length; i++) {
-      const bucket: relationalStore.ValuesBucket = { 'sortOrder': i };
-      const predicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('assistant_memories');
-      predicates.equalTo('id', remainIds[i]);
-      await db.update(bucket, predicates);
-    }
-    db.commit();
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
-  }
+  });
 }
 
-// ── 记忆优化历史（2026-09-22，方案-记忆优化历史-20260922 §5）：memory_snapshots 表读写——
-// 把「优化记忆不可撤销」变成「可回退」：每次优化落库前在**同事务内**先存一份整库快照，
-// 历史页可看、行卡可整库回退，恢复前又自动存一份「恢复前兜底」让恢复本身也可撤销。
-// ★ 2026-09-22 记忆导入笔：存档函数泛化为「非兜底槽」共用——kind 由调用方传（before_opt
-// 由两条优化链传 / before_import 由导入链传），历史页标签三态随之。
+// ── 记忆优化历史：memory_snapshots 表读写——把「优化记忆不可撤销」变成「可回退」：每次
+// 优化落库前在**同事务内**先存一份整库快照，历史页可看、行卡可整库回退，恢复前又自动存一份
+// 「恢复前兜底」让恢复本身也可撤销。kind 由调用方传（before_opt 优化链 / before_import 导入
+// 链 / before_restore·before_sink 两兜底槽），历史页标签随之。
 // 三条保留规则（防堆积的全部逻辑，勿增勿减）：
-// ①写任一非兜底槽时同事务清掉本库兜底槽——新一轮改动开始，上一轮的撤销窗口关闭；
+// ①写任一非兜底槽时同事务清掉本库**恢复前**兜底槽——新一轮改动开始，上一轮撤销窗口关闭。
+//   ★ 只清 before_restore，**两个兜底槽互不干涉**（整理不清恢复前槽、优化/导入不清整理前槽）
+//   ——有意选择：整理是高频动作，若它顺手清掉恢复前槽，「刚恢复完又自动整理一次」就再也
+//   撤销不回那次恢复；整理前槽也不该被优化/导入顶掉（「撤销上次整理」与「撤销上次恢复」
+//   是两支独立后悔药，不共享窗口）；
 // ②**非兜底槽合计**每库 ≤ MEMORY_SNAPSHOT_KEEP 份（优化与导入共用同一配额，超出按 createdAt
-//   升序淘汰最旧）——若按 kind 各留一份，导入会出现「永不清理的快照」，即无界增长；
-// ③before_restore 每库 ≤1 份，写入前先删本库旧兜底行（覆盖写）。
-// 故总量恒为每库 3 + 1（不论两种非兜底槽各占多少），不存在无界增长；恢复动作也不会挤掉
-// 真正的历史。
-// ★ 须知的既有副作用（沿用优化链同口径，非导入笔引入）：规则①的清兜底槽意味着「任何一次
-// 非兜底存档都会作废上一次整库回退的撤销窗口」——用户刚做过一次恢复、随后又优化或导入，
-// 那次恢复就无法再撤销。这是存档函数的既有行为，本笔沿用不另改；后笔勿当 bug 顺手修
-//（要改须先想清「撤销窗口只覆盖最近一次破坏性动作」这一语义是否有意为之）。
-// ★ 库选择统一走 libraryId === MEMORY_SCOPE_GLOBAL 判据（与全库同源；**禁按 id 前缀判库**
-//   ——前缀只供人读，见文件头注释）。
-// ★ 快照不进 EXPORT_TABLES（D8：本地后悔药不是跨设备资产）；删助手时其助手库快照级联删
+//   升序淘汰最旧）——按 kind 各留一份会让导入出现「永不清理的快照」= 无界增长；
+// ③两个兜底槽（before_restore / before_sink）各每库 ≤1 份，写入前先删本库该槽旧行（覆盖写）。
+// 故总量恒为每库 3 + 1 + 1，无界增长不存在，恢复动作不会挤掉真正的历史。
+// ★ 既有副作用（沿用优化链同口径）：规则①意味着「任何一次非兜底存档都会作废上一次整库回退
+//   的撤销窗口」——用户刚恢复又优化/导入，那次恢复即无法再撤销。这是有意行为（撤销窗口只
+//   覆盖最近一次破坏性动作），后笔勿当 bug 顺手修。
+// ★ 库选择统一走 libraryId === MEMORY_SCOPE_GLOBAL 判据（**禁按 id 前缀判库**——前缀只供
+//   人读，见文件头注释）。
+// ★ 快照不进 EXPORT_TABLES（本地后悔药不是跨设备资产）；删助手时其助手库快照级联删
 //   （deleteAssistantCascade 事务内调用）。
 export const MEMORY_SNAPSHOT_KEEP: number = 3;
 export const MEMORY_SNAPSHOT_KIND_OPT: string = 'before_opt';
@@ -530,6 +532,11 @@ export const MEMORY_SNAPSHOT_KIND_RESTORE: string = 'before_restore';
 // 导入前存档（2026-09-22 记忆导入笔）：与 before_opt 同属非兜底槽，共用规则①②的配额与
 // 裁剪；历史页标签映射见 MemoryHistoryPage.snapshotKindLabel
 export const MEMORY_SNAPSHOT_KIND_IMPORT: string = 'before_import';
+// 整理前存档：**兜底槽**（与 before_restore 并列，规则③）——每次整理（自动链 / 手动「立即
+// 整理」同链）覆盖写一份整库快照，供「撤销上次整理」。标签中性（'整理前'）是必须的：手动
+// 场景写「自动整理前」是假话；因它是覆盖写的高频槽，故不进规则②的非兜底配额（否则每次
+// 退出会话都挤掉优化历史）
+export const MEMORY_SNAPSHOT_KIND_SINK: string = 'before_sink';
 
 export interface MemorySnapshotRow {
   id: string;
@@ -556,8 +563,9 @@ function readSnapshotRow(result: relationalStore.ResultSet): MemorySnapshotRow {
   };
 }
 
-// 该库全部快照，createdAt 降序（最新在上——兜底槽必然排最前，因为它恒是最新写入的一份）。
-// **不解析 payload**：列表只需 itemCount（payload 是整库存量文本，列表页逐行解析是白烧）。
+// 该库全部快照，createdAt 降序（按写入时刻描述——两枚兜底槽并行后「兜底槽必然排最前」
+// 不恒真，历史页头注释同口径）。**不解析 payload**：列表只需 itemCount（payload 是整库
+// 存量文本，逐行解析是白烧）。
 export async function queryMemorySnapshots(libraryId: string): Promise<MemorySnapshotRow[]> {
   const predicates: relationalStore.RdbPredicates =
     new relationalStore.RdbPredicates('memory_snapshots');
@@ -657,17 +665,19 @@ async function insertSnapshotInTx(db: relationalStore.RdbStore, libraryId: strin
   await db.insert('memory_snapshots', bucket);
 }
 
-// 非兜底槽统一裁剪（兜底槽不占配额、由「覆盖写」自管）：按 createdAt 升序数，超出 keep
-// 的最旧若干份逐个 DELETE。keep 由调用方以**常量引用**传入（MEMORY_SNAPSHOT_KEEP），判断
-// 口径单源在常量，禁在调用点写字面量。
-// ★ 判据 = `kind != 兜底槽` 而非 `kind = before_opt`（2026-09-22 记忆导入笔）：导入槽与优化槽
-// 共用同一配额——按 kind 各裁一份会让 before_import 永不清理 = 无界增长（宪法「数据有界」）；
-// 改成否定式后，未来再加非兜底 kind 也自动纳入配额，不必回来改本函数
+// 非兜底槽统一裁剪（兜底槽不占配额、由「覆盖写」自管）：按 createdAt 升序数，超出 keep 的
+// 最旧若干份逐个 DELETE；keep 由调用方以**常量引用**传入（MEMORY_SNAPSHOT_KEEP），判断口径
+// 单源在常量，禁在调用点写字面量。
+// ★ 判据 = 「排除所有兜底槽」而非 `kind = before_opt`：导入槽与优化槽共用同一配额——按 kind
+//   各裁一份会让 before_import 永不清理 = 无界增长；否定式后未来加非兜底 kind 自动纳入配额。
+// ★ 兜底槽为两枚（before_restore + before_sink）——判据为 `kind NOT IN (?, ?)`，**新增兜底槽
+//   必须在此并签**，漏签 = 该槽被当非兜底槽裁掉，「覆盖写恒 ≤1 份」语义被打破
 async function trimSnapshotsInTx(db: relationalStore.RdbStore, libraryId: string,
   keep: number): Promise<void> {
   const result: relationalStore.ResultSet = await db.querySql(
-    'SELECT id FROM memory_snapshots WHERE libraryId = ? AND kind != ? ' +
-    'ORDER BY createdAt ASC, rowid ASC', [libraryId, MEMORY_SNAPSHOT_KIND_RESTORE]);
+    'SELECT id FROM memory_snapshots WHERE libraryId = ? AND kind NOT IN (?, ?) ' +
+    'ORDER BY createdAt ASC, rowid ASC',
+    [libraryId, MEMORY_SNAPSHOT_KIND_RESTORE, MEMORY_SNAPSHOT_KIND_SINK]);
   const ids: string[] = [];
   try {
     while (result.goToNextRow()) {
@@ -682,13 +692,12 @@ async function trimSnapshotsInTx(db: relationalStore.RdbStore, libraryId: string
   }
 }
 
-// 改动前存档（★ 调用点 = 优化两条链与导入链，各自事务的 **第一步**；函数名里的 Opt 是历史
-// 名字——2026-09-22 导入笔已泛化为「非兜底槽共用」，改名牵动三处调用与断言收益为零，故留）：
-// 读当前库全量 → 写一份调用方指定 kind 的快照 → 清本库兜底槽（规则①）→ 裁剪配额（规则②）。
-// ★ 读必须在事务内（调用方已开）：事务外先读再开事务，两次操作之间库可能被别处改动
-// （自动整理落库），存下的就不是「被这次操作改掉的那一版」。
-// ★ kind 由调用方传（MEMORY_SNAPSHOT_KIND_OPT / MEMORY_SNAPSHOT_KIND_IMPORT），**禁写死
-// before_opt**：写死会让导入存出的快照顶着「优化前」标签上屏（历史页说的是另一件事）。
+// 改动前存档（调用点 = 优化两条链与导入链，各自事务的**第一步**；函数名里的 Opt 是历史名——
+// 已泛化为「非兜底槽共用」，改名牵动调用与断言收益为零故留）：读当前库全量 → 写一份调用方
+// 指定 kind 的快照 → 清本库兜底槽（规则①）→ 裁剪配额（规则②）。★ 读必须在事务内（调用方
+// 已开）：事务外先读再开事务，两次操作之间库可能被别处改动（自动整理落库），存下的就不是
+// 「被这次操作改掉的那一版」。★ kind 由调用方传，**禁写死 before_opt**：写死会让导入存出的
+// 快照顶着「优化前」标签上屏。
 export async function archiveBeforeOptInTx(db: relationalStore.RdbStore, libraryId: string,
   note: string, kind: string): Promise<void> {
   const rows: MemoryRow[] = libraryId === MEMORY_SCOPE_GLOBAL ?
@@ -697,6 +706,50 @@ export async function archiveBeforeOptInTx(db: relationalStore.RdbStore, library
   await db.executeSql('DELETE FROM memory_snapshots WHERE libraryId = ? AND kind = ?',
     [libraryId, MEMORY_SNAPSHOT_KIND_RESTORE]);
   await trimSnapshotsInTx(db, libraryId, MEMORY_SNAPSHOT_KEEP);
+}
+
+// 整理前存档（与 archiveBeforeOptInTx 并列，但走**兜底槽**规则③）：读当前库全量 → 删本库旧
+// before_sink 行 → 写一份 before_sink 快照（每库恒 ≤1 份覆盖写）。与上函数的有意差异：①不清
+// before_restore 也不裁配额（兜底槽互不干涉）；②note 恒 ''（整理摘要的行数写库后才定，而
+// 快照必须写库前拍）；③调用点 = insertSinkedMemories 事务第一步（快照与改动同生同死，事务
+// 外先拍会留幽灵快照）。读必须在事务内——同上函数纪律。
+export async function archiveBeforeSinkInTx(db: relationalStore.RdbStore,
+  libraryId: string): Promise<void> {
+  const rows: MemoryRow[] = libraryId === MEMORY_SCOPE_GLOBAL ?
+    await queryMemories() : await queryAssistantMemories(libraryId);
+  await db.executeSql('DELETE FROM memory_snapshots WHERE libraryId = ? AND kind = ?',
+    [libraryId, MEMORY_SNAPSHOT_KIND_SINK]);
+  await insertSnapshotInTx(db, libraryId, MEMORY_SNAPSHOT_KIND_SINK, '', rows);
+}
+
+// 整理落库（唯一调用方 = MemoryGen.runMemorySinking）：一个事务内「先存整库快照 → 再逐条
+// 插入」——整理是本工程**唯一批量循环写记忆**的链，裸循环 insert 无事务无存档会留半截库且
+// 无从回退。★ 事务为**单句柄全局**（sharedRdbStore）：本函数自开自关，调用方不得再套事务；
+// 内部复用的 insertMemory / insertAssistantMemory 自身不开事务，在外部事务内调用安全。★ 失败
+// rollBack 后**原样抛出**（禁吞错），由调用方转 failed 态页面提示「整理失败」。★ assistantId
+// 只在全局库分支被消费（沉淀来源标注；助手库里该列是归属语义，取 libraryId）
+export async function insertSinkedMemories(libraryId: string, lines: string[],
+  assistantId: string, conversationId: string): Promise<void> {
+  // ★ 写串行链入链
+  return runWriteQueued('insertSinkedMemories', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      await archiveBeforeSinkInTx(db, libraryId);
+      for (const line of lines) {
+        if (libraryId === MEMORY_SCOPE_GLOBAL) {
+          await insertMemory({ content: line, source: 'auto', assistantId: assistantId,
+            conversationId: conversationId });
+        } else {
+          await insertAssistantMemory(libraryId, line, 'auto', conversationId);
+        }
+      }
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+  });
 }
 
 // 恢复时写回单行（restoreMemorySnapshot 的写回步——两库分支唯二差异是表名与 assistantId
@@ -722,22 +775,21 @@ async function insertRestoredRowInTx(db: relationalStore.RdbStore, libraryId: st
   await db.insert('assistant_memories', bucket);
 }
 
-// 整库恢复（方案 §5.4，本域最关键的一段）：把库内容整体换回某份快照，一个事务内完成——
-// ①读当前库（事务内）②覆盖写兜底槽（恢复前状态，让「撤销这次恢复」仍可用）③清空本库
-// ④逐行写回快照条目。任一步失败 rollBack，中止即零改动（优化落库同款三件套）。
+// 整库恢复（本域最关键的一段）：一个事务内 ①读当前库（事务内）②覆盖写兜底槽（恢复前状态，
+// 让「撤销这次恢复」仍可用）③清空本库 ④逐行写回快照条目；任一步失败 rollBack，中止即零改动。
 // ★★ 恢复必须**原样写回 sortOrder / createdAt / updatedAt**，一个都不能刷成 Date.now()：
 //  · sortOrder 决定注入块内容与顺序（注入窗口按序贪心取前 30 条 / 2000 字，排序一变被截掉
 //    的就是另一批）；
 //  · createdAt（+ content）是排序并列兜底键，是「注入块字符串零漂移」的成立前提；
 //  · updatedAt 被 search_memory 工具的相关度并列排序消费（新者优先）。
-//  任一被重写，「整库替换」就名不副实——恢复出来的注入块和当时看到的不是一回事。
+//  任一被重写，「整库替换」名不副实——恢复出来的注入块和当时看到的不是一回事。
 // ★ 清空必须用 executeSql 裸 DML，**禁用 RdbPredicates 空条件**：in() 传空数组是「条件失效
-// 落全表」（官方 d.ts 原文），是全仓已知的危险区；带 assistantId 的条件虽是非空谓词，仍统一
-// 走 executeSql 保持写法一致。
-// ★ 从兜底槽恢复（= 撤销一次恢复）无需特判：步骤①已把目标快照读进内存，步骤②覆盖兜底槽
-// 不会破坏本次恢复；恢复完成后兜底槽 = 这次操作的前态，语义自洽。
-// ★ 事务是**单句柄全局的**（sharedRdbStore）：本函数不得在别处事务已开启时调用（嵌套
-// beginTransaction 会抛）。它自己开事务，且**只被 UI 直接调用**，不在任何既有事务内调用。
+// 落全表」（官方 d.ts 原文），全仓已知危险区；带 assistantId 的条件虽非空谓词，仍统一走
+// executeSql 保持写法一致。
+// ★ 从兜底槽恢复（= 撤销一次恢复）无需特判：目标快照已读进内存，覆盖兜底槽不破坏本次恢复；
+// 恢复完成后兜底槽 = 这次操作的前态，语义自洽。
+// ★ 事务是**单句柄全局的**（sharedRdbStore）：不得在别处事务已开启时调用（嵌套 begin 抛）；
+// 自己开事务，**只被 UI 直接调用**。
 export async function restoreMemorySnapshot(snapshotId: string): Promise<void> {
   const snapshot: MemorySnapshotRow | null = await queryMemorySnapshot(snapshotId);
   if (snapshot === null) {
@@ -745,36 +797,39 @@ export async function restoreMemorySnapshot(snapshotId: string): Promise<void> {
   }
   const target: MemoryRow[] = parseSnapshotPayload(snapshot.payload);
   const libraryId: string = snapshot.libraryId;
-  const db: relationalStore.RdbStore = requireStore();
-  db.beginTransaction();
-  try {
-    const current: MemoryRow[] = libraryId === MEMORY_SCOPE_GLOBAL ?
-      await queryMemories() : await queryAssistantMemories(libraryId);
-    // 覆盖写兜底槽（规则③：先删本库旧兜底行再插，每库恒 ≤1 份）
-    await db.executeSql('DELETE FROM memory_snapshots WHERE libraryId = ? AND kind = ?',
-      [libraryId, MEMORY_SNAPSHOT_KIND_RESTORE]);
-    await insertSnapshotInTx(db, libraryId, MEMORY_SNAPSHOT_KIND_RESTORE, '', current);
-    // 清空本库（全局 = 整表；助手库 = 该归属行）
+  // ★ 2026-09-29 写串行链入链（快照读取属读操作留链外；广播在链节内 commit 之后，时序不变）
+  return runWriteQueued('restoreMemorySnapshot', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      const current: MemoryRow[] = libraryId === MEMORY_SCOPE_GLOBAL ?
+        await queryMemories() : await queryAssistantMemories(libraryId);
+      // 覆盖写兜底槽（规则③：先删本库旧兜底行再插，每库恒 ≤1 份）
+      await db.executeSql('DELETE FROM memory_snapshots WHERE libraryId = ? AND kind = ?',
+        [libraryId, MEMORY_SNAPSHOT_KIND_RESTORE]);
+      await insertSnapshotInTx(db, libraryId, MEMORY_SNAPSHOT_KIND_RESTORE, '', current);
+      // 清空本库（全局 = 整表；助手库 = 该归属行）
+      if (libraryId === MEMORY_SCOPE_GLOBAL) {
+        await db.executeSql('DELETE FROM memories');
+      } else {
+        await db.executeSql('DELETE FROM assistant_memories WHERE assistantId = ?', [libraryId]);
+      }
+      // 逐行写回（含 id 与三时间字段原样——见上方 ★★）
+      for (const row of target) {
+        await insertRestoredRowInTx(db, libraryId, row);
+      }
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+    // 广播（对应库列表刷新；事务已提交，广播在提交后）
     if (libraryId === MEMORY_SCOPE_GLOBAL) {
-      await db.executeSql('DELETE FROM memories');
+      broadcastMemoryList();
     } else {
-      await db.executeSql('DELETE FROM assistant_memories WHERE assistantId = ?', [libraryId]);
+      broadcastAssistantMemoryList();
     }
-    // 逐行写回（含 id 与三时间字段原样——见上方 ★★）
-    for (const row of target) {
-      await insertRestoredRowInTx(db, libraryId, row);
-    }
-    db.commit();
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
-  }
-  // 广播（对应库列表刷新；事务已提交，广播在提交后）
-  if (libraryId === MEMORY_SCOPE_GLOBAL) {
-    broadcastMemoryList();
-  } else {
-    broadcastAssistantMemoryList();
-  }
+  });
 }
 
 // 删助手级联删其快照（AssistantDb.deleteAssistantCascade 事务内调用——与
@@ -782,4 +837,102 @@ export async function restoreMemorySnapshot(snapshotId: string): Promise<void> {
 export async function deleteMemorySnapshotsOfAssistant(assistantId: string): Promise<void> {
   await requireStore().executeSql('DELETE FROM memory_snapshots WHERE libraryId = ?',
     [assistantId]);
+}
+
+// 清空全部记忆（唯一调用方 = 快速清理页）：三表一个事务全清——memories + assistant_memories
+// + memory_snapshots 整表。★ 快照必须同清，否则「清空」语义不成立——快照 payload 存着全量
+// 正文，只清库不清快照 = 历史页一键即可把刚清空的记忆整库恢复回来，与「删除本机记忆」预期
+// 相悖。★ 三条 DELETE 一律 executeSql 裸 DML、禁用 RdbPredicates 空条件（in() 空数组 = 条件
+// 失效落全表，全仓危险区；restoreMemorySnapshot 同款纪律）。★ 事务单句柄全局：自开事务，
+// 不得在别处事务内调用。★ 不动 assistants.memoryInject/memorySink 等开关列（那是偏好不是
+// 内容）。清空后全局库与助手库两处列表广播各推一次（栈下层页面靠 tick 重拉）。
+export async function clearAllMemories(): Promise<void> {
+  // ★ 2026-09-29 写串行链入链（广播在链节内 commit 之后，时序不变）
+  return runWriteQueued('clearAllMemories', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      await db.executeSql('DELETE FROM memories');
+      await db.executeSql('DELETE FROM assistant_memories');
+      await db.executeSql('DELETE FROM memory_snapshots');
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+    broadcastMemoryList();
+    broadcastAssistantMemoryList();
+  });
+}
+
+// ── 存储域写入命令（读-判-写单事务收口）──
+// 工具 create 与编辑页新增此前是「调用方先 count 再调原语」的两步分离（判满与落库之间库可被
+// 并发写入 = 竞面）；两条 Guarded 命令把「父行校验 → 满额判定 → insert」收进同一事务（形制照
+// 既有事务三件套，未新造形态）。
+// ★ 判定单源 assertMemoryInsertAllowed 自身**不开事务**：applyMemoryImport 外层事务内逐条
+//   复用（外层事务内禁调自开事务的命令——嵌套 begin 抛）。
+// ★ 父行校验走裸 SQL 查 assistants——本件禁 import AssistantDb（其已引本件，坑50 零环红线）。
+// ★ 满额是软约束上限的写入侧硬闸：拒绝超限写入但不改各入口产品满额行为（工具回执 / 库页
+//   拦截 / 自动链跳过的文案与形态单源一律不动）；自动沉淀链维持调用方预检 + 原语直插不变
+//  （逐条硬闸会把「满额跳过 + hilog」改成整批失败）。
+
+// 插入前判定（父行在场 + 库内余量；抛中文错）：助手库面先查 assistants 父行（行已被删再写 =
+// 助手库孤儿行；全局库面无父行概念免查）；满额判定读 COUNT 与写入同事务，消「判满后插入前
+// 被并发写满」竞面。
+export async function assertMemoryInsertAllowed(libraryId: string): Promise<void> {
+  if (libraryId !== MEMORY_SCOPE_GLOBAL) {
+    const parentResult: relationalStore.ResultSet = await requireStore().querySql(
+      'SELECT id FROM assistants WHERE id = ?', [libraryId]);
+    let parentExists: boolean = false;
+    try {
+      parentExists = parentResult.goToNextRow();
+    } finally {
+      parentResult.close();
+    }
+    if (!parentExists) {
+      throw new Error('助手不存在或已删除，写入未生效');
+    }
+  }
+  const count: number = libraryId === MEMORY_SCOPE_GLOBAL ?
+    await countMemories() : await countAssistantMemories(libraryId);
+  if (count >= MEMORY_MAX_TOTAL) {
+    throw new Error(MEMORY_FULL_TIP);
+  }
+}
+
+// 全局库写入命令（自开事务；★ 写串行链入链——本命令事务与 graph 轮次落库的 IMMEDIATE 事务
+// 并发互撞是真机报障 14800024 根因，入链后排队消解）
+export async function insertMemoryGuarded(row: MemoryInsertInput): Promise<MemoryRow> {
+  return runWriteQueued('insertMemoryGuarded', async (): Promise<MemoryRow> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      await assertMemoryInsertAllowed(MEMORY_SCOPE_GLOBAL);
+      const full: MemoryRow = await insertMemory(row);
+      db.commit();
+      return full;
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+  });
+}
+
+// 助手库写入命令（insertMemoryGuarded 同构——差异 = 父行校验按助手 id 与库内独立计数）
+export async function insertAssistantMemoryGuarded(assistantId: string, content: string,
+  source: string, conversationId: string): Promise<MemoryRow> {
+  return runWriteQueued('insertAssistantMemoryGuarded', async (): Promise<MemoryRow> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      await assertMemoryInsertAllowed(assistantId);
+      const full: MemoryRow =
+        await insertAssistantMemory(assistantId, content, source, conversationId);
+      db.commit();
+      return full;
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+  });
 }

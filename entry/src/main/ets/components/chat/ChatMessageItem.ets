@@ -1,119 +1,314 @@
-// 聊天气泡渲染（2026-08-29 任务书 M1 自 dshinhm 同名文件随迁改造——原 401 行贴 400
-// 红线，本次为「只删不加」式精简，宪法例外条款）：剥离 KimiMediaApi 依赖与附件媒体
-// 渲染（aboutToAppear 进入即下载 / mediaStripIds / MediaThumb 缩略图 / 点击预览上行
-// ——附件整体后置 M4），其余分支原样保留。
-// 按 ChatMessage.kind 分发五种形态——user 右侧气泡 / assistant 左侧卡片色气泡 /
-// thinking 思考折叠块 / tool 工具调用卡（★ 2026-09-20 审批卡视觉迁移笔 A：工具卡域级拆分，
-// 卡面本体迁 ChatToolCard.ets，本文件 tool 分支只余一行实例化）/ notice 居中提示条。
-// user/assistant 两分支 = @lidary/markdown 的 Markdown 组件 + 流式公式守卫（ChatLatexGuard）；
-// 气泡行边距（常量 BUBBLE_PAD_*——dshinhm 二三三改真机定稿值随迁）：用户侧镜像（右近 4 /
-// 左远 20）；★ 2026-09-16 决明「助手的右边距缩短与左边距统一」后助手侧三件（消息泡 /
-// 思考块 / 工具卡）两侧同取近侧 4/4，用户泡宽度上限另收 78%（BUBBLE_USER_MAX_WIDTH，
-// 2026-09-16 立 60% → 2026-09-18 增宽 30%，挂点由 constraintSize 改外层定宽壳）。
-// ★ 2026-09-01 反碎片并回：ChatThinkingBlock.ets（思考折叠块，本文件单消费方、同域
-// 「消息气泡分支渲染」）并入——原拆分动因 = 本文件当年 390 行逼近 400 旧红线，宪法修订
-//（600 软引导 / 1000 硬线 + 反碎片下限）后按「并入既有同域文件优先」复归。
-import { ConfigurationConstant } from '@kit.AbilityKit';
-import { Markdown } from '@lidary/markdown';
+// 聊天气泡渲染（自 dshinhm 同名文件随迁改造）：按 ChatMessage.kind 分发形态——user 右侧
+// 气泡 / assistant 左侧卡片色气泡 / notice 居中提示条（summary / clear 同族状态行）。
+// ★ 过程段折叠后本件只余非步骤行（user / assistant 正文 / summary / clear / notice）——
+// thinking 与 tool 步骤渲染件 = ChatProcessSegment.ChatProcessStep；消息级操作栏唯一化：
+// 底栏只在 `msg.opsHost === true` 的最终正文行渲染（轮归属判据单源 =
+// ChatDisplayProjection.computeOpsHostIds），中途正文保留阅读/长按复制；失败/中止且本轮无
+// 正文 = 空正文行改轻量状态尾部（措辞按 msg.emptyRoundKind 分流，判据单源见投影）；链标记
+// 与思考半泡切角拼接已退役——正文气泡恒四角圆角、恒上距 CARD_SPACING。
+// 气泡行边距常量 BUBBLE_PAD_*（真机定稿值随迁）：用户侧镜像（右近 4/左远 20）；助手侧两侧
+// 同取近侧 4/4；用户泡宽度上限 BUBBLE_USER_MAX_WIDTH 78%（挂点 = 外层定宽壳，见 user 分支）。
+import { ConfigurationConstant, common } from '@kit.AbilityKit';
+import { FrameCallback } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BUBBLE_RADIUS, cardBg, cardBorderColor, cardDescColor, cardTitleColor, ATTACH_BUBBLE_GAP,
-  CARD_SPACING, BUBBLE_PAD_FAR, BUBBLE_PAD_NEAR, BUBBLE_USER_MAX_WIDTH } from '../../common/Theme';
+  CARD_SPACING, CARD_RADIUS, CHAT_ROUND_SPACING, CHAT_ASK_GAP, BUBBLE_PAD_FAR, BUBBLE_PAD_NEAR,
+  BUBBLE_USER_MAX_WIDTH, quoteBarColor, quoteBlockBg, chatBubbleUserBg,
+  CHAT_LAYOUT_DEBUG } from '../../common/Theme';
 import { hideAttachAnnotate } from '../../common/AttachmentUtil';
-import { getThinkExpandDefault, isCubeEngineEnabled } from '../../common/AppPreferences';
-import { tokenShort } from '../../common/TokenEstimate';
 import { overlayMaterial } from '../../common/ImmersiveLevel';
-import { guardStreamingLatex, guardStreamingLatexLive } from './ChatLatexGuard';
+import { withAiContentLabel } from '../../common/AiDisclosure';
+import { buildCopySheetText } from '../../common/MarkdownText';
+import { copyTextToClipboard } from '../../common/Clipboard';
 import { AttachmentBubble } from './AttachmentBubble';
-import { ChatMessage } from './ChatMessageCompose';
-import { ChatToolCard } from './ChatToolCard';
+import { quotePreviewOf } from './ChatQuoteBar';
+import { ChatMessage, DsCitationSpan, dsCitationSpansOf,
+  dsSourceEntryAnchorId } from './ChatMessageCompose';
+// 二期 S4 #13：来源卡域整段迁出（本件只留一行组件调用——徽标与长按在新址）
+import { ChatSourceCard } from './ChatSourceCard';
+import { launchExternalLink } from '../../common/ExternalLink';
 import { ChatSuggestBar } from './ChatSuggestBar';
 import { MESSAGE_MENU_ANCHOR_PREFIX } from './ChatMoreMenu';
-import { CubeMarkdownView } from './cube/CubeMarkdownView';
+import { ChatMarkdownBody } from './ChatMarkdownBody';
+import { ChatUsagePopup } from './ChatUsagePopup';
+import { LONG_MSG_COLLAPSE_CHARS } from './markdown/MarkdownScrollableBlock';
+import { isLongMsgCollapseEnabled, PREF_CARD_ALPHA_LEVEL_KEY, CARD_ALPHA_DEFAULT }
+  from '../../common/AppPreferences';
+import { ChatRoundHeader, formatMsgTime } from './ChatMessageHeader';
+import { FONT_BODY_DEFAULT, FONT_CODE_DEFAULT, PREF_FONT_BODY_KEY,
+  PREF_FONT_CODE_KEY, PREF_FONT_LIB_KEY, bodyFontFamily, codeFontFamily } from '../../common/ChatFont';
 
-// 库内层 List 与消息流 List 的嵌套滚动策略（README 先例组合：下滚父优先、回滚自身优先）。
-// 坑72：nestedScroll 参数类型是 union（NestedScrollOptions | undefined），union 上下文禁
-// 对象字面量——先落精确类型常量再传入。
-const MD_NESTED_SCROLL: NestedScrollOptions = {
-  scrollForward: NestedScrollMode.PARENT_FIRST,
-  scrollBackward: NestedScrollMode.SELF_FIRST
-};
+// 消息正文渲染统一走 ChatMarkdownBody（旧 @lidary/Cube 双库与调试双闸已退役；新引擎各块自理横滚）。
 
-// 思考半泡内「思考区 ↔ 正文区」分割线的上方留白（vp，观感参数可单点调）
-const THINK_DIVIDER_GAP: number = 8;
+// ── 生成中饰件（决明拍板）──
+// 蓝光标几何（vp）：绘制在正文块下沿外侧、正文与工具栏之间的既有空档内；offset = 光标高 ⇒
+// 顶边贴正文块下沿。零排版装饰（Stack 叠层 + offset 属渲染域位移，不入布局）⇒ 撤下零位移、
+// 不压字、不改断行。初值，真机可整组微调一档
+const GEN_CURSOR_WIDTH_VP: number = 3.5;
+const GEN_CURSOR_HEIGHT_VP: number = 14;
+const GEN_CURSOR_RADIUS_VP: number = 1.75;
+const GEN_CURSOR_OFFSET_Y_VP: number = 14;
 
-// 气泡行内边距（dshinhm 二三三改定稿值；★ 2026-09-15 预览笔上收 Theme.ets——附件独立
-// 气泡（AttachmentBubble）与消息泡两件同源消费，本文件改 import。★ 常量**值**已随
-// 2026-09-16 气泡横向几何笔按角色分叉——现行口径见 Theme.ets 常量注释与本文件三处落点）
-// 用户气泡蓝：自定义色板资源 chat_bubble_user（base/dark 限定词随迁——浅色 #A9C7FA /
-// 深色 #3A5A94，dshinhm 真机定稿值）
+// ── 长正文占位骨架（★ 2026-10-18 一次出现笔）──
+// 构建期行内只显静态灰条（不挂逐帧动画——动画不得盖住被阻塞主线程）；正文层 opacity 0 在
+// 背后逐帧建块，揭示完成一次性显现。几何初值，真机可调
+const LONG_REVEAL_SKELETON_BAR_HEIGHT: number = 14;
+const LONG_REVEAL_SKELETON_GAP: number = 10;
+const LONG_REVEAL_SKELETON_RADIUS: number = 7;
+
+// 气泡侧引用摘要长度（气泡密度比输入条更高，故短于 QUOTE_BAR_PREVIEW_CHARS；真机微调档）
+const BUBBLE_QUOTE_PREVIEW_CHARS: number = 12;
+
+// 展开动作一次性帧（★ 2026-10-18 一次出现笔）：点击收起条当帧只绘骨架，下一帧才挂正文
+//（骨架先实际绘制一帧的铁律）。与组件同寿、销毁成对 cancel
+class ChatExpandFrame extends FrameCallback {
+  private action: (() => void) | null;
+  constructor(action: () => void) { super(); this.action = action; }
+  cancel(): void { this.action = null; }
+  onFrame(_time: number): void {
+    const action: (() => void) | null = this.action;
+    this.action = null;
+    action?.();
+  }
+}
+
+// 用户气泡蓝：色值单源 = Theme 函数 chatBubbleUserBg（浅 #DCE8FF / 深 #2E4A73 双档原值，
+// 随卡底透明度档位叠 alpha；资源条目已退役）。浅色取状态强调淡底同值（蓝味再淡与白卡分不开）；
+// 深色不复用身份深蓝底 #1B2A4A（与卡底几乎同色，泡边界会消失）。消息泡与附件泡共用本函数
 @Component
 export struct ChatMessageItem {
-  // @ObjectLink 对象级观察：流式增量由页面侧原地改 ChatMessage 字段（键恒定不重建列表项），
-  // @Observed set 触发本组件刷新
+  // @ObjectLink 对象级观察：流式增量由页面侧原地改 ChatMessage 字段（键恒定不重建列表项）
   @ObjectLink msg: ChatMessage;
+  // 助手气泡档位：宿主进页读一次后下发——重进会话生效，本组件不订阅偏好键（流式期间重跑
+  // build 不换档）；只作用于助手正文那一层
+  bubbleVisible: boolean = true;
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // ask_user 答案上行（ChatPage 构造处注入 → ChatToolCard → ChatAskUserCard；默认空实现防漏接）
-  onAskSubmit: (callId: string, answerJson: string) => void = (callId: string,
-    answerJson: string): void => {};
-  // browse_act 高危确认上行（2026-09-18 P2·B 单元；ChatPage 构造处注入 →
-  // ChatSendCtrl.resolveBrowseConfirm → ToolRuntime.resolveBrowseConfirm；同 onAskSubmit 契约）
-  onBrowseConfirm: (callId: string, approved: boolean) => void = (callId: string,
-    approved: boolean): void => {};
-  // ── 消息气泡底栏（2026-09-14 任务书；回调一律上行——照 onAskSubmit 契约，本组件零业务）──
-  // 重试键点击上行（msgId；ChatPage 委托 ChatSendCtrl.retryLast 就地替换重答——多版本保留）
+  // 卡底透明度档位 @StorageProp 只读订阅：档位键不进任何 ForEach/LazyForEach 键——属性级
+  // 更新不触发列表项重建（列表键纪律），档位变化属性级刷新助手泡底色
+  @StorageProp(PREF_CARD_ALPHA_LEVEL_KEY) cardAlphaLevel: number = CARD_ALPHA_DEFAULT;
+  // 消息字体三键 @StorageProp 自订阅（选择值两键 + 共享字体库 JSON）：改选回会话页即重渲拉新
+  // 家族串（推导单源 = ChatFont 纯函数，本组件换算一次后经 @Param 下发 V2 正文链）。★ 换字体
+  // 不改 content 串、不换键：流式绑定与滚动链零感知，重排只发生在改选当帧
+  @StorageProp(PREF_FONT_BODY_KEY) fontBodyValue: string = FONT_BODY_DEFAULT;
+  @StorageProp(PREF_FONT_CODE_KEY) fontCodeValue: string = FONT_CODE_DEFAULT;
+  @StorageProp(PREF_FONT_LIB_KEY) fontLibJson: string = '';
+
+  // 正文/代码家族串（家族串推导单源 = ChatFont 纯函数，禁本处拼串）
+  private resolveBodyFamily(): string {
+    return bodyFontFamily(this.fontBodyValue, this.fontLibJson);
+  }
+
+  private resolveCodeFamily(): string {
+    return codeFontFamily(this.fontCodeValue, this.fontLibJson);
+  }
+
+  // 展开动作的下一帧挂载句柄（一次性；销毁成对 cancel）
+  private expandFrame: ChatExpandFrame | null = null;
+
+  // ── DS 角标解析记忆化（S3③；来源卡解析已随 #13 迁出本件，缓存只剩角标一份）──
+  private citeCacheJson: string = '';
+  private citeCacheText: string = '';
+  private citeCacheList: DsCitationSpan[] = [];
+  // 来源卡角标联动展开的延时句柄（< 0 = 无在途；成对释放——离场清，见 onCitation 注释）
+  private dsExpandTimer: number = -1;
+
+  // M2 角标区间（UTF-16 码元；正文与 serverToolsJson 任一变化即失效重算——正文流式增长期
+  // serverToolsJson 恒缺席，自然旁路）。来源卡条目已迁出本件，但角标由正文渲染层消费，
+  // 仍留父件
+  private dsCitations(): DsCitationSpan[] {
+    const json: string = this.msg.serverToolsJson ?? '';
+    if (json === '') {
+      return [];
+    }
+    if (json !== this.citeCacheJson || this.msg.text !== this.citeCacheText) {
+      this.citeCacheJson = json;
+      this.citeCacheText = this.msg.text;
+      this.citeCacheList = dsCitationSpansOf(json, this.msg.text);
+    }
+    return this.citeCacheList;
+  }
+
+  // 来源行点击 → 系统浏览器（统一出口 launchExternalLink，照 ChatToolCard.openRefUrl 现役
+  // 链路——UIContext 形态取宿主 context；失败静默，URL 打开非关键路径不打断阅读）
+  private openSourceUrl(url: string): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      launchExternalLink(context, url);
+    } catch (e) {
+      // 静默（拿不到宿主 context 的边缘形态）
+    }
+  }
+
+  // 来源卡角标联动展开的延时句柄清理（幂等——离场与重复点击两条路径都安全）
+  private cancelDsExpandTimer(): void {
+    if (this.dsExpandTimer >= 0) {
+      clearTimeout(this.dsExpandTimer);
+      this.dsExpandTimer = -1;
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.expandFrame?.cancel();
+    this.expandFrame = null;
+    this.cancelDsExpandTimer();
+  }
+
+  // 标题/脚注锚点点击上行，目标为当前正文实际挂载的组件ID；滚动仍由宿主唯一Scroller执行。
+  onMarkdownAnchor: (id: string) => void = () => {
+  };
+  // 长消息展开上行（带 msgId）：宿主停进页校正/跟随、置阅读期底锚冻结并把该行滚到视口顶部；
+  // 正文随后在占位层背后分帧建块、一次性显现（展开只读开头，不强制回底）
+  onLongMessageExpand: (msgId: string) => void = (_msgId: string): void => {
+  };
+  // 来源卡展开收起前置上行（带 msgId；照 ChatProcessSegment.onPresentationChange 同名同义）：
+  // 宿主先解进页校正并对本行起「展开局部钉顶」（上沿不动、增量向下长），随后本件改展开意愿
+  //——吸底时卡头不被展开内容顶出屏，收起后仍在原处可再点
+  onPresentationChange: (msgId: string) => void = (_msgId: string): void => {
+  };
+  // ── 消息气泡底栏（回调一律上行——本组件零业务）──
+  // 重试键点击上行（msgId；ChatPage 委托菜单域 retryFromBubble——判据过闸后走 ChatRetryCtrl.
+  // retryAt 单链，末条与历史答案行同形）
   onRetryMsg: (msgId: string) => void = () => {
   };
-  // 版本切换键点击上行（2026-09-20 消息重新生成·多版本；msgId + 目标版下标——本组件按
-  // variantActive ±1 算好目标传入，ChatPage 校验越界与落库换版；照 onRetryMsg 同契约）
-  onVariantSwitch: (msgId: string, target: number) => void = () => {
+  // 回答版本步进上行（msgId + 方向〔-1 上一 / +1 下一〕；ChatPage 委托 ChatAnswerCtrl.
+  // stepVersion 现读候选切分支——本组件零业务）
+  onAnswerStep: (msgId: string, direction: number) => void = () => {
+  };
+  // 步进器计数位点击上行（msgId；ChatPage 委托 ChatAnswerCtrl.openFor 打开「其他回答」
+  // 面板——删除与全文预览在面板内）
+  onAnswerPanel: (msgId: string) => void = () => {
+  };
+  // 提问版本步进上行（user 行 ◀x/y▶ 箭头；msgId + 方向——与回答步进同链 ChatAnswerCtrl.stepVersion）
+  onQuestionStep: (msgId: string, direction: number) => void = () => {
   };
   // 「更多」键点击上行（msgId；ChatPage 经 ChatMessageMenuHost 按锚点弹出消息菜单）
   onMoreMenu: (msgId: string) => void = () => {
   };
-  // 长按气泡上行（msgId；ChatPageContent 根 Stack 宿主开「消息全文」半模态面板——
-  // ★ 2026-09-18 消息复制优化笔：复制入口自底栏复制键迁长按面板，原键与渲染器逐段
-  // 长按复制一并退役〔面板内跨段落自由选择——逐段渲染组件的选择困局根治处〕）
+  // 长按气泡上行（msgId；ChatPageContent 根 Stack 宿主开「消息全文」半模态面板——面板内跨
+  // 段落自由选择；★ 底栏复制键已复位，长按与底栏两入口并存，本 prop 保留不动）
   onCopyText: (msgId: string) => void = () => {
   };
-  // 附件泡点击派发上行（2026-09-15 预览第三轮；msgId + briefId → ChatPageContent 分派：
-  // 图片/文本进应用内查看器、文档走系统预览——与 onAskSubmit 同契约，本组件零业务）
+  // 附件泡点击派发上行（msgId + briefId → ChatPageContent 分派：图片/文本进应用内查看器、
+  // 文档走系统预览——本组件零业务）
   onPreviewAttach: (msgId: string, briefId: string) => void = (msgId: string,
     briefId: string): void => {
   };
-  // 隐私会话（构造注入后不变——isPrivate 页级恒定，坑30 口径，普通成员即够无坑16 风险）：
-  // true = 底栏整栏不显示（任务书 §2.1-④ 零留痕口径——剪贴板与菜单入口同属留痕面）
-  privateSession: boolean = false;
-  // 推荐问题 chip 点击上行（2026-09-19 推荐问题功能；text → ChatPageContent 复用 onSend
-  // 直接发送——决策 2，不填充输入框；上行链 ChatSuggestBar → 本组件 → ChatPageContent，
-  // 照 onRetryMsg 同契约，本组件零业务）
-  onSuggestSend: (text: string) => void = () => {
+  // 推荐问题 chip 点击上行（改名 onSuggestSend → onSuggestTap——点击去向恒为「填入输入框」，
+  // 2026-11-12 偏好开关批后不再有「直接发送」分支；本组件零业务）
+  onSuggestTap: (text: string) => void = () => {
   };
-  // 摘要提示行整行点击上行（2026-09-23 上下文压缩；kind='summary' 专用——打开「上下文用量」
-  // 面板看摘要详情与删除键；照 onRetryMsg 同契约，本组件零业务，ChatPage 构造处注入）
+  // 摘要提示行整行点击上行（kind='summary' 专用——打开「上下文用量」面板看摘要详情与删除键；
+  // 本组件零业务，ChatPage 构造处注入）
   onOpenUsage: () => void = () => {
+  };
+  // 错误 notice 跳转动作上行（action 值域 = 'provider'/'network'——发送域失败路径写
+  // msg.noticeAction；跳转在 ChatPageContent 直持 pathStack 实现；无动作 notice 不调本 prop）
+  onNoticeAction: (action: string) => void = () => {
   };
   // 用量键气泡开关（bindPopup 受控 show，照 InfoHintButton 复位语义）
   @State private usagePopupShow: boolean = false;
 
-  // 底栏显隐总判据（任务书 §2.1-④）：助手消息且非流式中；隐私会话整栏不显示。
-  // streaming 挂在 @Observed 字段上，流式收口（finishStream / settleRoundAssistant）
-  // 置假即刷新出栏；回放历史行两字段 undefined 同判「已结束」
+  // 底栏显隐总判据：助手消息且**本条承载本轮消息级操作栏**（opsHost——投影按轮归属写入的
+  // 最终正文标记）；中途正文与未收束候选正文不挂栏（「本轮操作栏仅这一处承载」）；streaming
+  // 由 opsHost 的轮收束判据覆盖（流式中的轮不可能产出 opsHost），此处不再单判
   private barVisible(): boolean {
-    return this.msg.kind === 'assistant' && this.msg.streaming !== true && !this.privateSession;
+    return this.msg.kind === 'assistant' && this.msg.opsHost === true;
   }
 
-  // 推荐问题 chips 显隐总判据（2026-09-19 推荐问题功能，任务书 §5.1「全与才显示」）：
-  // 末条助手消息（tail）且非流式中（streaming）且建议非空且非隐私会话。
-  // ★ 「非 busy」由 tail + streaming 联合承载，不透传页级 busy（状态最小化 + 免 @Prop
-  // 级联）：新轮发送 push 首条消息即清全部 tail（ChatDataSource.push），流式占位自身
-  // streaming=true——busy 窗口内本判据恒 false，两道保险的第一道即结构保证
+  // 轻量状态行判据：失败/中止且本轮无最终正文——恢复入口按本行身份分流（两形态同走单链
+  // retryFromBubble → retryAt）：末条（tail 真）带「重试」文字键（onRetryMsg——本行即末轮）；
+  // 历史异常轮最后一条空正文行（opsHost 真、tail 假，投影按轮终态授位）不复制文字键，恢复
+  // 走本行下方 FinalOpsBar 的重试图标键（同上行链）
+  private statusLineVisible(): boolean {
+    return this.msg.kind === 'assistant' && this.msg.streaming !== true &&
+      this.msg.text.trim() === '' && (this.msg.tail === true || this.msg.opsHost === true);
+  }
+
+  // 空轮状态行文案：性质判据单源 = msg.emptyRoundKind（投影写），本处只做文案映射——
+  // 'no-text' = 本轮有过程产出、只是没有正文（中性陈述，不当失败）；其余（异常轮/零产出）=
+  // 无产出口径。两态共用同一行位与恢复键，只换措辞（防两套恢复入口并存）
+  private statusLineText(): string {
+    return this.msg.emptyRoundKind === 'no-text' ? '本轮没有文字回复' : '本轮没有产生回复';
+  }
+
+  // 推荐问题 chips 显隐总判据（「全与才显示」）：末条（tail）+ 非流式 + 建议非空。
+  // ★ 「非 busy」由 tail + streaming 联合承载，不透传页级 busy（状态最小化 + 免 @Prop 级联）：
+  // 新轮发送 push 首条消息即清全部 tail，流式占位自身 streaming=true——busy 窗口内本判据恒 false
   private suggestVisible(): boolean {
-    return this.msg.tail === true && this.msg.streaming !== true && !this.privateSession &&
+    return this.msg.tail === true && this.msg.streaming !== true &&
       (this.msg.suggestions ?? []).length > 0;
   }
 
-  // 用户消息显示正文（2026-09-15 预览第三轮，拍板 5「显示层隐去」）：有附件简报且尾部标注
-  // 逐字吻合 → 剥掉标注段（附件泡已呈现名单，不再重复）；无简报（导入恢复/老数据）→
-  // 原样显示标注作回退。**只改显示层**——复制键与协议文本仍用库内全文（msg.text）
+  // 生成中饰件总判据：流式中的助手行 = 穿戴生成中饰件的窗口（蓝光标 + 提前工具栏与灰态）
+  //——收尾（finishStream / settleRoundAssistant 置 streaming 假）经 @ObjectLink 重渲自动
+  // 撤下，不新增刷新通路（同 barVisible/statusLineVisible/suggestVisible 判据族）
+  private genDressingVisible(): boolean {
+    return this.msg.kind === 'assistant' && this.msg.streaming === true;
+  }
+
+  // 长消息折叠显示判据：偏好开 + 终态 + 超阈值 + 用户未展开（longMsgExpanded——展开即最终
+  // 意图，组件回收重建不回折）。终态口径 = bodyEndReason 在场，**不用 streaming**（工具等待期
+  // 假终态陷阱）；流式期 bodyEndReason 恒 undefined 天然不折（流式红线：输出期间不整树换形态）；
+  // 偏好渲染期现读 isLongMsgCollapseEnabled（AppStorage 现读，重进会话后生效）；阈值单源 =
+  // MarkdownScrollableBlock.LONG_MSG_COLLAPSE_CHARS
+  private longCollapseActive(): boolean {
+    // 用户已展开 = 最终意图，任何判据不再折（组件回收重建也不回折）
+    if (this.msg.longMsgExpanded === true) {
+      return false;
+    }
+    // 流式期永不折（输出期间不整树换形态——流式红线）；重生成/续答另走新承载行或换源
+    if (this.msg.streaming === true) {
+      return false;
+    }
+    // 偏好关 = 进页全部展开（双态设计：关态由加载动画与分帧渐进揭示承担等待）
+    if (!isLongMsgCollapseEnabled() || this.msg.text.length <= LONG_MSG_COLLAPSE_CHARS) {
+      return false;
+    }
+    // 偏好开：进页收起（历史行 + 进页时点标记覆盖的复用行）。**进页后新完成的回复不折**
+    //——用户正在读，生成结束瞬间突然收起会打断阅读；下次进页自然收起
+    return this.msg.live !== true || this.msg.longMsgCollapseArmed === true;
+  }
+
+  // 尾先揭示判据：非占位形态的底锚进页末条消息先出尾部（首屏直接看到回答末尾）；占位形态
+  //（展开/滚动挂载）内容不可见，恒头先无观感差
+  private tailFirstReveal(): boolean {
+    return this.msg.tail === true && this.msg.bodyPlaceholder !== true;
+  }
+
+  // 占位揭示判据：正文在 opacity 0 层背后逐帧建块、行内只显静态骨架；揭示完成由正文链
+  // onRevealDone 清位。骨架/不透明度/触摸穿透三处共用本判据
+  private placeholderActive(): boolean {
+    return this.msg.bodyPlaceholder === true;
+  }
+
+  // 卡头行时间显隐：仅每轮回答卡——生成中 = 流式行；收尾后 = 操作栏宿主行（opsHost）。显隐在
+  // 同一行内完成（行恒在）⇒ 零几何变化；时间取值 = msg.createdAt（轮起始时刻单源，
+  // 见 ChatMessageHeader.formatMsgTime 注释）
+  private answerTimeVisible(): boolean {
+    return this.msg.kind === 'assistant' &&
+      (this.msg.opsHost === true || this.msg.streaming === true);
+  }
+
+  // 消息时间总闸：偏好键已退役、时间显示恒开，不再有偏好关闭态；仅保留「时刻在场」数据判据
+  // （老数据 createdAt 缺省整行不渲染零占位），两处显示点（用户提问上方时间行 / 助手回答卡头行）
+  // 共用本判据，禁各自复制条件
+  private messageTimeOn(): boolean {
+    return (this.msg.createdAt ?? 0) > 0;
+  }
+
+  // 生成中工具栏「更多」键可用性：生成中仅正文非空时可用（空正文窗口无菜单可开——
+  // ChatMoreMenu 场景 'none' 拒开口径的置灰态）；收尾/常驻形态恒可用（opsHost 行含历史异常
+  // 轮恢复入口）。★ 真机修复（1593 节）：本判据只许在**无参** @Builder 键体属性表达式内经
+  // this 直读（消费面 = MoreMenuKey 单处；2026-11-05 菜单笔后省略号变体已退役）——经值参数
+  // 下传会被按值捕获冻结首值（收尾后驻留置灰、退出重进才恢复；官方 FAQ faqs-arkui-1078）
+  private moreKeyInactive(): boolean {
+    return this.genDressingVisible() && this.msg.text.trim() === '';
+  }
+
+  // 用户消息显示正文（拍板 5「显示层隐去」）：有附件简报且尾部标注逐字吻合 → 剥掉标注段
+  //（附件泡已呈现名单，不重复）；无简报（导入恢复/老数据）→ 原样显示标注作回退。
+  // **只改显示层**——复制键与协议文本仍用库内全文（msg.text）
   private displayBodyText(): string {
     const briefs = this.msg.attachBriefs;
     if (briefs === undefined || briefs.length === 0) {
@@ -123,145 +318,84 @@ export struct ChatMessageItem {
     return hideAttachAnnotate(this.msg.text, names);
   }
 
-  // ── 用量键气泡数据（2026-09-14 消息底栏：原气泡外 meta 文字行整体退役，文案迁入气泡；
-  // ★ 2026-09-15 决明改版〔照其供图形态〕：竖排行 —— 标题行「Token 用量」+ 分割线 +
-  // 标签左·数值右六行，缓存由括号内缀改独立行、速度殿后。计算口径沿用 2026-09-06 拍板
-  // ——输入 = 当轮请求计费输入〔prompt 含全部历史上下文，连续对话中后轮大于前轮是正常计费
-  // 口径〕；输出 = 本条回复自身 token；总计 = 输入 + 输出〔= 协议 total 原值〕；缓存 = 输入
-  // 里的命中部分〔真子集，故列在输入之后，总计不重复计它〕；token 数 ≥1000 缩 k 一位小数
-  //〔tokenShort 单点〕；tok/s = 输出 token ÷ 纯流式秒〔口径③〕；用时 <60s 一位小数否则
-  // 整数秒。术语与设置页「用量统计」同名同义（任务书 §2.7：输入/输出；速度与用时是统计页
-  // 没有的维度，措辞写全不裸缩写）。★ 2026-09-23 首字耗时笔：七行（原六行 + 「首字耗时」），
-  // 末三行按发生序排 = 首字耗时 → 用时 → 生成速度；首字行 >0 才挂（老账本行/无产出轮无），
-  // 常开测量不随请求日志开关——两枚指标的分野见 ChatUsageRoundCtrl 域头注释 ──
-  private usagePromptCount(): number {
-    const total: number = this.msg.usageTokens ?? 0;
-    const completion: number = this.msg.usageCompletionTokens ?? 0;
-    // 输入 = 整轮总量 − 输出；负值防御归零（仅防脏数据）
-    return total - completion > 0 ? total - completion : 0;
-  }
+  // ★ 用量气泡拆域：用量数据五方法与「Token 用量」气泡整域迁 ChatUsagePopup.ets（本件剔头
+  // 越 1200 硬线，按宪法先拆本次功能域再动手，零行为变化）；本件只留 bindPopup 挂载点与用量键
 
-  // 用时数值串（标签在行首，本函数只出数值与单位）
-  private usageDurationValue(): string {
-    const seconds: number = (this.msg.usageDurationMs ?? 0) / 1000;
-    return seconds < 60 ? (Math.round(seconds * 10) / 10) + 's' : Math.round(seconds) + 's';
-  }
-
-  // 生成速度数值串（tok/s；单位跟数字不裸缩写——任务书 §2.7-1）
-  private usageSpeedValue(): string {
-    const completion: number = this.msg.usageCompletionTokens ?? 0;
-    const durationMs: number = this.msg.usageDurationMs ?? 0;
-    return Math.round(completion / (durationMs / 1000)) + ' tok/s';
-  }
-
-  // 首字耗时数值串（2026-09-23 首字耗时笔）：口径 = 本轮首个正文或思考增量到达的墙钟耗时
-  //（跨流取首个非 0；常开测量、不随请求日志开关——与请求日志那枚「首字节」是两个指标，
-  // 详见 ChatUsageRoundCtrl）。分档与「用时」同规则（<60 秒一位小数，否则整数秒）
-  private usageFirstTokenValue(): string {
-    const seconds: number = (this.msg.usageFirstTokenMs ?? 0) / 1000;
-    return seconds < 60 ? (Math.round(seconds * 10) / 10) + 's' : Math.round(seconds) + 's';
-  }
-
-  // token 数缩略（≥1000 缩 k 一位小数；各数值行共用）——2026-09-17 提取共用至
-  // common/TokenEstimate.tokenShort（上下文面板同口径），本组件改引单源
-
-  // 长按守卫（★ 2026-09-18 复制入口迁移笔；★ 同日流式闸笔）：隐私会话不弹（零留痕口径
-  // 照底栏整栏不显示——复制面板同属留痕面）；流式生成中不弹（决明拍板「只在停止状态可
-  // 长按复制」——生成中快照是半截文本，复制即误导；判据同底栏 barVisible 单消息级：
-  // finishStream / settleRoundAssistant 收口置假后即可复制，手动停止轮同享；user 行该
-  // 字段恒 undefined 不受影响）；空文本无可复制。守卫内收（手势两泡恒挂、不满足静默不弹）
-  // 而非手势条件分支——ArkUI 通用属性链上做条件手势反而多写组件分支
+  // 长按守卫（决明拍板「只在停止状态可长按复制」——生成中快照是半截文本，复制即误导；收口
+  // 置假后即可复制，手动停止轮同享；user 行 streaming 恒 undefined 不受影响）；空文本无可复制。
+  // 守卫内收（手势两泡恒挂、不满足静默不弹）而非手势条件分支——通用属性链上条件手势反而
+  // 多写组件分支
   private requestCopySheet(): void {
-    if (this.privateSession || this.msg.streaming === true || this.msg.text === '') {
+    if (this.msg.streaming === true || this.msg.text === '') {
       return;
     }
     this.onCopyText(this.msg.id);
   }
 
-  // 用量行（标签左·数值右对齐——2026-09-15 决明「同图竖向排列」；标签次要色、数值
-  // 主色加粗，两处色位对位即行形态判据）。@Builder 按值传参只读展示（内容为预组合串、
-  // 弹窗内容重开即重算，无刷新需求——照 ToolSummaryRow 先例）
-  @Builder
-  UsageRow(label: string, value: string) {
-    Row() {
-      Text(label)
-        .fontSize(13)
-        .fontColor(cardDescColor())
-      Blank()
-      Text(value)
-        .fontSize(13)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(cardTitleColor())
+  // 复制全文（决明指令「消息工具栏新增复制键，点击复制全文」）：口径与面板「复制全文」键
+  // 默认档同源——纯文本（去表格 + 剥 md 标记，单源 buildCopySheetText）+ 助手全文附 AI 显式
+  // 标识；剪贴板写入单源 = common/Clipboard。空 payload 守卫 = 消息只含表格被整块剔空——
+  // 静默复制空串等于假成功，显式呈报（与面板 copyAll 同句）；长按面板路径保留不动。
+  // DOMAIN 0xD5A1 复活原键日志域（0xD5A0 系已归 common/Clipboard 单源）
+  private copyFullText(): void {
+    const payload: string = buildCopySheetText(this.msg.text, true);
+    if (payload === '') {
+      this.getUIContext().getPromptAction().showToast({ message: '当前消息没有可复制的文字' });
+      return;
     }
-    .width('100%')
-  }
-
-  // 用量键气泡内容（bindPopup builder——首层容器禁 position；内距 12，横宽 200〔初版 280
-  // 照 InfoHintButton——那是长整段说明文本的几何；本气泡内容是短「标签 + 数值」行对，
-  // 2026-09-15 决明「气泡横宽减少，因用量数字不长」故收窄；最宽一行「生成速度 + 9999 tok/s」
-  // 约 120vp，200 宽留足余量〕。组件内直读 this.msg 规避坑57 按值传参；字段在流末收口后
-  // 不变，弹出时现读即可无需订阅。
-  // ★ 2026-09-15 决明改版（照其供图形态）：①标题 = 纯文字「Token 用量」（16fp Bold；
-  // **气泡内不显示任何符号**，供图那枚 AI 徽标与模型名都不取——决明「不用显示图标与
-  // 模型」+ 二轮明确「用量气泡不显示符号」，用量符号只落在底栏那枚用量键上）；②标题下加
-  // 分割线，其身下六行竖排；③速度行殿后且恒主色无强调蓝（决明「速度不用蓝体」「我们
-  // 速度放最后」）；④缓存行是比供图多的一行（决明「我们多了缓存显示」），命中 >0 才列
-  //〔2026-09-10 拍板 >0 门不变，形态由括号内缀改独立行〕；⑤用时与速度同行门 = 时长
-  // 在场（时长缺省的协议两行同缺）；⑥原末行口径声明退役（决明二轮「用量气泡底部提示
-  // 删除」——原防「单轮数与设置页聚合数对不上」误读，随标题行语义自明而撤）──
-  @Builder
-  UsagePopup() {
-    Column({ space: 10 }) {
-      // 标题行（16fp Bold 取「板块标题规范」标准档；纯文字无符号——见上注①）
-      Text('Token 用量')
-        .fontSize(16)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(cardTitleColor())
-        .width('100%')
-      // 标题与用量行的分组分割线（照工具卡分割线形制）
-      Divider()
-        .strokeWidth(1)
-        .color(cardBorderColor(this.appColorMode))
-      Column({ space: 8 }) {
-        this.UsageRow('输入', tokenShort(this.usagePromptCount()))
-        if ((this.msg.usageCachedTokens ?? 0) > 0) {
-          this.UsageRow('缓存', tokenShort(this.msg.usageCachedTokens ?? 0))
-        }
-        this.UsageRow('输出', tokenShort(this.msg.usageCompletionTokens ?? 0))
-        this.UsageRow('总计', tokenShort(this.msg.usageTokens ?? 0))
-        if ((this.msg.usageDurationMs ?? 0) > 0) {
-          // 首字耗时殿于用时之前（2026-09-23 首字耗时笔）：时间三行按发生序排——首字 → 用时
-          // → 生成速度。＞0 才显（升级前的老账本行与无产出轮次无此行）；口径见
-          // usageFirstTokenValue 注释
-          if ((this.msg.usageFirstTokenMs ?? 0) > 0) {
-            this.UsageRow('首字耗时', this.usageFirstTokenValue());
-          }
-          this.UsageRow('用时', this.usageDurationValue());
-          this.UsageRow('生成速度', this.usageSpeedValue());
-        }
-      }
-      .width('100%')
+    try {
+      copyTextToClipboard(this.getUIContext(), withAiContentLabel(payload), '已复制');
+    } catch (e) {
+      // 同步抛错中文呈报（异步失败已由 copyTextToClipboard 内 hilog + toast 两头承接）
+      hilog.error(0xD5A1, 'ChatMessageItem', '复制全文失败：%{public}s', (e as Error).message);
+      this.getUIContext().getPromptAction().showToast({ message: '复制失败，请重试' });
     }
-    .width(200)
-    .padding(12)
-    .alignItems(HorizontalAlign.Start)
   }
 
-  // 正文渲染键（2026-09-20 重试真机修复笔）：id#纪元——非前缀替换（重试清空重答 /
-  // 切换版本换整段内容）时 renderEpoch 自增即键变，外层 ForEach 整组件重建 → 渲染器
-  // 全量重解析（修「正文停在旧内容」：两渲染器对内容整体替换不重解析，真机实测重试与
-  // 切版后正文不变、退出重进才正确——重建与退出重进同效）。流式追加（前缀单调）不动
-  // 本键，打字机增量路径与 K1 零闪屏口径零影响（见 ChatMessageCompose.renderEpoch）
-  private mdRenderKey(): string {
-    return this.msg.id + '#' + (this.msg.renderEpoch ?? 0);
-  }
-
+  // 用户泡正文：无条件新引擎（直吃已剥标注的显示原文）。
   build() {
     if (this.msg.kind === 'user') {
-      // 用户消息两泡竖排（★ 2026-09-15 预览笔拍板 7：附件独立气泡、置于消息气泡之前〔列表
-      // 时序上方〕）：外包裹 Column 先附件泡后消息泡，间距 ATTACH_BUBBLE_GAP——两泡同属
-      // 本条消息（同一 ListItem，拆独立消息行即破坏回放装配归属，红线 §3-9）
+      // 用户消息两泡竖排（拍板 7：附件独立气泡、置于消息气泡之前）：外包裹 Column 先附件泡
+      // 后消息泡，间距 ATTACH_BUBBLE_GAP——两泡同属本条消息（同一 ListItem，拆独立消息行即
+      // 破坏回放装配归属，红线 §3-9）；用户侧操作不变（底栏「更多」键在位）
       Column({ space: ATTACH_BUBBLE_GAP }) {
+        // 消息时间行（决明拍板）：用户侧只出时间、无头像，右对齐挂消息最上（有附件泡时在
+        // 附件泡之上——消息级时间，与正文有无无关）；12fp 次要色。createdAt 缺省（老数据）
+        // 整行不渲染零占位；时间显示恒开（偏好已退役），仅按时刻在场渲染（见 messageTimeOn）
+        if (this.messageTimeOn()) {
+          Row() {
+            Text(formatMsgTime(this.msg.createdAt ?? 0))
+              .fontSize(12)
+              .fontColor(cardDescColor())
+          }
+          .width('100%')
+          .padding({ right: BUBBLE_PAD_NEAR })
+          .justifyContent(FlexAlign.End)
+        }
+        // 引用摘要条（U-E）：用户气泡外、附件泡同层——被引用内容的已发标记。★ 本批不可点
+        //（登记待拍板「后续补点击看全文」；做时复用 ChatQuoteSheet 弹只读查看）。形态 = 左条
+        // 3vp + 近无感底（与 markdown 引用块/输入侧引用条三面一形；色值单源 quoteBlockBg/
+        // quoteBarColor）。刷新承接 = @Observed(ChatMessage) + @ObjectLink 属性赋值触发行重渲
+        //（attachBriefs 同通道先例），不进 LazyForEach 键（键纪律「别的刷新机制明确承接」）；
+        // 回放链经重建天然携带
+        if (this.msg.quoteText !== undefined && this.msg.quoteText !== '') {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.quote'))
+              .fontSize(14)
+              .fontColor([$r('sys.color.font_secondary')])
+            Text('引用：' + quotePreviewOf(this.msg.quoteText, BUBBLE_QUOTE_PREVIEW_CHARS))
+              .fontSize(13)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
+          .width(BUBBLE_USER_MAX_WIDTH)
+          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .borderRadius(12)
+          .backgroundColor(quoteBlockBg(this.appColorMode))
+          .border({ width: { left: 3 }, color: quoteBarColor(this.appColorMode) })
+        }
         // 附件泡（有简报才挂，零占位；点击派发上行 ChatPageContent 分派预览）
         if ((this.msg.attachBriefs ?? []).length > 0) {
           AttachmentBubble({
@@ -271,39 +405,75 @@ export struct ChatMessageItem {
             }
           })
         }
-        // 消息泡：右对齐、浅蓝底（chat_bubble_user，深浅色随限定词）。★ 空文本规则（纯附件
-        // 消息）：标注隐去后正文为空 → 整只不渲染（禁空气泡，只剩上方附件泡）。正文 =
-        // displayBodyText()（有简报时剥标注）；公式守卫用全量版 guardStreamingLatex——
-        // 显示文本随简报装配变化（回放先渲染后装配），增量版按 msg.id 存状态会吃到变短
-        // 的输入，全量重扫无状态零风险。★ 宽度上限 = BUBBLE_USER_MAX_WIDTH（78%——2026-09-16
-        // 决明「用户的缩短为原60%左右，右边距不变」立 60%，2026-09-18「再增宽30%左右」调
-        // 78%；行内距两者皆不动，故右缘贴位与右距不变、短消息泡仍随内容收缩）。
-        // ★ 2026-09-18 换行修复（决明「超长内容会顶出气泡右侧，不换行」）：宽度上限的**挂点**
-        // 由气泡自身的 constraintSize 改为外层定宽壳——constraintSize 只是测量之后的尺寸
-        // 钳制，泡内 Markdown 的段落仍按父行全宽排版，泡一收窄内容就顶出右缘（官方《尺寸
-        // 设置》constraintSize 取值表 + FAQ faqs-arkui-95「ConstraintSize 尺寸设置不生效」
-        // 同族现象）；改为外壳显式 width 后，壳宽即子组件的**测量约束**，段落按上限换行、
-        // 高度自然增长，宽内容块（代码/表格自带横滚面）也收在泡内横滚
+        // 消息泡：右对齐、浅蓝底（chatBubbleUserBg 单源，随卡底透明度档位叠 alpha）。★ 空文本
+        // 规则（纯附件消息）：标注隐去后正文为空 → 整只不渲染（禁空气泡，只剩上方附件泡）。
+        // 正文 = displayBodyText()，身份仍按 bodyBindingId 铸造，不依赖文本增量缓存。★ 宽度
+        // 上限 = BUBBLE_USER_MAX_WIDTH 78%（60% → 增宽 30%；行内距不动，右缘贴位与右距不变、
+        // 短消息泡仍随内容收缩）。★ 换行修复：上限**挂点**由气泡 constraintSize 改为外层定宽壳
+        //——constraintSize 是测量后的钳制，泡内 Markdown 段落仍按父行全宽排版，泡一收窄内容
+        // 就顶出右缘（官方尺寸设置取值表 + FAQ faqs-arkui-95 同族现象）；外壳显式 width 后
+        // 壳宽即子组件**测量约束**，段落按上限换行、宽内容块（代码/表格自带横滚面）收在泡内横滚
         if (this.displayBodyText() !== '') {
           Row() {
             Blank()
-            // 定宽壳：只承担宽度上限，不画底不设内距（气泡形制全在下方 Markdown 上）；
-            // alignItems(End) 让短泡贴壳右缘，右缘位置与收窄前一致
+            // 定宽壳：只承担宽度上限，不画底不设内距（气泡形制在下方共享内容列）；
+            // alignItems(End) 让短泡贴壳右缘（位置与收窄前一致）
             Column() {
-              Markdown({
-                content: guardStreamingLatex(this.displayBodyText()),
-                options: { darkMode: this.appColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK },
-                nestedScroll: MD_NESTED_SCROLL
-              })
-                .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-                .backgroundColor($r('app.color.chat_bubble_user'))
-                .borderRadius(BUBBLE_RADIUS)
-                // 长按开「消息全文」面板（2026-09-18 复制入口迁移）：用户气泡同享——
-                // @lidary 渲染 Text 无 copyOption（默认 None，本地 text.d.ts 实锤），
-                // 长按在气泡层空闲无争用。挂在气泡上而非定宽壳上：壳内空档不长按响应
-                .gesture(LongPressGesture().onAction((_event: GestureEvent): void => {
-                  this.requestCopySheet();
-                }))
+              Column() {
+                // 用户消息同享进页收起（长消息不分角色——用户粘贴的超长文本同样付整树物化成本）。
+                // ★ 一次出现笔：展开点击当帧正文未挂（longMsgExpanded 下一帧写），折叠门仍真
+                //——此帧收起条位置先绘骨架（「骨架先实际绘制一帧再挂正文」铁律），下一帧挂
+                // 正文后骨架移入下方叠层继续显示，揭示完成一次性显现
+                if (this.longCollapseActive()) {
+                  if (this.placeholderActive()) {
+                    this.LongRevealSkeleton()
+                  } else {
+                    this.LongCollapseBar()
+                  }
+                } else {
+                  // ── 正文 + 占位骨架叠层：占位揭示期正文层 opacity 0 在背后逐帧建块（布局
+                  // 成本分摊、不绘制）、不响应触摸；骨架层贴顶显示。揭示完成 onRevealDone
+                  // 清位 → 正文一次性显现、骨架撤下 ──
+                  Stack({ alignContent: Alignment.TopStart }) {
+                    ChatMarkdownBody({
+                      bindingId: this.msg.bodyBindingId,
+                      content: this.displayBodyText(),
+                      live: false,
+                      tailFirst: this.tailFirstReveal(),
+                      placeholder: this.placeholderActive(),
+                      aiContent: false,
+                      compact: true,
+                      darkMode: this.appColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK,
+                      bodyFontFamily: this.resolveBodyFamily(),
+                      codeFontFamily: this.resolveCodeFamily(),
+                      onAnchor: (id: string): void => {
+                        this.onMarkdownAnchor(id);
+                      },
+                      onRevealDone: (): void => {
+                        this.msg.bodyPlaceholder = false;
+                      },
+                      onRevealPlaceholder: (placeholder: boolean): void => {
+                        if (placeholder) {
+                          this.msg.bodyPlaceholder = true;
+                        }
+                      }
+                    })
+                      .opacity(this.placeholderActive() ? 0 : 1)
+                      .hitTestBehavior(this.placeholderActive() ? HitTestMode.None : HitTestMode.Default)
+                    if (this.placeholderActive()) {
+                      this.LongRevealSkeleton()
+                    }
+                  }
+                  .width('100%')
+                }
+              }
+              .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+              .backgroundColor(chatBubbleUserBg(this.appColorMode, this.cardAlphaLevel))
+              .borderRadius(BUBBLE_RADIUS)
+              // 两路共享气泡长按，全文面板仍取 msg.text；定宽壳空档不响应，不以块级复制替代
+              .gesture(LongPressGesture().onAction((_event: GestureEvent): void => {
+                this.requestCopySheet();
+              }))
             }
             .width(BUBBLE_USER_MAX_WIDTH)
             .alignItems(HorizontalAlign.End)
@@ -312,279 +482,352 @@ export struct ChatMessageItem {
           .padding({ left: BUBBLE_PAD_FAR, right: BUBBLE_PAD_NEAR })
           .justifyContent(FlexAlign.End)
         }
+        // ── 底栏（user 气泡下方、右对齐侧——右缘与气泡行同距 BUBBLE_PAD_NEAR；纯附件消息
+        // 同样可开菜单）：左侧提问版本步进器（编辑产出变体 ≥2 才显示；箭头切版本，计数位
+        // 不可点——提问变体无面板承接）
+        Row({ space: 2 }) {
+          if ((this.msg.qsVersionCount ?? 0) >= 2) {
+            Button() {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(16)
+                .fontColor([$r('sys.color.font_secondary')])
+            }
+            .buttonStyle(ButtonStyleMode.TEXTUAL)
+            .enabled((this.msg.qsPrevBranch ?? '') !== '')
+            .opacity((this.msg.qsPrevBranch ?? '') !== '' ? 1.0 : 0.4)
+            .onClick((): void => {
+              this.onQuestionStep(this.msg.id, -1);
+            })
+            Text(((this.msg.qsVersionIndex ?? 0) + 1) + '/' + (this.msg.qsVersionCount ?? 1))
+              .fontSize(13)
+              .fontColor($r('sys.color.font_secondary'))
+              .padding({ left: 4, right: 8 })
+            Button() {
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(16)
+                .fontColor([$r('sys.color.font_secondary')])
+            }
+            .buttonStyle(ButtonStyleMode.TEXTUAL)
+            .enabled((this.msg.qsNextBranch ?? '') !== '')
+            .opacity((this.msg.qsNextBranch ?? '') !== '' ? 1.0 : 0.4)
+            .onClick((): void => {
+              this.onQuestionStep(this.msg.id, 1);
+            })
+          }
+          this.MoreMenuKey();
+        }
+        .width('100%')
+        .padding({ right: BUBBLE_PAD_NEAR })
+        .justifyContent(FlexAlign.End)
       }
       .width('100%')
+      // 布局诊断描边（构建期开关，交付恒关——Theme.ets CHAT_LAYOUT_DEBUG）
+      .borderWidth(CHAT_LAYOUT_DEBUG ? 1 : 0)
+      .borderColor(Color.Orange)
+      // 用户行为独立泡，上距 30 / 下距补 4（与助手项 CARD_SPACING 合成 14）——见 Theme 两常量注释
+      .margin({ top: CHAT_ROUND_SPACING, bottom: CHAT_ASK_GAP - CARD_SPACING })
     } else if (this.msg.kind === 'assistant') {
-      // 助手气泡：左对齐、卡片色底（深浅色自适应）。★ 2026-09-02 阶段 5 双渲染分流：
-      // 实验态 = CubeMarkdownView（markdown_hybrid 增量解析——K1 闪屏根治：@lidary 全量
-      // 重解析 × 打字机 30Hz 揭示每秒约 30 次全文重解析）；原生态 = @lidary 原样。开关
-      // build 期现读——已上屏行不回翻（渲染器不切换），新渲染行随开关（重进会话全量生效）。
-      // user 分支不换（静态短文本无闪屏，变量隔离——对照只在 assistant 渲染）。
-      // ★ 2026-09-14 消息气泡底栏：底栏挂气泡体 Column 内、双渲染器之后（两引擎共享层
-      // 零适配——调研档 §四·补）；原气泡外用量 meta 文字行退役（内容迁入用量键气泡）。
-      // 外层 Column({space:4})：气泡本体 + 推荐问题 chips 两项（2026-09-19 推荐问题笔起
-      // chips 挂卡外下方——space 4 即卡与 chips 间距；左右 padding 在本层，两者同缘对齐）
-      Column({ space: 4 }) {
-        Row() {
-          Column({ space: 8 }) {
-            // ── 自动重试状态行（2026-09-22 聊天自动重试笔）：挂气泡内、正文之上——判据 =
-            // 运行时字段非空（undefined / '' = 无重试，结构零变化）；纯文本一行，数字随次数
-            // 原地更新不新增行、不堆叠。样式取组卡副标题规格（14fp 小字）+ 官方次要色资源
-            //（零自绘色值）；与正文同列受气泡内距约束，故与正文左对齐 ──
-            if (this.msg.retryHint !== undefined && this.msg.retryHint !== '') {
-              Text(this.msg.retryHint)
-                .fontSize(14)
-                .fontColor($r('sys.color.font_secondary'))
-            }
-            // ★ 2026-09-20 重试真机修复笔：两分支各包一层「id#纪元」键 ForEach——重试清空
-            // 重答与切版换整段内容时键变即整组件重建（渲染器全量重解析），流式追加不动键
-            //（修复动因与实测见 mdRenderKey 注释）
-            if (isCubeEngineEnabled()) {
-              ForEach([this.mdRenderKey()], (_renderKey: string): void => {
-                CubeMarkdownView({
-                  // 流式公式守卫：未闭合 $ 尾部转义（与 @lidary 分支同一喂入口）
-                  content: guardStreamingLatexLive(this.msg),
-                  darkMode: this.appColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+      // ── 空正文收束轮：本轮尾部渲染轻量状态行——提示恒显，末条行带「重试」键（onRetryMsg
+      // 单链上行），历史异常轮行由其 FinalOpsBar 重试图标键承载恢复（同链），不把空正文当
+      // 成功终答。措辞按 msg.emptyRoundKind 分流（有过程产出 = 中性陈述「没有文字回复」；
+      // 异常轮/零产出 = 「没有产生回复」）——同一行位、同一恢复键，只换文案
+      if (this.statusLineVisible()) {
+        Column({ space: 4 }) {
+          // 轮头行：失败/中止轮同样带头行——头行是轮级身份（哪个模型失败一眼可见；本分支
+          // 无回答卡承载时间，该轮不显示时间）
+          if (this.msg.headHost === true) {
+            ChatRoundHeader({
+              modelLabel: this.msg.modelLabel ?? ''
+            })
+          }
+          Row({ space: 8 }) {
+            Blank()
+            Text(this.statusLineText())
+              .fontSize(13)
+              .fontColor(cardDescColor())
+            if (this.msg.tail === true) {
+              Text('重试')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('sys.color.ohos_id_color_warning'))
+                .onClick((): void => {
+                  this.onRetryMsg(this.msg.id);
                 })
-              }, (renderKey: string): string => renderKey)
-            } else {
-              ForEach([this.mdRenderKey()], (_renderKey: string): void => {
-                Markdown({
-                  // 流式公式守卫：未闭合 $ 尾部转义（同 user 分支）
-                  content: guardStreamingLatexLive(this.msg),
-                  options: { darkMode: this.appColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK },
-                  nestedScroll: MD_NESTED_SCROLL
-                })
-              }, (renderKey: string): string => renderKey)
             }
-            // ── 截断尾注（2026-09-23 输出上限与超时治理笔 2）：挂气泡内、正文之下——与
-            // 上方 retryHint 状态行一上一下对称（状态行在正文之上、截断提示在正文之下），
-            // 两者都是气泡内次要小字。判据 = 运行时字段恰 true（undefined/false = 无截断，
-            // 结构零变化）；样式照 retryHint 行同款（14fp 小字 + 官方次要色资源），**只追加
-            // 一行、不改写正文**（渲染刷新红线：794 节「非前缀整段替换」才须推 renderEpoch）；
-            // 文案两条建议与判据同界——判据只认真截断（responses 侧收窄到 max_output_tokens，
-            // 内容过滤不挂键），故「提高上限 / 降低档位」恒与真因一致 ──
-            if (this.msg.truncated === true) {
-              Text('输出被上限截断，可提高输出上限或降低思考档位')
-                .fontSize(14)
-                .fontColor($r('sys.color.font_secondary'))
-            }
-            // ── 气泡内底部工具栏（2026-09-14 任务书；2026-09-15 真机反馈改右下锚定）：
-            // 宽度写法仍 = 写作①（不设百分比宽度、不加 Blank，短消息气泡被撑到约底栏宽
-            // 的已知面保留）；对齐 = alignSelf(ItemAlign.End) 挂气泡右缘、从右下角向左排
-            // （Column 默认 alignItems Center，不显式指定时长文下底栏悬在居中位）；
-            // 间距 2 → 12（真机反馈键间距太近）──
-            if (this.barVisible()) {
-              Row({ space: 12 }) {
-                // ── 版本切换键（2026-09-20 消息重新生成·多版本）：形态 ‹ i/N ›（左箭头 +
-                // 当前/总数 + 右箭头），N>1 才渲染；★ 首版仅末条（tail 判据与重试键同源——
-                // 切换历史轮会改后续轮上下文，属分支范畴不做）。两端到头禁点（enabled false
-                // + 降透明度——LobeChat 形；RikkaHub 的半透明仍可点不取）。箭头 = 行内图标
-                // 键形制（SymbolGlyph 无底 TEXTUAL + font_secondary），数字 = 次要色小字──
-                if (this.msg.tail === true && (this.msg.variantCount ?? 1) > 1) {
-                  Row({ space: 2 }) {
-                    Button() {
-                      SymbolGlyph($r('sys.symbol.chevron_left'))
-                        .fontSize(14)
-                        .fontColor([$r('sys.color.font_secondary')])
-                    }
-                    .buttonStyle(ButtonStyleMode.TEXTUAL)
-                    .enabled((this.msg.variantActive ?? 0) > 0)
-                    .opacity((this.msg.variantActive ?? 0) > 0 ? 1 : 0.4)
-                    .onClick((): void => {
-                      this.onVariantSwitch(this.msg.id, (this.msg.variantActive ?? 0) - 1);
-                    })
-                    Text(((this.msg.variantActive ?? 0) + 1) + '/' + (this.msg.variantCount ?? 1))
-                      .fontSize(12)
-                      .fontColor($r('sys.color.font_secondary'))
-                    Button() {
-                      SymbolGlyph($r('sys.symbol.chevron_right'))
-                        .fontSize(14)
-                        .fontColor([$r('sys.color.font_secondary')])
-                    }
-                    .buttonStyle(ButtonStyleMode.TEXTUAL)
-                    .enabled((this.msg.variantActive ?? 0) < (this.msg.variantCount ?? 1) - 1)
-                    .opacity((this.msg.variantActive ?? 0) < (this.msg.variantCount ?? 1) - 1 ? 1 : 0.4)
-                    .onClick((): void => {
-                      this.onVariantSwitch(this.msg.id, (this.msg.variantActive ?? 0) + 1);
-                    })
-                  }
+            Blank()
+          }
+          .width('100%')
+          if (this.msg.opsHost === true) {
+            // 历史异常轮（非末条）：操作栏重试图标键即恢复入口（原经「更多」菜单「重新生成」，
+            // 菜单项已随单链收敛退役）
+            this.FinalOpsBar()
+          }
+        }
+        .width('100%')
+        .padding({ left: BUBBLE_PAD_NEAR, right: BUBBLE_PAD_NEAR })
+        .margin({ top: CARD_SPACING })
+      } else {
+        // 助手气泡：左对齐、卡片色底（深浅色自适应）。正文唯一走 ChatMarkdownBody（新引擎，
+        // 不吃旧公式转义，流末/换源身份由 bodyBindingId 承接）；底栏唯一在 opsHost 行承载
+        //（见 barVisible 与 FinalOpsBar）。★ 首段间距笔：外层 space 4 → 12（头行 → 气泡）
+        //——Column 的 space 压过子组件主轴 margin，本值即唯一间距源；chips 与气泡随之
+        // 4 → 12（同 space 单源无法分档，观感不适再拆嵌套）。
+        Column({ space: 12 }) {
+          // 轮头行（决明拍板）：本轮首个上屏项承载头像 + 模型名（判据 = 展示投影标记
+          // msg.headHost，值单源在彼处）；段载轮头由 ChatProcessSegment 承载同件，两处互斥不重复
+          if (this.msg.headHost === true) {
+            ChatRoundHeader({
+              modelLabel: this.msg.modelLabel ?? ''
+            })
+          }
+          Row() {
+            Column({ space: 8 }) {
+              // ── 常驻卡头行（决明拍板）：左「AI 生成内容」恒显（所有助手正文卡同面孔——
+              // 生成中/收尾后/历史回放/中途正文行）；右时间仅每轮回答卡显示（生成中 = 流式行；
+              // 收尾后 = 操作栏宿主行），中途正文行只有字样——行恒在、时间文字零几何增减 ⇒
+              // 收尾无跳变。蓝取官方强调色资源；时间格式/取值单源 = formatMsgTime +
+              // msg.createdAt（轮起始时刻：实时链派发写入、回放链 alignRoundStartTimes 归一）──
+              Row() {
+                Text('AI 生成内容')
+                  .fontSize(13)
+                  .fontColor($r('sys.color.ohos_id_color_emphasize'))
+                Blank()
+                if (this.messageTimeOn() && this.answerTimeVisible()) {
+                  Text(formatMsgTime(this.msg.createdAt ?? 0))
+                    .fontSize(12)
+                    .fontColor($r('sys.color.font_secondary'))
                 }
-                // 用量键（拍板 6：点击弹气泡；usageTokens 在场才挂——隐私会话零落库与
-                // 无用量协议天然不弹空气泡）。★ 2026-09-20 D4-4 注释核正：旧注「失败轮
-                // 天然不弹」系七百八十二节之前的退役口径——中断/失败轮自该节起同落账本
-                //（error 收尾同落同显），轮内已有完整收尾段时照挂值仍会弹气泡，勿据旧注
-                // 把下面的挂载守卫当误改删回。★ 2026-09-15 决明改版：符号由 info_circle 改
-                // sys.symbol.data_proportion——与一级页设置页「用量统计」行卡同款
-                //（同源符号 = 一眼对上那张卡；键形仍是 InfoHintButton 那种 TEXTUAL 图标键，
-                // 字号取底栏统一的 16fp、非该件的卡头 18fp，只是换成用量自己的符号）。
-                // 气泡 builder 直读 this.msg（坑57 按值传参规避）
-                if (this.msg.usageTokens !== undefined) {
-                  Button() {
-                    SymbolGlyph($r('sys.symbol.data_proportion'))
-                      .fontSize(16)
-                      .fontColor([$r('sys.color.font_secondary')])
-                  }
-                  .buttonStyle(ButtonStyleMode.TEXTUAL)
-                  .onClick((): void => {
-                    this.usagePopupShow = !this.usagePopupShow;
-                  })
-                  // 底栏右下锚定后用量键在屏右半区：placement 用 BottomRight（右缘对齐
-                  // 向左展开，InfoHintButton 同族几何——2026-09-15 随键位右移从 BottomLeft
-                  // 改锚；200 宽气泡在窄屏个别键位下仍可能横向放不下，官方 API 参考实锤
-                  //「当前位置显示不下时会自动调整位置」，越界兜底由系统避让承担）
-                  .bindPopup(this.usagePopupShow, {
-                    builder: (): void => {
-                      this.UsagePopup();
+              }
+              .width('100%')
+              // ── 自动重试状态行：挂气泡内、正文之上——判据 = retryHint 非空（undefined/''
+              // = 无重试，结构零变化）；纯文本一行，数字随次数原地更新不新增行。样式取组卡
+              // 副标题规格（14fp 小字）+ 官方次要色资源（零自绘色值）──
+              if (this.msg.retryHint !== undefined && this.msg.retryHint !== '') {
+                Text(this.msg.retryHint)
+                  .fontSize(14)
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              // ── 长消息折叠门：偏好开 + 终态 + 超阈值且用户未展开时，正文整树不上屏（跳过
+              // 解析与组件构建），只出收起条；展开后正常渲染全文（ChatMarkdownBody 全量挂载，
+              // 身份 = 既有 bodyBindingId）。★ 一次出现笔：展开点击当帧正文未挂——此帧收起条
+              // 位置先绘骨架（「骨架先实际绘制一帧再挂正文」铁律），下一帧挂正文后骨架移入
+              // 下方叠层继续显示，揭示完成一次性显现
+              if (this.longCollapseActive()) {
+                if (this.placeholderActive()) {
+                  this.LongRevealSkeleton()
+                } else {
+                  this.LongCollapseBar()
+                }
+              } else {
+                // 助手正文唯一入口：绑定/终态与显示帧分别传递，不吃旧公式转义。
+                // ★ 外套 Stack 承蓝光标叠层——正文恒 100% 宽、包装层零 key 不加条件（不触发
+                // 重挂；文档渲染/绑定/@Monitor 链/入场动画零适配）
+                Stack({ alignContent: Alignment.BottomStart }) {
+                  ChatMarkdownBody({
+                    bindingId: this.msg.bodyBindingId,
+                    content: this.msg.text,
+                    endReason: this.msg.bodyEndReason,
+                    live: this.msg.live === true && this.msg.streaming === true,
+                    tailFirst: this.tailFirstReveal(),
+                    placeholder: this.placeholderActive(),
+                    displayBudget: this.msg.displayBudget,
+                    // DS 来源角标（S3③，可选入参——非官方档轮空数组零渲染零行为变化）
+                    citations: this.dsCitations(),
+                    darkMode: this.appColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK,
+                    bodyFontFamily: this.resolveBodyFamily(),
+                    codeFontFamily: this.resolveCodeFamily(),
+                    onAnchor: (id: string): void => {
+                      this.onMarkdownAnchor(id);
                     },
-                    placement: Placement.BottomRight,
-                    // 弹层族材质（2026-09-22 决明指令「气泡全 thick」；「无」档 = 材质关闭，
-                    // 回落到不设 popupColor 的官方默认形态）
-                    systemMaterial: overlayMaterial(),
-                    onStateChange: (event: PopupStateChangeParam): void => {
-                      if (!event.isVisible) {
-                        this.usagePopupShow = false;
+                    // 角标点击 → 来源卡行锚点（宿主既有 scrollToMarkdownAnchor 链几何滚动
+                    //——序号换算单源 = dsSourceEntryAnchorId）。★ 来源卡折叠笔：收起态条目
+                    // 锚点不在树上，先展开再滚——展开动画 220ms（200ms 动画 + 一帧余量）后
+                    // 条目就位转发滚动；已展开照旧即滚。★ 延时句柄落成员位、离场清（1712
+                    // 销毁守卫：迟到回调会向已销毁行上行滚动 → 取 UIContext 抛错/滚空，
+                    // 且裸 setTimeout 无主可清）
+                    onCitation: (entry: number): void => {
+                      // 来源在场判据不再解析（#13：解析在 ChatSourceCard 内；此处只需知道
+                      // 有没有来源载荷——无载荷则锚点也不存在，直接滚会滚空）
+                      if (this.msg.dsSourcesExpanded !== true &&
+                        (this.msg.serverToolsJson ?? '') !== '') {
+                        this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut },
+                          (): void => {
+                            this.msg.dsSourcesExpanded = true;
+                          });
+                        this.cancelDsExpandTimer();
+                        this.dsExpandTimer = setTimeout((): void => {
+                          this.dsExpandTimer = -1;
+                          this.onMarkdownAnchor(dsSourceEntryAnchorId(this.msg.id, entry));
+                        }, 220);
+                        return;
+                      }
+                      this.onMarkdownAnchor(dsSourceEntryAnchorId(this.msg.id, entry));
+                    },
+                    // 分帧揭示完成（或正文组件回收）→ 解除本行占位标记，宿主恢复行高回报与
+                    // 锚态重评，正文一次性显现、骨架撤下
+                    onRevealDone: (): void => {
+                      this.msg.bodyPlaceholder = false;
+                    },
+                    // 滚动暂停期挂载由正文链自行进入占位（骨架先出，停止滚动后背后建块）
+                    onRevealPlaceholder: (placeholder: boolean): void => {
+                      if (placeholder) {
+                        this.msg.bodyPlaceholder = true;
                       }
                     }
                   })
-                }
-                // 重试键（仅末条助手消息——历史轮重生成属分支范畴，任务书自定口径③；
-                // ★ 2026-09-20 重试真链复活并升级多版本：点击上行 ChatPage → ChatSendCtrl
-                // .retryLast 就地重答，旧回答保进 variants 可经切换键回看）
-                if (this.msg.tail === true) {
-                  Button() {
-                    SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-                      .fontSize(16)
-                      .fontColor([$r('sys.color.font_secondary')])
+                    .opacity(this.placeholderActive() ? 0 : 1)
+                    .hitTestBehavior(this.placeholderActive() ? HitTestMode.None : HitTestMode.Default)
+                  // 占位骨架：贴 Stack 顶、盖在 opacity 0 的正文层上方；揭示完成清位一并撤下
+                  if (this.placeholderActive()) {
+                    this.LongRevealSkeleton()
                   }
-                  .buttonStyle(ButtonStyleMode.TEXTUAL)
-                  .onClick((): void => {
-                    this.onRetryMsg(this.msg.id);
-                  })
+                  // 生成中蓝光标（判据 = streaming；收尾经 @ObjectLink 重渲即撤）：零排版装饰
+                  //——绘制在正文块下沿外侧空档内，不占水平/垂直布局 ⇒ 撤下零位移、不压字、
+                  // 不改断行、文字恒现于光标上一排；HitTestMode.None 不吞气泡长按手势
+                  if (this.genDressingVisible()) {
+                    Row()
+                      .width(GEN_CURSOR_WIDTH_VP)
+                      .height(GEN_CURSOR_HEIGHT_VP)
+                      .borderRadius(GEN_CURSOR_RADIUS_VP)
+                      .backgroundColor($r('sys.color.comp_background_emphasize'))
+                      .offset({ y: GEN_CURSOR_OFFSET_Y_VP })
+                      .hitTestBehavior(HitTestMode.None)
+                  }
                 }
-                // 「更多」键（锚点 = 前缀 + 消息 id，ChatPage 侧 ChatMessageMenuHost 消费）
-                // ★ 2026-09-18 消息复制优化笔：复制键退役——复制入口迁气泡长按（「消息全文」
-                // 面板内自由选择，跨段落可选；原键整条直复制无选择能力，与本笔要解的
-                // 「逐段只能选一段」同属复制体验缺口，随入口迁移一并退役）
-                Button() {
-                  SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
-                    .fontSize(16)
-                    .fontColor([$r('sys.color.font_secondary')])
-                }
-                .buttonStyle(ButtonStyleMode.TEXTUAL)
-                .id(MESSAGE_MENU_ANCHOR_PREFIX + this.msg.id)
-                .onClick((): void => {
-                  this.onMoreMenu(this.msg.id);
-                })
+                .width('100%')
               }
-              .margin({ top: 6 })
-              .alignSelf(ItemAlign.End)
+              // ── 截断尾注：挂气泡内、正文之下——与上方 retryHint 状态行一上一下对称。判据 =
+              // truncated 恰 true（undefined/false = 无截断，结构零变化）；样式照 retryHint 行
+              // 同款。**只追加一行、不改写正文**（渲染刷新红线：「非前缀整段替换」才须换绑定/
+              // 推进世代）；判据只认真截断（responses 侧收窄到 max_output_tokens，内容过滤不
+              // 挂键），故「提高上限/降低档位」文案恒与真因一致 ──
+              if (this.msg.truncated === true) {
+                Text('输出被上限截断，可提高输出上限或降低思考档位')
+                  .fontSize(14)
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              // ── 气泡内底部工具栏：收束后在 opsHost 行唯一承载；生成中提前显示（挂载支 =
+              // opsHost 或流式行），原本中途不可用的键置灰不可点（灰态在各键内按生成中判据
+              // 收口），收尾逐键回现状守卫 ──
+              if (this.barVisible() || this.genDressingVisible()) {
+                this.FinalOpsBar()
+              }
+              // ★ 2026-11-05 菜单笔：原「中间正文单键」分支整条删除（省略号「更多」键 +
+              // 气泡内右下角 Row）——复制正文/查看正文由长按全文面板覆盖，中间正文行不再
+              // 挂任何气泡内操作键；空正文异常行的恢复入口不变（轻量状态行重试键 / 操作栏「更多」）
             }
+            // 气泡形制统一挂内容列（内边距/底色/圆角/宽度上限；过程段与正文各自独立泡）。
+            // ★ 档位关 = 内距 0 + 底色透明 + 圆角 0
+            .padding({ left: this.bubbleVisible ? 14 : 0, right: this.bubbleVisible ? 14 : 0,
+              top: this.bubbleVisible ? 10 : 0, bottom: this.bubbleVisible ? 10 : 0 })
+            .backgroundColor(this.bubbleVisible ? cardBg(this.appColorMode, this.cardAlphaLevel) : Color.Transparent)
+            .borderRadius(this.bubbleVisible ? BUBBLE_RADIUS : 0)
+            .constraintSize({ maxWidth: '100%' })
+            // 长按开「消息全文」面板（旧渲染器逐段复制已随件删除，长按在气泡层恒为该手势）
+            .gesture(LongPressGesture().onAction((_event: GestureEvent): void => {
+              this.requestCopySheet();
+            }))
+            Blank()
           }
-          // 气泡形制统一挂内容列（两渲染器共享：内边距/卡片底/圆角/宽度上限——原 Markdown
-          // 组件形制原样上移，视觉零回归）
-          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-          .backgroundColor(cardBg(this.appColorMode))
-          // ★ 2026-09-16 思考块同泡化：上方紧贴思考半泡时（thinkAbove）上缘切直角——
-          // 与思考半泡的下缘直角拼成一个气泡（角半径常量四处同源，禁单改其一）
-          .borderRadius({
-            topLeft: this.msg.thinkAbove === true ? 0 : BUBBLE_RADIUS,
-            topRight: this.msg.thinkAbove === true ? 0 : BUBBLE_RADIUS,
-            bottomLeft: BUBBLE_RADIUS,
-            bottomRight: BUBBLE_RADIUS
-          })
-          .constraintSize({ maxWidth: '100%' })
-          // 长按开「消息全文」面板（2026-09-18 复制入口迁移）：Cube 引擎侧 setIsOnCopy(false)
-          // 已退役渲染器逐段长按复制（CubeMarkdownView），长按在气泡层让位本手势
-          .gesture(LongPressGesture().onAction((_event: GestureEvent): void => {
-            this.requestCopySheet();
-          }))
+          .width('100%')
+          // 布局诊断描边（构建期开关，交付恒关——Theme.ets CHAT_LAYOUT_DEBUG）
+          .borderWidth(CHAT_LAYOUT_DEBUG ? 1 : 0)
+          .borderColor(Color.Green)
+          // ── 来源卡（S3② 折叠卡，二期 S4 #13 迁 ChatSourceCard）：判据只看列载荷在场；
+          // 条目集合与渲染全在子件（父件不再为「有没有条目」跑解析）。展开意愿仍走
+          // msg.dsSourcesExpanded，卡头点击先上行钉顶再改值——与拆分前同序
+          if (this.msg.kind === 'assistant' && (this.msg.serverToolsJson ?? '') !== '') {
+            ChatSourceCard({
+              serverToolsJson: this.msg.serverToolsJson ?? '',
+              msgId: this.msg.id,
+              expanded: this.msg.dsSourcesExpanded === true,
+              bodyFamily: this.resolveBodyFamily(),
+              appColorMode: this.appColorMode,
+              cardAlphaLevel: this.cardAlphaLevel,
+              onToggle: (): void => {
+                this.onPresentationChange(this.msg.id);
+                this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, (): void => {
+                  this.msg.dsSourcesExpanded = this.msg.dsSourcesExpanded !== true;
+                });
+              },
+              onOpenUrl: (url: string): void => {
+                this.openSourceUrl(url);
+              }
+            })
+          }
+          // ── 推荐问题 chips：挂外层 Column 内、气泡 Row 之后 = 气泡卡外下方（左右 padding
+          // 与气泡同缘对齐——chips 独立于卡片底与圆角，长建议换行不撑泡）；点击去向按偏好
+          // 分流在 ChatPageContent ──
+          if (this.suggestVisible()) {
+            ChatSuggestBar({
+              suggestions: this.msg.suggestions ?? [],
+              onPick: (text: string): void => {
+                this.onSuggestTap(text);
+              }
+            })
+          }
+        }
+        .width('100%')
+        // ★ 决明「助手的右边距缩短与左边距统一」：两侧同取 BUBBLE_PAD_NEAR
+        .padding({ left: BUBBLE_PAD_NEAR, right: BUBBLE_PAD_NEAR })
+        // 正文气泡与过程段各自独立（不切角拼接），上距恒 CARD_SPACING
+        .margin({ top: CARD_SPACING })
+      }
+    } else if (this.msg.kind === 'summary') {
+      // 压缩摘要提示行：一行高的**持久**轻提示——与 notice 同款居中式样，但本行**落库**
+      //（notice「不落库」惯例不适用——它标记会话的持久压缩状态，重进会话由回放重建）；文案
+      // 固定（msg.text 存摘要正文，展示不用它——正文在用量面板折叠区看）；整行可点 → 打开
+      // 上下文用量面板。★ 渲染判据 = **覆盖边界在场**（coversToSeq 由投影层按 summary_bindings
+      // 绑定投影；图软删只删 binding 留文本行——无绑定的档案行不得再报「已压缩」，否则提示行
+      // 复活而面板报未压缩）。无绑定行整行不渲染：不删数据、不动读侧
+      if (this.msg.coversToSeq !== undefined) {
+        Row() {
+          Blank()
+          Text('上下文已压缩，摘要见上下文用量')
+            .fontSize(11)
+            .fontColor(cardDescColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
           Blank()
         }
         .width('100%')
-        // ── 推荐问题 chips（2026-09-19 推荐问题功能；★ 同日决明反馈笔移卡外下方）：
-        // 挂外层 Column 内、气泡 Row 之后 = 气泡卡外下方（外层 space 4 给间距、左右
-        // padding 与气泡同缘对齐——chips 独立于卡片底与圆角，长建议换行不再撑泡）；
-        // 判据/数据链/点击上行链不变（suggestVisible + @Observed suggestions + onSuggestSend）──
-        if (this.suggestVisible()) {
-          ChatSuggestBar({
-            suggestions: this.msg.suggestions ?? [],
-            onPick: (text: string): void => {
-              this.onSuggestSend(text);
-            }
-          })
-        }
+        .margin({ top: CARD_SPACING })
+        .onClick((): void => {
+          this.onOpenUsage();
+        })
       }
-      .width('100%')
-      // ★ 2026-09-16 决明「助手的右边距缩短与左边距统一」：右侧由 BUBBLE_PAD_FAR(20) 改
-      // BUBBLE_PAD_NEAR(4)，与左侧同值——助手气泡横向加宽、左右对称；同笔思考块与工具卡
-      // 按既有「左右边距对齐助手气泡」契约随形（三件同值，勿单改其一）
-      .padding({ left: BUBBLE_PAD_NEAR, right: BUBBLE_PAD_NEAR })
-    } else if (this.msg.kind === 'thinking') {
-      // ★ 2026-09-16 思考块同泡化（决明「把回复的思维链也收入气泡，仍支持展开收起」）：
-      // 由气泡外独立灰字块改为「助手气泡上半」——与下方正文泡同宽同底（cardBg）、上缘圆角
-      // 16 / 下缘直角，靠负 margin 吃掉列表项间距 CARD_SPACING 使两半贴合；正文泡上缘由
-      // msg.thinkAbove 切直角配合（见 ChatMessageCompose.thinkAbove 字段注释，写点 = 思考
-      // 行三条创建链）。结构镜像助手分支（Row + Blank）——两半宽度算法完全同源，勿改单边。
-      // 左右边距仍 4/4 与助手泡统一（三件同值契约）
-      Row() {
-        Column() {
-          // 生成中标记传导（streaming 三态收口的判据源；undefined 归一为 false = 已结束）
-          ChatThinkingBlock({ text: this.msg.text, streaming: this.msg.streaming === true })
-          // 思考区与正文区分割线（形制照工具卡：1vp cardBorderColor；内缩由气泡内距给出，
-          // 与两侧文字对齐）
+    } else if (this.msg.kind === 'clear') {
+      // 上下文清空分隔条：左右横线夹一行小字，标出「这条线之前的内容不再进请求」的分界
+      //（分界之前的消息仍在本行之上可见可回看，非破坏式）。渲染判据与 summary 行同款——
+      //**覆盖边界在场才渲染**（coversToSeq 由投影层按 summary_bindings 绑定投影；撤销清空
+      // 只删 binding 留文本行——无绑定的档案行不得再标分界，即 E-3 同族缺陷）。整行可点 →
+      // 打开上下文用量面板（复用 onOpenUsage 既有上行链）
+      if (this.msg.coversToSeq !== undefined) {
+        Row({ space: 8 }) {
           Divider()
             .strokeWidth(1)
             .color(cardBorderColor(this.appColorMode))
-            .margin({ top: THINK_DIVIDER_GAP })
+            .layoutWeight(1)
+          Text('已清空上下文')
+            .fontSize(11)
+            .fontColor(cardDescColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Divider()
+            .strokeWidth(1)
+            .color(cardBorderColor(this.appColorMode))
+            .layoutWeight(1)
         }
-        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-        .backgroundColor(cardBg(this.appColorMode))
-        .borderRadius({
-          topLeft: BUBBLE_RADIUS,
-          topRight: BUBBLE_RADIUS,
-          bottomLeft: 0,
-          bottomRight: 0
+        .width('100%')
+        .margin({ top: CARD_SPACING })
+        .onClick((): void => {
+          this.onOpenUsage();
         })
-        .constraintSize({ maxWidth: '100%' })
-        Blank()
       }
-      .width('100%')
-      .padding({ left: BUBBLE_PAD_NEAR, right: BUBBLE_PAD_NEAR })
-      .margin({ bottom: -CARD_SPACING })
-    } else if (this.msg.kind === 'tool') {
-      // 工具调用卡（★ 2026-09-20 审批卡视觉迁移笔 A：卡面本体域级拆分至 ChatToolCard.ets，
-      // 本分支只余一行实例化——搬迁零行为变更；两回调透传契约同 onAskSubmit/onBrowseConfirm。
-      // 拆分动因 = 本笔要给工具卡加专属头行与回执行，本文件拆分前 1192 行越 1200 硬线）
-      ChatToolCard({
-        msg: this.msg,
-        onAskSubmit: (callId: string, answerJson: string): void => {
-          this.onAskSubmit(callId, answerJson);
-        },
-        onBrowseConfirm: (callId: string, approved: boolean): void => {
-          this.onBrowseConfirm(callId, approved);
-        }
-      })
-    } else if (this.msg.kind === 'summary') {
-      // 压缩摘要提示行（2026-09-23 上下文压缩）：一行高的**持久**轻提示——与 notice 同款
-      // 居中式样，但本行**落库**（notice「不落库」的惯例不适用于本行——它标记的是会话的
-      // 持久压缩状态，重进会话由回放重建）；文案固定（msg.text 存的是摘要正文，展示不用它
-      // ——正文在用量面板的折叠区看）；整行可点 → 打开上下文用量面板
-      Row() {
-        Blank()
-        Text('上下文已压缩，摘要见上下文用量')
-          .fontSize(11)
-          .fontColor(cardDescColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Blank()
-      }
-      .width('100%')
-      .onClick((): void => {
-        this.onOpenUsage();
-      })
     } else {
-      // notice：居中提示条（连接状态/错误提示等）
+      // notice：居中提示条（连接状态/错误提示等）。★ msg.noticeAction 非空 = 整行可点（行尾
+      //「›」提示可点，文字字符非自绘图标、同 11fp 灰阶）——onClick 常挂、回调内判空
+      //（ArkUI 链式属性无条件挂法；无动作时点击空转、无按压反馈，可见行为与不可点逐字一致）
       Row() {
         Blank()
         Text(this.msg.text)
@@ -592,325 +835,273 @@ export struct ChatMessageItem {
           .fontColor(this.msg.level === 'error' ? $r('sys.color.ohos_id_color_warning') : cardDescColor())
           .maxLines(3)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.msg.noticeAction !== undefined) {
+          Text(' ›')
+            .fontSize(11)
+            .fontColor(cardDescColor())
+        }
         Blank()
       }
       .width('100%')
-    }
-  }
-}
-
-// ═══ 思考过程折叠块（2026-08-27 二二九改拍板形态：「thinking 分支 Text 全量 → 默认折叠
-// （标题行「思考过程·收起/展开」+ 内容截断 3 行/展开全量），@State 每消息独立；样式沿用
-// 灰字体系」。2026-09-01 自 ChatThinkingBlock.ets 并回本文件；同日偏好设置起初始态改读
-// 「默认展开思考」偏好键——缺省 false 收起形态不变，见 AppPreferences.ets）═══
-// 交互：标题行整行可点切换折叠/展开（chevron 旋转指示 + 动作文字「展开/收起」）；每消息
-// 实例独立 @State（列表项回收即弃，不跨消息串态）。
-// ★ 2026-09-16 决明「显示尾部最新 + 加高度动画」（三改）：
-//  ① 折叠态不再截断头部——内容区取**末尾切片**（最新一段）并底部对齐，流式期看到的始终是
-//     最新思考（原实现 maxLines(3) 显示的是最早三行）；
-//  ② 折叠态内容区高度恒定 = THINK_BODY_COLLAPSED_H（3 行）——切片只换文本不改高度，流式
-//     增长不抖动（高度随内容跳变会整条气泡忽高忽低）；
-//  ③ 展开/收起走显式数值高度 + animateTo 插值（尺寸属「可动画属性・布局属性」，官方
-//     《属性动画概述》实读；自然高度不可插值，故展开目标用实测全量高度而非省略高度约束）。
-//     收起动画期间仍显示全量（观感 = 内容被裁掉而非文字跳变），动画结束才切回切片。
-// ★ 2026-09-16 决明「生成中折叠态显最新三行 / 结束后折叠不展示，加收拢动画」（三态收口）：
-//  折叠态内容区高度按**本轮是否仍在生成**分两档——生成中 = 3 行窗口（同上②）；已结束 = 0
-//  （THINK_BODY_DONE_H，内容区收拢、标题行与分割线仍留作展开入口）。判据 = 消息运行时字段
-//  streaming（见 ChatMessageCompose 字段注释；写点 = 思考行懒创建置真 + finishStream /
-//  settleRoundAssistant 置假；回放/翻页重建的行该字段天然 undefined ⇒ 判「已结束」）。流末
-//  （streaming 真→假）走同一段 260ms 动画收拢——观感是「收拢」而非跳变。两条边界：
-//  ①展开态（含偏好「默认展开思考」）不强制收起——用户明确表达过要看，收口只作用于折叠态；
-//  ②已结束的块再点展开仍显全量，收起回到 0。
-// ★ 2026-09-16 真机反馈修（决明「展开是分割线下移同步露出内容，收起却是思考区文字消失、全白、
-//  分割线再收起，可优化吗」）：根因 = 官方《卡包展开折叠动画实现》背景知识原文「布局类改变宽高
-//  的动画，**内容都是直接到终点状态**」——内容盒高度跟着视窗收窄的话，它的布局直接按终点（0）
-//  算 ⇒ 收拢起手帧文字就没了、只剩空卡在收（展开看不出问题：终点是满高，故表现为「同步露出」）。
-//  修 = **内容盒与视窗解耦**（新增内层内容盒）：动画起手把内容盒冻结在「起手视窗高与终点的较大
-//  者」（展开 = 满高、收拢 = 起手满高/折叠窗高），animateTo 只动视窗外层高度 + 裁切 ⇒ 文字全程
-//  在场、被逐帧裁掉；动画结束解冻回终值。贴边键随之明确：视窗「折叠中且仍在生成」贴下沿（预览
-//  态末段留窗、收尾切切片零跳变），其余（展开态 + 已结束的收拢）贴上沿——收拢 = 展开的逐帧倒放
-//  （下沿上移盖住文字），不再出现「文字先没了、空卡再收」。
-// 折叠态预览行数（拍板口径 3 行；观感参数可单点调）
-const THINKING_COLLAPSED_LINES: number = 3;
-// 思考文字字号（fp）与行高（vp）——与下方 Text 样式声明同源；行高同时是高度换算基准
-const THINK_FONT_SIZE: number = 12;
-const THINK_LINE_HEIGHT: number = 18;
-// 折叠态内容区高度（vp）= 恰 3 行：固定高，切片文本换多少写多少都不改高度
-const THINK_BODY_COLLAPSED_H: number = THINKING_COLLAPSED_LINES * THINK_LINE_HEIGHT;
-// 已结束（streaming 假）折叠态内容区高度（vp）= 0：整块收拢，只留标题行与分割线
-const THINK_BODY_DONE_H: number = 0;
-// 展开/收起高度动画时长（ms；与输入栏工具行展开同量级观感）
-const THINK_EXPAND_ANIM_MS: number = 260;
-// 单行字数估算的宽度未测得兜底（首帧前调 measure 用；偏小 = 少取历史，不裁最新）
-const THINK_TAIL_FALLBACK_CHARS: number = 20;
-
-// ── 折叠态尾部切片（纯函数，组件外顶层；2026-09-16 自检轮自 ChatThinkingBlock.tailPreview
-// 提取并补行数收口——原实现是组件私有方法，断言只能盯源码形态、行为零执行面，短行密集
-// 形态的缺陷正是从这条盲区逃逸；提纯后由 assert-feature-domain 109 组源内提取直跑，
-// 照本仓 zoomOffsetRange / pinchOffset 先例）──
-// 返回「交给 Text 从头部渲染」的那一段 = 思考全文的末尾片段，四环：
-//  ① 末尾取段——字符量上界 = 折叠行数 × 单行字数估算；
-//  ② 代理对保护——切点落在 UTF-16 代理对中间则前移一位（emoji 不被劈开）；
-//  ③ 行首对齐——切点后半行宽内有换行则改从换行后开始，不显示半行；
-//  ④ 行数收口——短行密集文本（分点草稿 / 空行分段 / 代码段）按字符量取会远超折叠行数，
-//     Text 的 maxLines 只渲染前几行 ⇒ 窗口里落的反而是**旧**内容（自检轮实测：分点草稿
-//     切片渲染 10 行、空行分段 5 行，末段均不可见）；故把切点沿换行边界后推，直到剩余
-//     部分渲染行数 ≤ 折叠行数——末尾（最新段）始终保留在窗口内
-export function thinkTailSlice(text: string, perLine: number): string {
-  const limit: number = perLine * THINKING_COLLAPSED_LINES;
-  if (text.length <= limit) {
-    return text;
-  }
-  let start: number = text.length - limit;
-  const code: number = text.charCodeAt(start);
-  if (code >= 0xDC00 && code <= 0xDFFF) {
-    start--;
-  }
-  const nl: number = text.indexOf('\n', start);
-  if (nl >= 0 && nl < start + Math.ceil(perLine / 2)) {
-    start = nl + 1;
-  }
-  // 收口循环有界：每轮至少前进 1 个字符，窗内换行数 ≤ 字符量上界；窗内无换行（单行长段，
-  // 例如一整段无换行的长推理）= 字符量切法即正解，直接退出
-  while (thinkPreviewLines(text, start, perLine) > THINKING_COLLAPSED_LINES) {
-    const next: number = text.indexOf('\n', start);
-    if (next < 0) {
-      break;
-    }
-    start = next + 1;
-  }
-  return text.substring(start);
-}
-
-// 切片渲染行数估算（与折叠态 Text 的 maxLines 同口径）：段内按单行字数折行 + 段数；
-// 空段记 1 行（空行同样占一行高，不记会低估行数）
-function thinkPreviewLines(text: string, start: number, perLine: number): number {
-  let lines: number = 0;
-  const segs: string[] = text.substring(start).split('\n');
-  for (const seg of segs) {
-    lines += Math.max(1, Math.ceil(seg.length / perLine));
-  }
-  return lines;
-}
-
-@Component
-struct ChatThinkingBlock {
-  // 思考全文（kind='thinking' 的 ChatMessage.text；@Prop 构建时传导，流式增量由页面侧原地
-  // 改 msg.text → 父组件重渲 → 本 @Prop 更新；沿 @Prop 契约防坑57）。@Watch = 展开态下
-  // 文本增长须重算内容区高度（折叠态高度恒定，无需重算——见 onTextChange）
-  @Prop @Watch('onTextChange') text: string;
-  // 本轮是否仍在流式生成（父组件按 this.msg.streaming === true 传导——见 ChatMessageCompose
-  // 字段注释；@Watch = 流末收拢，见 onStreamingChange）。折叠态高度两档与收起目标高度都随它判
-  @Prop @Watch('onStreamingChange') streaming: boolean;
-  // 初始态 = 偏好「默认展开思考」（AppPreferences persistProp 键，创建期读一次——手动
-  // 切换后仍逐块独立不受影响；偏好改动对已上屏块不回翻，重进会话/新消息生效）
-  @State private expanded: boolean = getThinkExpandDefault();
-  // 内容区显式高度（vp）：折叠三态 = 生成中 THINK_BODY_COLLAPSED_H / 已结束 THINK_BODY_DONE_H
-  // （见 collapsedH）；展开 = 全量实测高度（measureFullH）。偏好默认展开时创建期读不到宽度，
-  // 停在折叠高，由首个 onAreaChange 补测（见 onBlockArea）
-  @State private bodyH: number = THINK_BODY_COLLAPSED_H;
-  // 内容显示全量（true）还是尾部切片（false）——收起动画期间仍为 true（见头注释③），
-  // 动画结束（onFinish）才切回切片
-  @State private fullBody: boolean = getThinkExpandDefault();
-  // 内容盒（内层 Column）高度（vp）：稳态与视窗同高；**两向动画期冻结在起手值**（见
-  // animateBody）——官方实锤「布局类宽高动画，内容直接到终点状态」，内容盒若跟着视窗收窄
-  // 就会按终点高（0）重排，文字在收拢起手帧消失（真机报障形态）；冻结后内容布局与视窗解耦
-  @State private contentH: number = THINK_BODY_COLLAPSED_H;
-  // 内容区实测宽度（vp；onAreaChange 回写）——measureTextSize 的约束宽，也是切片字数基准；
-  // 0 = 尚未测得
-  private textW: number = 0;
-
-  // 折叠态目标高度（vp）：生成中 = 3 行窗口；已结束 = 0（收拢）——首帧定档、展开/收起、
-  // 流末收拢三处同源，禁各写一套（改口径只改本函数）
-  private collapsedH(): number {
-    return this.streaming ? THINK_BODY_COLLAPSED_H : THINK_BODY_DONE_H;
-  }
-
-  // 首帧定档：已结束的历史块直接落在收拢态——回放/翻页重建的对象 streaming 天然 undefined，
-  // @Watch 不触发初值，故须在此给定（否则会停在折叠高、白显三行）；生成中的块与展开态
-  // （偏好默认展开）维持原路径：前者落在折叠高，后者由首个 onAreaChange 补全量高
-  aboutToAppear(): void {
-    if (!this.expanded) {
-      this.bodyH = this.collapsedH();
-    }
-    this.contentH = this.bodyH;
-  }
-
-  // 视窗贴边键（见 build 内容区注释与头注释真机反馈修）：折叠中且仍在生成 → 贴下沿（预览态
-  // 末段/最新留在窗内、收尾切切片零跳变）；其余（展开态 + 已结束的收拢）→ 贴上沿，
-  // 收拢即展开的逐帧倒放（视窗下沿上移盖住文字，不再「文字先没了、空卡再收」）
-  private stickTop(): boolean {
-    return this.expanded || !this.streaming;
-  }
-
-  // 高度动画统一入口（展开/收起/流末收拢三路共用）：
-  //  ①冻结内容盒——必须在 animateTo **之外**改（闭包内改的状态会被一并插值）；冻结值取
-  //    「**当前内容盒高**、起手视窗高、终点」三者较大者：展开 = 满高（终点）、收拢 = 起手
-  //    满高 / 折叠窗高（即正文的完整高度）。含当前 contentH 是为**动画被打断**的时序（生成
-  //    中手动收起未毕即流末收拢）：只看视窗高与终点时，后者会把冻结值拉小（满高 → 折叠窗高），
-  //    内容盒一缩就重演本笔要修的症状（文字先消失）。内容布局因此全程与视窗解耦（官方机制
-  //    见头注释真机反馈修）；稳态下 contentH 恒等于 bodyH，本项无行为差异；
-  //  ②animateTo 内只动视窗高度（贴边键与全量/切片键由调用方在闭包外置好）；
-  //  ③onFinish 解冻内容盒回终值，并把内容切回尾部切片（收起/收拢两路；展开路已为全量）
-  private animateBody(target: number): void {
-    this.contentH = Math.max(this.contentH, this.bodyH, target);
-    this.getUIContext().animateTo({
-      duration: THINK_EXPAND_ANIM_MS,
-      curve: Curve.EaseInOut,
-      onFinish: (): void => {
-        this.contentH = target;
-        if (!this.expanded) {
-          this.fullBody = false;
-        }
-      }
-    }, (): void => {
-      this.bodyH = target;
-    });
-  }
-
-  // 流末收拢（streaming 真→假）：折叠态用与展开收起同一段 260ms 动画收敛到折叠态目标
-  //（collapsedH——此刻 streaming 已为假 ⇒ 即 THINK_BODY_DONE_H，走同一单源，勿写死常量；
-  // 观感是「收拢」而非 54vp 跳变）；展开态（含偏好默认展开）零动作 = 不强制收起（见头注释边界①）
-  onStreamingChange(): void {
-    if (this.streaming || this.expanded) {
-      return;
-    }
-    this.animateBody(this.collapsedH());
-  }
-
-  // 文本增量（流式）：展开态内容区高度按新长度重算；折叠态高度恒定（正文为尾部切片，
-  // 每次刷新自渲染最新段），零额外成本
-  onTextChange(): void {
-    if (this.expanded) {
-      this.bodyH = this.measureFullH();
-      this.contentH = this.bodyH; // 内容盒随视窗（展开态文本增长；动画期冻结见 animateBody）
-    }
-  }
-
-  // 内容区实测宽度回写（onAreaChange；宽度只随屏宽/旋转变化，0.5vp 阈值去抖防重入）
-  private onBlockArea(wVp: number): void {
-    if (wVp <= 0 || Math.abs(wVp - this.textW) < 0.5) {
-      return;
-    }
-    this.textW = wVp;
-    // 首帧补测：偏好「默认展开思考」时创建期无宽度，bodyH 停在折叠高 → 拿到宽度补一次；
-    // 折叠态（常规）零成本
-    if (this.expanded) {
-      this.bodyH = this.measureFullH();
-      this.contentH = this.bodyH; // 内容盒随视窗（同上）
-    }
-  }
-
-  // 全量思考文本的渲染高度（vp）：getMeasureUtils().measureTextSize 与 Text 同参
-  //（同字号 12fp / 同行高 18vp / 同宽约束）；返回值为 px，经 UIContext.px2vp 换算
-  //（本地 d.ts 实读单位）。宽度未测得或测量异常 → 按字数估算回落（宁高勿低：
-  // 高 = 底部留白，低 = 文字被裁）
-  private measureFullH(): number {
-    const fallback: number = Math.max(THINK_BODY_COLLAPSED_H,
-      Math.ceil(this.text.length / this.charsPerLine()) * THINK_LINE_HEIGHT);
-    if (this.textW <= 0) {
-      return fallback;
-    }
-    try {
-      const size: SizeOptions = this.getUIContext().getMeasureUtils().measureTextSize({
-        textContent: this.text,
-        constraintWidth: this.textW,
-        fontSize: THINK_FONT_SIZE,
-        lineHeight: THINK_LINE_HEIGHT
-      });
-      const hVp: number = this.getUIContext().px2vp(size.height as number);
-      return hVp > 0 ? hVp : fallback;
-    } catch (e) {
-      return fallback;
-    }
-  }
-
-  // 单行字数估算：12fp 中文全角字宽 ≈ 字号，故字数 ≈ 宽 ÷ 字号（混排英文更窄 = 实际行数
-  // 更少，方向安全）；下限 8 防极端窄宽除出荒谬值
-  private charsPerLine(): number {
-    if (this.textW <= 0) {
-      return THINK_TAIL_FALLBACK_CHARS;
-    }
-    const n: number = Math.floor(this.textW / THINK_FONT_SIZE);
-    return n >= 8 ? n : THINK_TAIL_FALLBACK_CHARS;
-  }
-
-  // 折叠态预览文本 = 末尾切片（多行收口后交给 Text 从头部渲染，等价于显示最新的几行）。
-  // 切片本体的四环逻辑（末尾取段 / 代理对保护 / 行首对齐 / 行数收口）在文件尾顶层纯函数
-  // thinkTailSlice——提纯动因与实测见其注释
-  private tailPreview(): string {
-    return thinkTailSlice(this.text, this.charsPerLine());
-  }
-
-  // 展开/收起（标题行整行可点）：高度以显式数值驱动并包进 animateTo（尺寸属性可动画）
-  private toggleExpanded(): void {
-    const next: boolean = !this.expanded;
-    // 收起目标随生成态分档（生成中回 3 行窗 / 已结束回 0）——见 collapsedH
-    const target: number = next ? this.measureFullH() : this.collapsedH();
-    // 两个非可动画键在起手即翻转（贴边随 expanded、全量/切片随 next）——放闭包外与放闭包内
-    // 同效（布尔不进插值），放外面是为让 animateBody 成为三条路的统一入口
-    this.expanded = next;
-    if (next) {
-      this.fullBody = true;
-    }
-    this.animateBody(target);
-  }
-
-  build() {
-    Column({ space: 4 }) {
-      // 标题行（整行可点）:图标 + 「思考过程」+ 动作文字（拍板文案形态）
-      Row({ space: 6 }) {
-        SymbolGlyph($r('sys.symbol.chevron_down'))
-          .fontSize(THINK_FONT_SIZE)
-          .fontColor([cardDescColor()])
-          .rotate({ angle: this.expanded ? 180 : 0 })
-        Text('思考过程')
-          .fontSize(THINK_FONT_SIZE)
-          .fontColor(cardDescColor())
-        Text(this.expanded ? '收起' : '展开')
-          .fontSize(THINK_FONT_SIZE)
-          .fontColor(cardDescColor())
-      }
-      .padding({ top: 2, bottom: 2 })
+      .margin({ top: CARD_SPACING })
       .onClick((): void => {
-        this.toggleExpanded();
-      })
-      // 内容区两级（灰字斜体沿用原 thinking 分支样式）：
-      //  · 外层 = 视窗：显式高度（bodyH，动画里唯一动的东西）+ 裁切；
-      //  · 内层 = 内容盒：自带高度（contentH），动画期冻结在起手值——文字因此不按视窗终点高
-      //    重排（官方机制与真机报障见头注释「真机反馈修」）。
-      //  视窗贴边键 stickTop：贴上沿时收拢 = 展开的逐帧倒放（下沿上移盖住文字）；贴下沿时是
-      //  折叠预览态与生成中的手动收起——末段（最新）始终留在视野里，收尾切切片零跳变
-      //（2026-09-16 自检轮结论在本键上延续）。已结束收拢为 0 = 整块不可见，正文仍在窗内
-      //  渲染，展开动画即从这扇窗长出来。
-      Column() {
-        Column() {
-          Text(this.fullBody ? this.text : this.tailPreview())
-            .fontSize(THINK_FONT_SIZE)
-            .fontColor(cardDescColor())
-            .fontStyle(FontStyle.Italic)
-            .lineHeight(THINK_LINE_HEIGHT)
-            .width('100%')
-            .maxLines(this.fullBody ? Number.MAX_SAFE_INTEGER : THINKING_COLLAPSED_LINES)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.msg.noticeAction !== undefined) {
+          this.onNoticeAction(this.msg.noticeAction);
         }
-        .width('100%')
-        .height(this.contentH)
-        // 内容盒内对齐：展开/动画期贴上沿；折叠预览态贴下沿（尾部切片贴着窗口下沿出现）
-        .justifyContent(this.fullBody ? FlexAlign.Start : FlexAlign.End)
-        .alignItems(HorizontalAlign.Start)
-      }
-      .width('100%')
-      .height(this.bodyH)
-      .clip(true)
-      .justifyContent(this.stickTop() ? FlexAlign.Start : FlexAlign.End)
-      .alignItems(HorizontalAlign.Start)
+      })
     }
-    .alignItems(HorizontalAlign.Start)
+  }
+
+  // 长消息收起条：终态评估命中的长正文折叠态占位——说明行 + 展开键（收起是默认态，展开即
+  // 用户最终意图，无反向收起键）。形制照 AutoCollapseBar 范式（行内裸键族：TEXTUAL 无底 +
+  // font_secondary 官方次要色，不自绘底色/圆角/按压）；键内状态直读组件 this（可变状态不进
+  // @Builder 值参——坑16 家族/1593 实锤）；展开动作 = 原地写 msg.longMsgExpanded（@Observed
+  // 对象级观察驱动重渲，同 suggestions/attachBriefs 写点族）
+  @Builder
+  LongCollapseBar() {
+    Row({ space: 8 }) {
+      Text(this.msg.kind === 'user' ? '这条消息较长，已收起' : '这条回复较长，已自动收起')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+      Button() {
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_secondary')])
+          Text('展开全文')
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .alignItems(VerticalAlign.Center)
+      }
+      .buttonStyle(ButtonStyleMode.TEXTUAL)
+      .accessibilityText('展开全文')
+      .onClick((): void => {
+        // 展开是阅读动作（★ 一次出现笔）：宿主停进页校正/跟随、置阅读期底锚冻结并把该行滚
+        // 到视口顶部；本行当帧只置占位并绘骨架——骨架先实际绘制一帧，下一帧才挂正文（动画
+        // 不得盖住被阻塞主线程）；正文随后在占位层背后逐帧建块，揭示完成一次性显现
+        this.onLongMessageExpand(this.msg.id);
+        this.msg.bodyPlaceholder = true;
+        this.expandFrame?.cancel();
+        const frame: ChatExpandFrame = new ChatExpandFrame((): void => {
+          this.msg.longMsgExpanded = true;
+        });
+        this.expandFrame = frame;
+        this.getUIContext().postFrameCallback(frame);
+      })
+    }
     .width('100%')
-    // 宽度回写（本组件唯一 onAreaChange：只认宽度变化，高度变化零成本）
-    .onAreaChange((_oldArea: Area, newArea: Area): void => {
-      this.onBlockArea(newArea.width as number);
+    .padding({ top: 4, bottom: 4 })
+  }
+
+  // 占位骨架：长正文占位构建期的静态灰条——不挂逐帧动画（动画不得盖住被阻塞主线程），贴
+  // Stack 顶部（.align 覆盖 Stack 的 alignContent）；覆盖在 opacity 0 的正文层上方，揭示
+  // 完成由宿主清 bodyPlaceholder 一并撤下。灰条取官方交互灰语义色（comp_background_tertiary，
+  // 仓内三处真机同色先例）
+  @Builder
+  LongRevealSkeleton() {
+    Column({ space: LONG_REVEAL_SKELETON_GAP }) {
+      Row()
+        .width('100%')
+        .height(LONG_REVEAL_SKELETON_BAR_HEIGHT)
+        .borderRadius(LONG_REVEAL_SKELETON_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
+      Row()
+        .width('86%')
+        .height(LONG_REVEAL_SKELETON_BAR_HEIGHT)
+        .borderRadius(LONG_REVEAL_SKELETON_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
+      Row()
+        .width('58%')
+        .height(LONG_REVEAL_SKELETON_BAR_HEIGHT)
+        .borderRadius(LONG_REVEAL_SKELETON_RADIUS)
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ top: 4 })
+    .align(Alignment.TopStart)
+    .hitTestBehavior(HitTestMode.None)
+    .accessibilityText('内容加载中')
+  }
+
+  // 用量气泡宿主（★ 闪退修复，真机实锤）：bindPopup 的 builder 是**普通箭头函数**，ets
+  // 编译器只在 build() 与 @Builder 体内把自定义组件语法糖 `Foo({...})` 转译为 `new Foo(...)`；
+  // 把 `ChatUsagePopup({ msg: this.msg })` 直接写在箭头函数里，运行期按「无 new 调用类构造器」
+  // 抛 TypeError、应用当场 JsError 退出。故组件创建落在本 @Builder 体内、箭头函数只转发调用
+  //——禁再把组件调用搬回箭头函数
+  @Builder
+  UsagePopupHost() {
+    ChatUsagePopup({ msg: this.msg });
+  }
+
+  // 本轮消息级操作栏（正常完成/历史较早轮的最终正文都在该轮末尾唯一承载；生成中提前显示
+  //——流式行同渲染本栏，中途不可用的键置灰不可点，收尾逐键回现状守卫）。内容 = 用量键
+  //（有账本值才可点；生成中挂灰态占位）+ 复制键（非空文本才可点；生成中即复制已揭示前缀）
+  // + 重试键（末条且收束后——历史轮重生成走「更多」菜单）+「更多」键（生成中仅正文非空时
+  // 可用）。宽度写法仍 = 写作①（不设百分比宽度、不加 Blank）；对齐 = alignSelf(ItemAlign.End)
+  // 挂气泡右缘、从右下角向左排
+  @Builder
+  FinalOpsBar() {
+    Row({ space: 12 }) {
+      // 用量键（拍板 6：点击弹气泡；usageTokens 在场才挂——无用量协议天然不弹空气泡）。
+      // ★ 注释核正：中断/失败轮同落账本（error 收尾同落同显），轮内已有完整收尾段时照挂值
+      // 仍会弹气泡，勿据旧注把挂载守卫当误改删回。符号 = data_proportion（与设置页「用量
+      // 统计」行卡同款；键形仍是 TEXTUAL 图标键、字号取底栏统一 16fp）。气泡 builder 直读
+      // this.msg（坑57 按值传参规避）；挂载支扩「或生成中」（灰态占位），可点守卫 = 有账本值
+      //（生成中无值 ⇒ 置灰不可点——防弹空气泡契约由 enabled 承接）
+      if (this.msg.usageTokens !== undefined || this.genDressingVisible()) {
+        Button() {
+          SymbolGlyph($r('sys.symbol.data_proportion'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_secondary')])
+        }
+        .buttonStyle(ButtonStyleMode.TEXTUAL)
+        .enabled(this.msg.usageTokens !== undefined)
+        .opacity(this.msg.usageTokens !== undefined ? 1.0 : 0.4)
+        .onClick((): void => {
+          this.usagePopupShow = !this.usagePopupShow;
+        })
+        // 右下锚定后用量键在屏右半区：placement = BottomRight（右缘对齐向左展开；220 宽气泡
+        // 窄屏个别键位放不下时由系统「显示不下自动调整位置」避让兜底）
+        // 气泡内容 = ChatUsagePopup 独立件（拆域笔整域迁出，本处只留挂载点；组件内
+        // @ObjectLink 直读同一 msg 对象——坑57 不适用）。★ 组件创建必须经 @Builder
+        //（UsagePopupHost）转发，禁在箭头函数内直接调用——非 UI 上下文不转译 new，运行期
+        // TypeError 闪退
+        .bindPopup(this.usagePopupShow, {
+          builder: (): void => {
+            this.UsagePopupHost();
+          },
+          placement: Placement.BottomRight,
+          // 弹层族材质（决明指令「气泡全 thick」；「无」档 = 材质关闭，回落官方默认形态）
+          systemMaterial: overlayMaterial(),
+          onStateChange: (event: PopupStateChangeParam): void => {
+            if (!event.isVisible) {
+              this.usagePopupShow = false;
+            }
+          }
+        })
+      }
+      // 复制键（★ 决明指令复活：消息工具栏一键复制全文——原退役迁长按面板〔面板保留自由
+      // 选择〕，恢复后两入口并存；口径 = 面板「复制全文」默认档，见 copyFullText）。空文本
+      // 不挂：防复制空气泡；图标沿用原键 checkmark_square_on_square〔SDK sysResource 符号表
+      // 实名核过〕。挂载支扩「或生成中」；可点守卫 = 非空文本（生成中即复制已揭示前缀，与
+      // 中途单键菜单「复制正文」既有口径一致；空文本恒灰）
+      if (this.msg.text !== '' || this.genDressingVisible()) {
+        Button() {
+          SymbolGlyph($r('sys.symbol.checkmark_square_on_square'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_secondary')])
+        }
+        .buttonStyle(ButtonStyleMode.TEXTUAL)
+        .enabled(this.msg.text !== '')
+        .opacity(this.msg.text !== '' ? 1.0 : 0.4)
+        .onClick((): void => {
+          this.copyFullText();
+        })
+      }
+      // ★ 2026-10-09 消息菜单入口笔：原位「其他回答」文字键随入口迁消息「更多」菜单退役，
+      // 菜单项又随行内步进器上线退役。★ 2026-11-15 续写收入菜单笔：行内续写键随入口迁消息
+      //「更多」菜单退役（唯一入口在菜单，判据单源 ChatContinueSupport 不变）。本栏键序自此 =
+      // 用量 → 复制 → 版本步进 → 重试 → 更多
+      // ── 回答版本步进器 ──
+      // 显示判据 = ansVersionCount ≥ 2（<2 零渲染——恒显 1/1 只添噪；运行时字段由
+      // ChatAnswerCtrl 重算写入，@Observed 驱动）；流式中不渲染（重算挂轮落库后，流式期本值
+      // 未定）。形制 = 行内裸键族（TEXTUAL 无底图标键 + 次要色计数文字；chevron 符号已核）；
+      // 边界侧箭头置灰不可点（ansPrev/ansNext 空 = 已在边界）。左右箭头 = 切上一/下一版本
+      //（onAnswerStep）；计数位可点 = 打开「其他回答」面板（onAnswerPanel——删除此版本与
+      // 全文预览在面板内承接）
+      if ((this.msg.ansVersionCount ?? 0) >= 2 && !this.genDressingVisible()) {
+        Row({ space: 2 }) {
+          Button() {
+            SymbolGlyph($r('sys.symbol.chevron_left'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .buttonStyle(ButtonStyleMode.TEXTUAL)
+          .enabled((this.msg.ansPrevBranch ?? '') !== '')
+          .opacity((this.msg.ansPrevBranch ?? '') !== '' ? 1.0 : 0.4)
+          .onClick((): void => {
+            this.onAnswerStep(this.msg.id, -1);
+          })
+          Text(((this.msg.ansVersionIndex ?? 0) + 1) + '/' + (this.msg.ansVersionCount ?? 1))
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+            .padding({ left: 4, right: 4 })
+            .onClick((): void => {
+              this.onAnswerPanel(this.msg.id);
+            })
+          Button() {
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .buttonStyle(ButtonStyleMode.TEXTUAL)
+          .enabled((this.msg.ansNextBranch ?? '') !== '')
+          .opacity((this.msg.ansNextBranch ?? '') !== '' ? 1.0 : 0.4)
+          .onClick((): void => {
+            this.onAnswerStep(this.msg.id, 1);
+          })
+        }
+      }
+      // 重试键：判据 = barVisible（assistant + opsHost，含历史轮与空失败轮收束后）——扩到
+      // 全部答案行，重试唯一入口（历史轮重生成不再经「更多」菜单〔菜单项随单链收敛退役〕）；
+      // 图会话重试 = 替代分支（旧答案留在旧分支路径可切回查看）。挂载支扩「或生成中」（流式
+      // 行 tail 常真，靠生成中判据压灰——「未收束不给用」）；可点守卫 = 答案行且非生成中
+      if (this.barVisible() || this.genDressingVisible()) {
+        Button() {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_secondary')])
+        }
+        .buttonStyle(ButtonStyleMode.TEXTUAL)
+        .enabled(this.barVisible() && !this.genDressingVisible())
+        .opacity(this.barVisible() && !this.genDressingVisible() ? 1.0 : 0.4)
+        .onClick((): void => {
+          this.onRetryMsg(this.msg.id);
+        })
+      }
+      // 「更多」键（锚点 = 前缀 + 消息 id，ChatPage 侧 ChatMessageMenuHost 消费）。★ 复制键
+      // 沿革：退役迁长按面板 → 决明指令复位（两入口并存，「退役」表述仅存沿革义，见上方
+      // 复制键注释与 copyFullText）。键体收 @Builder MoreMenuKey（与 user 分支共用，形制单源）；
+      // 生成中空正文窗口置灰（灰态判据收键体属性表达式内直读——无参 builder 通道，见键段注释）
+      this.MoreMenuKey();
+    }
+    .margin({ top: 6 })
+    .alignSelf(ItemAlign.End)
+  }
+
+  // 消息底栏「更多」键：**两处**消费面（user 行 / 轮尾操作栏）共用键体形制 = 单源：
+  // SymbolGlyph 无底 TEXTUAL 图标键 + font_secondary + 锚点 id（openMenu 的 TargetInfo 定位
+  // 目标，ChatMessageMenuHost 按同一前缀拼接）+ onMoreMenu 上行。一条消息只渲染一个分支 ⇒
+  // 锚点恒唯一（user 行若无挂点，「编辑/创建分支/复制为新会话」对 user 消息整链不可达——
+  // 见 ChatMoreMenu.callbacksFor.showEdit）。
+  // ★ 拆域笔后「位置须在 build() 之后」的约束已随用量气泡迁出失效，键体留原位不动（禁顺手
+  // 大重构）。★ 2026-11-05 菜单笔：中间正文行的省略号变体（原 MoreMenuKeyEllipsis）随两处
+  // 入口退役删除，本件只剩 dot_grid_2x2 四点网格一形；禁自绘椭圆底/边框/实底。
+  // ★ 生成中空正文窗口置灰：**无参** builder 通道——有参 builder 的值参数按值捕获、不随状态
+  // 刷新（官方 FAQ faqs-arkui-1078 按值传递表；首版即因此收尾驻留置灰，1593 节真机修复），
+  // 故灰态判据在键体属性表达式内经 this 直读（moreKeyInactive），随状态即时刷新
+  @Builder
+  MoreMenuKey() {
+    Button() {
+      SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
+        .fontSize(16)
+        .fontColor([$r('sys.color.font_secondary')])
+    }
+    .buttonStyle(ButtonStyleMode.TEXTUAL)
+    .enabled(!this.moreKeyInactive())
+    .opacity(this.moreKeyInactive() ? 0.4 : 1.0)
+    .id(MESSAGE_MENU_ANCHOR_PREFIX + this.msg.id)
+    .onClick((): void => {
+      this.onMoreMenu(this.msg.id);
     })
   }
+
+  // ★ 2026-11-05 菜单笔：原 `MoreMenuKeyEllipsis`（中间正文行省略号变体）随两处入口退役
+  // 整件删除——本件只剩 dot_grid 主形一枚键体（user 行 / 轮尾操作栏共用）。
+  // 灰态判据仍在该键体属性表达式内经 this 直读（无参 builder 通道，见上方键段注释）
 }

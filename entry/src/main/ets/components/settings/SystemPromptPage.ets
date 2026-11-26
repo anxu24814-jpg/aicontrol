@@ -1,46 +1,30 @@
-// 系统提示词独立页（2026-08-31 领导指令：系统提示词与会话提示词「分开」——库页不显示、
-// 独立页管理、内置默认可更改可重置、右上角勾取消改底部「恢复/保存」两按钮）：
-// · **文字层级（2026-09-01 领导指令，本页定稿口径）：提示性/说明性文本灰色
-//   （cardDescColor——首行说明、placeholder、变量卡副行「发送前替换…」等），功能/布局/
-//   板块级标题黑色（cardTitleColor——「点击插入变量」「内容」两处板块标题）；两类分治
-//   层级立辨，两页同规（AssistantPromptPage 同款同步，防同版式跨页字体色跳变）；
-// · 存储 = prompt_templates.isGlobal=1 唯一行（PromptTemplateDb——唯一真源不变，零 DB
-//   迁移；注入链 ChatSendCtrl.loadPromptState 零改动——系统提示词行 = 注入基座兜底，
-//   ★2026-09-04 归属与注入解耦：会话提示词 > 助手提示词 > 系统提示词 三级回退）；
-// · 形态：说明 + 内容多行 + 变量插入区（★ **2026-09-07 领导指令：变量插入区与内容框上下
-//   互换**——内容框上移居首、变量区下移（2026-09-01 旧版序「内容框下移上增变量区」作废）。
-//   变量卡 = 官方胶囊按钮（★ 2026-09-07 决明拍板：**不接沉浸光感**——历轮真机四连：
-//   缺省 ROUNDED_RECTANGLE 大矩形 / Material.empty 双层蒙层 / 光感透明底无按钮底 /
-//   无背景默认强调蓝；终版 = 显式官方灰阶实色 app.color.comp_fallback_gray + 原生按压 +
-//   显式 Capsule——依据见 Content 内注释；
-//   「选项 chips 无按压光感」豁免自本卡起不适用，其余 chips 照旧），
-//   字色 = 用量统计页主蓝（usageAccentColor，2026-09-07 决明「变量卡蓝色统一为用量统计
-//   页色值」——原淡蓝定稿退役）、版式 3 列 11/10fp 不变——版式依据见 Content
-//   内注释）；数据源 = PromptVariables.PROMPT_VARIABLES 单源（助手页同款，改变量自动
-//   同步两处）；点击 = 追加 token 到内容末尾（v1 简化，同助手页 insertVariable——cursor
-//   位插入为调研档增强项）+ 内容多行（留空 = 不注入——placeholder 明示；★ 2026-09-01
-//   领导「长度增大」220→320vp）+ **底部「恢复/保存」按钮条**（★ 2026-09-01 领导反馈
-//   「按钮排分割线、页面透不出来 → 参考会话页底部内容可通过输入框透出」定稿：按钮条 =
-//   悬浮底部、条透明不挂材质——内容滚到条后透出，无实色分割带；条内按钮官方灰底行内形制）；
-//   ★ 2026-09-03 内容区回退双态：按钮走 fallbackButton* 四件套（新规范下普通内容区材质
-//   不生效）——实底态（默认，外观页开关 contentFallback=true）= 恢复=tertiary 灰底、
-//   保存=emphasize 蓝底 + stateEffect(true) 原生按压；光感态 = 透传原 resolvedButton*
-//   材质光感（随沉浸光感总档）。官方语义色自动深浅反色。
-//   ★ 2026-08-31 领导追加：系统提示词**取消身份/位置（注入配置）功能**——页面不再挂 PromptInjectConfig，
-//   保存/恢复写固定默认 system+head+0（同注入链默认行为）；说明行与内容卡同宽
-//   CARD_PANEL_WIDTH（勿 width('100%')——左右横宽不对实锤；外层 Column 默认
-//   alignItems=Center 居中——勿加 alignSelf(Start)，左右不居中实锤）；
-// · 「恢复」= 内容回内置默认 SYSTEM_PROMPT_DEFAULT + 注入三列回 system/head/0（可重置）；
-// · 「保存」= updateTemplate（prompt-global 行）→ toast + pop 带 result（坑17：保存
-//   pop 必带）；
-// · 右上角无菜单键 = 「勾取消」（PageShell menuHds/menuNav 不传 = 默认 null/[] 无菜单；
-//   标题栏 checkmark 保存键在本页不用——底部「保存」按钮取代）。
+// 系统提示词独立页（库页不显示、独立页管理、内置默认可改可重置、底部「重置/保存」两键）。
+// · 文字层级：提示/说明性文本灰（cardDescColor），卡内标题 16fp Medium 主色（cardTitleColor
+//   ——2026-11-01 板块标题改档笔随卡内小节标题档归一）；
+//   两页同规（AssistantPromptPage 同步，防同版式跨页字体色跳变）。
+// · 存储 = prompt_templates.isGlobal=1 唯一行（PromptTemplateDb 唯一真源，注入链零改动——
+//   系统提示词行 = 注入基座兜底；会话提示词 > 助手提示词 > 系统提示词 三级回退）。
+// · 形态：说明 + 内容多行（320vp，留空 = 不注入）+ 变量插入条（PromptVariableStrip 收在内容卡
+//   底栏；官方胶囊 + 显式实色 + 原生按压，不接沉浸光感，豁免同族见该件头注释；数据源
+//   PROMPT_VARIABLES 单源；有光标插入到光标处，无光标追加末尾）+ 底部「重置/保存」按钮条。
+// · 底部键条 = 吸底悬浮、条透明不挂材质（内容滚到条后透出）；按钮走 fallbackButton* 四件套
+//   双态：实底态重置 = 卡外面白底 fallbackButtonBgOffCard（本页无卡体，键条坐 page_bg 灰底）、
+//   保存 = emphasize 蓝底 + stateEffect(true)；光感态透传原 resolvedButton* 材质光感。
+// · 系统提示词取消身份/位置配置：保存/重置写固定 system+head+0；说明行与内容卡同宽
+//   CARD_PANEL_WIDTH（勿 width('100%')），外层 Column 默认居中（勿加 alignSelf(Start)）。
+// · 「重置」= 内容回 SYSTEM_PROMPT_DEFAULT + 注入三列回 system/head/0；「保存」= updateTemplate
+//   → toast + pop 带 result（坑17）。右上角无菜单键（标题栏 checkmark 键不用——底部键取代）。
+// · 表单重构：变量区收进内容卡底栏，内容块改实色卡片并加字数计数；变量集、光标位插入与
+//   保存链零改。
 import { ConfigurationConstant } from '@kit.AbilityKit';
+import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { PageShell } from '../../common/PageShell';
 import { SETTING_TITLE_SYSTEM_PROMPT } from '../../common/SettingSearch';
-import { CARD_PANEL_WIDTH, cardDescColor, cardTitleColor, SECTION_TITLE_FONTSIZE, usageAccentColor } from '../../common/Theme';
+import { CARD_PANEL_WIDTH, SECTION_GAP, cardBg, cardDescColor, cardTitleColor, CARD_SECTION_TITLE_FONTSIZE, CARD_RADIUS } from '../../common/Theme';
+import { bindKeyboardAvoidArea, KEYBOARD_CARD_TAIL, KeyboardCardScroller } from '../../common/KeyboardCardScroll';
 import {
-  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect
+  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonBgOffCard,
+  fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect
 } from '../../common/ImmersiveLevel';
 import {
   PROMPT_GLOBAL_ID, queryGlobalTemplate, SYSTEM_PROMPT_DEFAULT,
@@ -50,48 +34,71 @@ import {
   INJECT_POSITION_HEAD, INJECT_ROLE_SYSTEM
 } from '../../common/providers/RequestInject';
 import {
-  appendVariableToken, PROMPT_VARIABLES, PromptVariableInfo
+  appendVariableToken, hasVolatileTimeTokens, insertVariableToken,
+  PromptInsertResult, PromptVariableInfo, PROMPT_VOLATILE_TIME_HINT
 } from '../../common/providers/PromptVariables';
+import { InfoHintButton } from '../InfoHintButton';
+import { InfoCard } from '../InfoCard';
+import { PromptVariableStrip } from '../PromptVariableStrip';
 
 @Component
 export struct SystemPromptPage {
+  // 页面存活守卫：迟到异步回调不写状态、不碰 UI、不上行；写库意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
   @State private content: string = '';
-  // 加载完成闸（★ 2026-09-14 全面自检第3轮笔4：在案项收口——第 1 轮 §3-E 判死变量
-  // 「二选一：接线或删除」，本笔取接线）：queryGlobalTemplate 异步回填未完成时 content
-  // 是空初值，此窗内点「保存」会把空串写进 prompt-global 行 = 系统提示词被清空（与
-  // PromptEditPage O-13 同族同根因，闸形制照其 :146 先例）。读取失败 catch 已置
-  // loaded = true（按内置默认显示，所见即所存，不需闸）。
+  // 加载完成闸：queryGlobalTemplate 未回填时 content 是空初值，此窗内保存会把空串写进
+  // prompt-global 行 = 系统提示词被清空（与 PromptEditPage O-13 同族）。读失败 catch 已置
+  // loaded = true（按内置默认显示，所见即所存）
   @State private loaded: boolean = false;
+  // 变量插入光标位：普通成员不进 @State（不驱动 UI）；controller 是官方光标 API 载体
+  private contentCtrl: TextAreaController = new TextAreaController();
+  private caretIndex: number = -1;
+  // 编辑态：驱动编辑器压短（聚焦时 320 → 160）——键盘弹起后整张内容卡（含卡内变量条）
+  // 才能收进键盘上沿之上（2026-11-05 键盘遮挡笔）
+  @State private editing: boolean = false;
+  private caretTimer: number = -1;
+  // 页面滚动器 + 卡底定位器（2026-11-05 两千一百零二）：聚焦后按实测位置把内容卡底边——
+  // 含卡底变量条的说明行——滚到吸底键条上沿之上（算式与时序单源 = KeyboardCardScroll）
+  private pageScroller: Scroller = new Scroller();
+  // 底部让位 = 吸底键条高（条上内距 12 + 按钮 40 + 条下内距 bottomPad+16）
+  private cardScroll: KeyboardCardScroller = new KeyboardCardScroller(this.pageScroller);
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // 沉浸光感档位 + 内容区回退开关（2026-09-03 开关体系恢复：按钮
-  // 双态 = fallbackButton* 四件套——实底态（默认）强制官方实色 / 光感态随沉浸光感总档
-  //（2026-09-12 分项退役口径）；
-  // AppStorage 订阅式切换即刷，坑16 正解，同档位键契约）
+  // 沉浸光感档位 + 内容区回退开关（按钮双态 = fallbackButton* 四件套——实底态强制官方实色 /
+  // 光感态随沉浸光感总档；AppStorage 订阅式切换即刷，坑16 正解）
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
   @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
 
   aboutToAppear(): void {
+    // 键盘上沿缓读绑定（进程内单次；卡底定位要它兜住「页面底边略低于键盘上沿」那一档）
+    bindKeyboardAvoidArea(this.getUIContext());
     queryGlobalTemplate()
       .then((row): void => {
+        if (this.departed) {
+          return;
+        }
         this.content = row.content;
+        // 整体换文：旧光标索引作废（用户若在回填前已点入内容框，索引对应的是旧文本）
+        this.caretIndex = -1;
         this.loaded = true;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         // 读取失败：按内置默认显示（页面仍可编辑保存——兜底不静默，Toast 明示）
         this.getUIContext().getPromptAction().showToast({ message: '系统提示词读取失败：' + (e as Error).message + '（已按内置默认显示）' });
         this.content = SYSTEM_PROMPT_DEFAULT;
+        this.caretIndex = -1;
         this.loaded = true;
       });
   }
 
-  // 保存（prompt-global 行，名称固定「系统提示词」；注入三列恒默认 system+head+0——
-  // 2026-08-31 领导追加取消身份/位置配置，固定默认注入）
+  // 保存（prompt-global 行，名称固定「系统提示词」；注入三列恒默认 system+head+0）
   private save(): void {
-    // 加载完成闸（未回填完 = content 是空初值，落库即清空系统提示词；形制照
-    // PromptEditPage O-13 修复——见成员位注释）
+    // 加载完成闸（未回填完 = content 是空初值，落库即清空——见成员位注释）
     if (!this.loaded) {
       this.getUIContext().getPromptAction().showToast({ message: '系统提示词未加载完成，暂不能保存，请返回重进' });
       return;
@@ -100,169 +107,213 @@ export struct SystemPromptPage {
     updateTemplate(PROMPT_GLOBAL_ID, '系统提示词', content,
       INJECT_ROLE_SYSTEM, INJECT_POSITION_HEAD, 0)
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '已保存' });
         this.pathStack.pop({ saved: true });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
       });
   }
 
-  // 恢复内置默认（内容回内置 + 注入三列回默认；行名不动）
-  private restore(): void {
+  // 重置内置默认（内容回内置 + 注入三列回默认；行名不动）
+  private reset(): void {
+    // 加载完成闸（与 save() 同形同理由——重载在途点重置会先落默认值，加载 then 后到再把
+    // 旧值刷回内容框 = 所见非所存；底部「重置」键无条件渲染。读失败分支已置真，不受影响）
+    if (!this.loaded) {
+      this.getUIContext().getPromptAction().showToast({ message: '系统提示词未加载完成，暂不能重置，请返回重进' });
+      return;
+    }
     updateTemplate(PROMPT_GLOBAL_ID, '系统提示词', SYSTEM_PROMPT_DEFAULT,
       INJECT_ROLE_SYSTEM, INJECT_POSITION_HEAD, 0)
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.content = SYSTEM_PROMPT_DEFAULT;
-        this.getUIContext().getPromptAction().showToast({ message: '已恢复为内置默认' });
+        // 整体换文：旧光标索引作废并清在途回位定时器，防新内容上按旧索引插入或回位
+        this.caretIndex = -1;
+        if (this.caretTimer >= 0) {
+          clearTimeout(this.caretTimer);
+          this.caretTimer = -1;
+        }
+        this.getUIContext().getPromptAction().showToast({ message: '已重置为内置默认' });
       })
       .catch((e: Object): void => {
-        this.getUIContext().getPromptAction().showToast({ message: '恢复失败：' + (e as Error).message });
+        if (this.departed) {
+          return;
+        }
+        this.getUIContext().getPromptAction().showToast({ message: '重置失败：' + (e as Error).message });
       });
   }
 
-  // 变量卡点按：追加 token 到内容末尾（appendVariableToken 单一来源——2026-09-01 分区化
-  // 收敛共用纯函数：末尾空白不补空格；AssistantPromptPage 同函数，防两页漂移）
+  // 变量卡点按：有光标按索引插入并回位；无光标走 appendVariableToken 追加末尾（同 AssistantPromptPage）
   private insertVariable(info: PromptVariableInfo): void {
-    this.content = appendVariableToken(this.content, info.token);
+    // 闸只认最后一次光标位（caretIndex）：失焦后点按仍应插到光标处，不得静默退化追加
+    //（2026-11-05 浮条笔，与 PromptEditPage 同口径）
+    if (this.caretIndex < 0) {
+      this.content = appendVariableToken(this.content, info.token);
+      return;
+    }
+    const result: PromptInsertResult = insertVariableToken(this.content, info.token, this.caretIndex);
+    // 先记账新光标再改 text：连续点按变量时下一次插入仍接在本 token 之后，不退回旧索引
+    this.caretIndex = result.caret;
+    this.content = result.content;
+    this.scheduleCaretRestore(result.caret);
   }
+
+  // 程序化改 text 后光标会回末尾，且同帧 caretPosition 不生效，故 0ms 后置光标；onChange
+  // 若有待回位任务会续排一次。定时器成对释放：aboutToDisappear 清。
+  private scheduleCaretRestore(caret: number): void {
+    if (this.caretTimer >= 0) {
+      clearTimeout(this.caretTimer);
+    }
+    this.caretTimer = setTimeout((): void => {
+      this.caretTimer = -1;
+      if (this.departed) {
+        return;
+      }
+      // 失焦态 caretPosition 不生效，只在编辑态回位；插入位置由 caretIndex 记账承接
+      //（2026-11-05 浮条笔，与 PromptEditPage 同口径）
+      if (this.editing) {
+        this.contentCtrl.caretPosition(caret);
+      }
+    }, 0);
+  }
+
+  // 聚焦定位交给 KeyboardCardScroller（卡底实测位置 → 滚到吸底键条上沿之上，2026-11-05
+  // 两千一百零二）；不再 scrollEdge 滚到底——本页卡是滚动内容最后一块，滚到底只能让卡底
+  // 齐平键条上沿，变量条的说明行仍会被键条压住
 
   @Builder
   Content() {
-    // ★ 2026-09-01 领导反馈「参考会话页底部内容可通过输入框透出」：底部按钮条改为会话页
-    // 输入栏同款——Stack(alignContent Bottom)：滚动区全高 + 按钮条悬浮底部、条透明
-    // 不挂材质（2026-09-02 决明反馈「无背后蒙层」：原 THIN 半透明条被误读为蒙层——条透明，
-    // 内容滚到条后透出）；滚动内容底部 padding 让位条高。条内按钮 = 官方实底行内形制
-    //（2026-09-03 内容区回退，见头注释；原「resolvedButton 四件套 + 材质条」口径废弃）。
-    // 让位常量 = 条上内边距 12 + 按钮 40 + 条下内边距 (bottomPad+16) —— 滚动区 padding
-    // bottom 同值（改条高须同步改此处，两处同改）
+    // 底部按钮条 = 会话页输入栏同款 Stack(alignContent Bottom)：滚动区全高 + 条悬浮底部、
+    // 条透明不挂材质（内容滚到条后透出）；滚动内容底部 padding 让位条高。条内按钮 = 官方
+    // 实底行内形制（内容区回退双态，见头注释；原「resolvedButton 四件套 + 材质条」废弃）。
+    // 让位常量 = 条上内边距 12 + 按钮 40 + 条下内边距 (bottomPad+16)——改条高须两处同改
     Stack({ alignContent: Alignment.Bottom }) {
-      Scroll() {
-        Column({ space: 12 }) {
-          Text('未开启会话提示词注入且助手未设置提示词时自动注入。开启会话级提示词后不注入。')
-            .fontSize(13)
-            .fontColor(cardDescColor())
-            .width(CARD_PANEL_WIDTH)
+      Scroll(this.pageScroller) {
+        // 板块间 SECTION_GAP（Theme 三档常量）
+        Column({ space: SECTION_GAP }) {
+          // 说明卡 = InfoCard 单源件
+          InfoCard({ text: '未开启会话提示词注入且助手未设置提示词时自动注入。开启会话级提示词后不注入。' })
 
-          // 内容多行（★ 2026-09-07 领导指令：与变量插入区上下互换——内容框上移居首）
-          Column({ space: 6 }) {
-            Text('内容')
-              .fontSize(SECTION_TITLE_FONTSIZE)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(cardTitleColor())
+          // ── 内容卡（编辑器 + 变量插入底栏）──
+          Column({ space: 12 }) {
+            // 标题行 + 计数 + volatile 时间变量气泡（内容含 {{time}}/{{datetime}} 时条件出现——
+            // 分钟粒度变量每轮替换会打断提示词缓存，文案单源 PROMPT_VOLATILE_TIME_HINT）
+            Row({ space: 8 }) {
+              Text('内容')
+                .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(cardTitleColor())
+                .layoutWeight(1)
+              if (hasVolatileTimeTokens(this.content)) {
+                InfoHintButton({ text: PROMPT_VOLATILE_TIME_HINT })
+              }
+              Text(this.content.length + ' / ' + TEMPLATE_CONTENT_MAX)
+                .fontSize(13)
+                .fontColor(cardDescColor())
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+            TextArea({
+              placeholder: '输入系统提示词，留空则不注入',
+              text: this.content,
+              controller: this.contentCtrl
+            })
               .width('100%')
-            TextArea({ placeholder: '输入系统提示词，留空则不注入', text: this.content })
-              .width('100%')
-              // ★ 2026-09-01 领导「内容框长度增大」：220 → 320——滚动区全高 + 按钮条
-              // 悬浮，内容再多可滚、按钮恒可见
-              .height(320)
+              // 内容框高度两档（2026-11-05 键盘遮挡笔）：静止 320 保持原形态；编辑态压到 160，
+              // 键盘占屏后整张内容卡（含卡内变量条）才收得进键盘上沿之上
+              .height(this.editing ? 160 : 320)
               .maxLength(TEMPLATE_CONTENT_MAX)
               .onChange((value: string): void => {
                 this.content = value;
-              })
-          }
-          .width(CARD_PANEL_WIDTH)
-          .alignItems(HorizontalAlign.Start)
-
-          // ── 变量插入区（★ 2026-09-07 领导指令：与内容框上下互换后居其下；变量卡 =
-          // 官方胶囊按钮——不接光感、官方灰阶实色（2026-09-07 拍板；四连真机依据见下卡
-          // 注释；contentFallback/光感档位仅驱动本页底部键，与本卡无关）；
-          // 「选项 chips 无按压光感」豁免自本卡起不适用，其余 chips 照旧）：
-          // 数据源 = PromptVariables.PROMPT_VARIABLES 单源（与助手页同源，改变量两处自动
-          // 同步）；版式沿用 2026-09-01 真机反馈定稿 Grid **3 列**等宽 + token 11fp/label
-          // 10fp 两行（版式依据 = 真机 Pura 80 Pro+ 420vp 宽 → CARD_PANEL_WIDTH 388vp →
-          // 3 列 ≈124vp，最长 token {{datetime}} 11 字符 × 11fp ≈121vp 恰好放下（2 列版卡
-          // 宽 ~190vp 被否）；窄屏（360vp 级 → ~104vp）由 token maxLines(1) + Ellipsis
-          // 兜底不破词）；字色 = 用量统计页主蓝（usageAccentColor——2026-09-07 决明
-          // 「统一为用量统计页色值」，深浅分治，见 Theme.ets——按钮壳子内容文本自定色，
-          // 不同于行内文字键 label 字色）
-          Column({ space: 8 }) {
-            Text('点击插入变量')
-              .fontSize(SECTION_TITLE_FONTSIZE)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(cardTitleColor())
-              .width('100%')
-            Text('发送前替换为实际值。点按将变量追加到内容末尾')
-              .fontSize(13)
-              .fontColor(cardDescColor())
-              .width('100%')
-            Grid() {
-              ForEach(PROMPT_VARIABLES, (info: PromptVariableInfo) => {
-                GridItem() {
-                  Button() {
-                    Column({ space: 2 }) {
-                      Text(info.token)
-                        .fontSize(11)
-                        .fontColor(usageAccentColor(this.appColorMode))
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      Text(info.label)
-                        .fontSize(10)
-                        .fontColor(usageAccentColor(this.appColorMode))
-                    }
-                    .justifyContent(FlexAlign.Center)
-                  }
-                  // ★ 终拍后真机首观感：「蓝底」——Button(){} 无参自定义内容默认 = 主按钮
-                  // 强调蓝（comp_background_emphasize，保存键同族）；改显式官方灰阶实色
-                  // app.color.comp_fallback_gray（与底部恢复键/输入框同系灰，深浅分治
-                  // 不透明）——「背景显式 + 无 systemMaterial」= 历轮验证过的单层组合；
-                  // type(Capsule) 胶囊 + 官方原生按压（stateEffect 默认 true）+ 显式
-                  // padding（上下 6 / 水平 4）；字色 = 用量统计主蓝（usageAccentColor，
-                  // 2026-09-07 指令统一）；
-                  // 光感体系本卡不接——见 Theme 头注释例外
-                  .type(ButtonType.Capsule)
-                  .width('100%')
-                  .padding({ top: 6, bottom: 6, left: 4, right: 4 })
-                  .backgroundColor($r('app.color.comp_fallback_gray'))
-                  .onClick((): void => {
-                    this.insertVariable(info);
-                  })
+                // 程序化插入待回位：若本次变化由状态赋值触发，续排一次让光标在渲染落地后归位
+                if (this.caretTimer >= 0) {
+                  this.scheduleCaretRestore(this.caretIndex);
                 }
-              }, (info: PromptVariableInfo): string => info.token)
-            }
-            .columnsTemplate('1fr 1fr 1fr')
-            .columnsGap(8)
-            .rowsGap(8)
-            // 高度自适应内容——Grid 不设高度时按父容器撑满（滚动容器语义），显式 auto
-            // 让 8 卡 3 列排 3 行自适应（版式受控不悬空）
-            .height('auto')
-            .width('100%')
+              })
+              // 光标/选区变化记账（选区存在时取末端 = 插入点）；回位定时器在途时忽略中间态
+              //（程序化改 text 会把光标先甩到末尾，回调可能先报尾部，不能覆盖目标索引）
+              .onTextSelectionChange((_selectionStart: number, selectionEnd: number): void => {
+                if (this.caretTimer >= 0) {
+                  return;
+                }
+                this.caretIndex = selectionEnd;
+              })
+              // 官方定义：输入框有光标即编辑态，否则非编辑态——正是「内容里有没有显示光标」判据
+              .onEditChange((isEditing: boolean): void => {
+                this.editing = isEditing;
+                // 键盘避让切官方 RESIZE（聊天页输入栏同款处方）：RESIZE_WITH_CARET 下本页
+                // 高度不压缩，键盘盖住页面——吸底「重置/保存」条与卡底说明行都停在原位被遮
+                // （2026-11-05 两千一百零四真机实锤：视口高 813vp = 全高）
+                this.getUIContext().setKeyboardAvoidMode(isEditing ?
+                  KeyboardAvoidMode.RESIZE : KeyboardAvoidMode.RESIZE_WITH_CARET);
+                // 压短编辑框 + 卡底定位随编辑态起停（底部让位 = 吸底键条高；2026-11-05）
+                this.cardScroll.setEditing(isEditing, this.bottomPad + 68);
+              })
+            // 变量插入条（三页共用 PromptVariableStrip，变量集仍是 PromptVariables 单源）
+            PromptVariableStrip({
+              label: '点击插入变量',
+              hint: '发送前替换为实际值。点按插入到光标处，未显示光标时追加到末尾',
+              onPick: (info: PromptVariableInfo): void => {
+                this.insertVariable(info);
+              }
+            })
           }
           .width(CARD_PANEL_WIDTH)
+          .padding(16)
+          .backgroundColor(cardBg(this.appColorMode))
+          .borderRadius(CARD_RADIUS)
           .alignItems(HorizontalAlign.Start)
+          // 卡底实测上报（定位器据此算「卡底超出可视底缘多少」；2026-11-05 两千一百零二）
+          .onAreaChange((_oldArea: Area, newArea: Area): void => {
+            this.cardScroll.onCardArea(newArea);
+          })
         }
         .width('100%')
         .justifyContent(FlexAlign.Start)
-        // 底部让位按钮条（条高 = 12 + 40 + bottomPad + 16——与按钮条两处同改）
-        .padding({ top: this.topPad, bottom: this.bottomPad + 68 })
+        // 底部让位按钮条（条高 = 12 + 40 + bottomPad + 16——与按钮条两处同改）；编辑态再补
+        // KEYBOARD_CARD_TAIL——卡下方只有这一让位，不补就滚不到「卡底留白在键条上沿之上」
+        .padding({
+          top: this.topPad,
+          bottom: this.bottomPad + 68 + (this.editing ? KEYBOARD_CARD_TAIL : 0)
+        })
       }
       .width('100%')
       .height('100%')
       .align(Alignment.TopStart)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+      .scrollBar(BarState.Off)
+      // 视口实测上报（键盘压缩页面后视口高变化即触发卡底定位；2026-11-05 两千一百零二）
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        this.cardScroll.onViewportArea(newArea);
+      })
 
       // ── 底部操作键条（吸底悬浮 + 条透明——内容滚到条后透出）──
-      // 2026-09-03 内容区回退双态：实底态（默认）= 恢复 = 次钮（官方灰阶实色
-      // app.color.comp_fallback_gray——深浅分治不透明，见 ImmersiveLevel.fallbackButtonBg
-      // 注释）/ 保存 = 主钮（comp_background_emphasize 官方强调蓝 + font_on_primary
-      // 恒白字）+ stateEffect(true) 原生按压光感；光感态 = fallbackButton* 透传原
-      // resolvedButton* 材质光感。官方语义色自动深浅反色，零自写色值；
-      // 条不设 backgroundColor（透明悬浮，交互区 = 按钮本体，条 padding 不含命中区）
+      // 内容区回退双态：实底态 = 重置为卡外面白底 fallbackButtonBgOffCard（本页无卡体，键条
+      // 坐 page_bg 灰底，灰键不显形）/ 保存 = emphasize 蓝底 + 恒白字 + stateEffect(true)；
+      // 光感态 = fallbackButton* 透传原 resolvedButton* 材质。条不设 backgroundColor（透明悬浮，
+      // 交互区 = 按钮本体）
       Column() {
         Row({ space: 12 }) {
-          // 次操作：官方三级灰底 + 原生按压光感（AGENTS.md 行内按钮官方形制——官方默认
-          // 形状/字号/字色；2026-09-03 内容区回退双态：实底/光感见 fallbackButton* 语义）
-          Button('恢复')
+          // 次操作：卡外面白底（浅白/深灰）+ 原生按压（AGENTS.md 行内按钮官方形制）
+          Button('重置')
             .layoutWeight(1)
             .fontColor(fallbackButtonFont(this.contentFallback, false))
-            .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
+            .backgroundColor(fallbackButtonBgOffCard(this.contentFallback, this.immersiveLevel, false))
             .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
             .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
             .onClick((): void => {
-              this.restore();
+              this.reset();
             })
-          // 「保存」= 主操作：官方强调蓝底 + font_on_primary 恒白 + 原生按压光感
-          //（2026-09-03 内容区回退双态：与次钮同族，primary=true）
+          // 「保存」= 主操作：官方强调蓝底 + 恒白字 + 原生按压（与次钮同族，primary=true）
           Button('保存')
             .layoutWeight(1)
             .fontColor(fallbackButtonFont(this.contentFallback, true))
@@ -276,9 +327,8 @@ export struct SystemPromptPage {
         .width(CARD_PANEL_WIDTH)
       }
       .width('100%')
-      // 2026-09-02 决明反馈「无背后蒙层」：按钮条不挂材质（原 THIN 半透明条被误读为蒙层）
-      // ——按钮自身官方实底，直接悬浮固定底部；条透明，内容滚到条后透出（交互区 = 按钮
-      // 本体，条 padding 不含命中区）
+      // 按钮条不挂材质（原 THIN 半透明条被误读为蒙层）——按钮自身官方实底直接悬浮；
+      // 条透明，内容滚到条后透出（交互区 = 按钮本体）
       .padding({ top: 12, bottom: this.bottomPad + 16 })
     }
     .width('100%')
@@ -292,5 +342,18 @@ export struct SystemPromptPage {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
+    // 光标回位定时器成对释放：页面退出后不得再碰已释放的 TextArea
+    if (this.caretTimer >= 0) {
+      clearTimeout(this.caretTimer);
+      this.caretTimer = -1;
+    }
+    // 卡底定位器成对释放（命中即页面已退，迟到回调不得再碰 Scroller）
+    this.cardScroll.dispose();
+    // 键盘避让模式兜底恢复：聚焦中被返回时窗口级模式会留在 RESIZE，与 onEditChange 成对复原
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE_WITH_CARET);
   }
 }

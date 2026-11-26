@@ -1,44 +1,42 @@
-// 会话统计半模态面板（2026-09-19，决明指令「会话统计半模态，入口放消息页标题栏更多菜单，
-// 把原输入框上下文面板的上轮实际与本会累计移入会话统计；不做模型分布与生图统计；不要
-// 完全照搬竞品排版，按我们惯例可按语义分类重组」）：面板内容件（不含 bindSheet——宿主
-// ChatPage 页面根唯一挂载点，坑64 姿势；规范-半模态 §8「面板内容件」先例）。形制 =
-// ContextUsageSheet 同款三件套（HdsNavigation MODAL 壳 + sheetTitleBarOptions + 
-// bindToScrollable 滚动感知 + 底部安全区延伸），滚动容器 clip(false)（规范 §2）。
-// 内容四卡（竞品为「基本信息」单卡平铺九行，本面板按语义分四组——计数 / 时间 / 用量 /
-// 末轮实测，行形制沿用本仓 StatRow「标签左·数值右」族）：
+// 会话统计半模态面板：面板内容件（不含 bindSheet——宿主 ChatPage 页面根唯一挂载点，坑64
+// 姿势；规范-半模态 §8「面板内容件」先例）。形制 = ContextUsageSheet 同款（HdsNavigation
+// MODAL 壳 + sheetTitleBarOptions + bindToScrollable + 底部安全区延伸），滚动容器
+// clip(false)（规范 §2）。
+// 内容四卡（按语义分类重组；行形制 = StatRow「标签左·数值右」）：
 // · 会话概况卡——消息总数（user+assistant 对话行）/ 用户消息 / AI 回复 / 工具调用
-//   （role='tool' 卡行）/ 附件数（message_attachments 计数）；
+//  （role='tool' 卡行）/ 附件数（message_attachments 计数）；
 // · 时间卡——首条消息 / 最后活跃 / 时间跨度（三值同源 messages.createdAt 的 MIN/MAX，
 //   只取 user/assistant 行与消息总数同基；无消息行整卡不显——0 与未知区分）；
 // · Token 用量卡——账本 token_usage_events 按会话聚合（**计费口径**，含工具轮每轮重发的
-//   全量上下文；与上下文面板「已用」的窗口规模口径不同基，禁互相换算——同
-//   ContextUsageSheet.SessionTotalsCard 退役注记）：总 Token / 输入 / 缓存命中（>0 才显）
-//   / 输出 / 轮均 Token（÷ 对话轮数 = 账本行数）/ 生成总耗时 / 平均速度（输出 ÷ 耗时）。
-//   本卡 = 原上下文面板「本会话累计」卡移入并扩形（原三行 + 新四行），数据源
-//   sessionTotals 经 $ctxUsage @Link 同链（sessionUsageTotals 扩三值同笔）；无账本记录
-//   整卡不显；
-// · 上轮实际卡——原上下文面板同名卡**原样迁入**（末轮真实用量：输入/缓存/输出/用时/
-//   生成速度；数据源 usage.lastUsage = 末条带用量 assistant 行——meta 由回放链按账本
-//   回填〔ChatPageLoad.attachUsageMeta 按 messageId 命中即挂，无 status 过滤〕，故重启
-//   重进会话后照常显示；隐私会话零落库不挂 meta，同此不显）。
-// 入口与可见性：标题栏「更多」菜单「会话统计」项（ChatMoreMenu）；**隐私会话隐藏入口**——
-// 隐私会话零落库（会话行/消息行/账本全旁路），库侧统计恒全零，显示全零面板是误导。
-// 空态：概况/时间卡数据查询失败降级不显（catch 保留 null，不翻转为 0 静默谎报）；四卡
-// 全不显时显「暂无可统计的数据」兜底行（面板不为白屏）。
+//   全量上下文；与上下文面板「已用」的窗口规模口径不同基，**禁互相换算**）：总 Token /
+//   输入 / 缓存命中（>0 才显）/ 输出 / 轮均 Token（÷ 对话轮数 = 账本行数）/ 生成总耗时 /
+//   平均速度（输出 ÷ 耗时）/ 平均首字耗时；数据源 sessionTotals 经 $ctxUsage @Link 同链；
+//   无账本记录整卡不显；
+// · 上轮实际卡——末轮真实用量（输入/缓存/输出/用时/生成速度）；数据源 usage.lastUsage =
+//   末条带用量 assistant 行——meta 由回放链按账本回填（ChatPageLoad.attachUsageMeta 按
+//   messageId 命中即挂），重启重进会话照常显示；隐私会话零落库不挂 meta，同此不显。
+// 入口 = 标题栏「更多」菜单「会话统计」项（ChatMoreMenu）；**隐私会话隐藏入口**——隐私
+// 会话零落库，库侧统计恒全零，显示全零面板是误导。空态：概况/时间卡查询失败降级不显
+//（catch 保留 null，不翻转为 0 静默谎报）；四卡全不显时显「暂无可统计的数据」兜底行。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { IMMERSIVE_LEVEL_KEY } from '../../common/ImmersiveLevel';
-import { cardBg, cardBorderColor, cardDescColor, cardTitleColor,
-  CARD_PANEL_WIDTH, CARD_SPACING } from '../../common/Theme';
+import {
+ cardBg, cardBorderColor, cardDescColor, cardTitleColor,
+  CARD_PANEL_WIDTH, CARD_SPACING, CARD_RADIUS
+} from '../../common/Theme';
 import { tokenShort } from '../../common/TokenEstimate';
 import { fmtFirstTokenMs } from '../../common/store/UsageStatsCalc';
 import { sheetTitleBarOptions } from './KimiSheetCommon';
 import { ContextUsage } from './ChatContextUsage';
-import { ConversationMsgStats, conversationMsgStats, queryAttachmentCount }
-  from '../../common/store/ChatDb';
+import { ConversationMsgStats, conversationMsgStats } from '../../common/store/ChatDbReadSearch';
+import { queryAttachmentCount } from '../../common/store/ChatDb';
 
 @Component
 export struct SessionStatsSheet {
+  // 页面存活守卫：置位后本组件迟到异步回调不写状态、不碰 UI、不上行；写库等数据层意图
+  // 照常完成
+  private departed: boolean = false;
   // 最近一次活算产物（页面 @State 经 $ 绑定——轮次收尾自动刷新；打开时页面侧另刷一次，
   // 见 ChatPage.openStatsSheet）：上轮实际卡与 Token 用量卡共读
   @Link usage: ContextUsage | null;
@@ -64,12 +62,18 @@ export struct SessionStatsSheet {
   private async loadStats(): Promise<void> {
     try {
       const stats: ConversationMsgStats = await conversationMsgStats(this.conversationId);
+      if (this.departed) {
+        return;
+      }
       this.msgStats = stats;
     } catch (e) {
       // 查询失败按「未知」隐藏概况/时间卡（0 与未知区分同面板既有口径）
     }
     try {
       const count: number = await queryAttachmentCount(this.conversationId);
+      if (this.departed) {
+        return;
+      }
       this.attachCount = count;
     } catch (e) {
       // 同上，仅隐藏「附件数」行
@@ -86,8 +90,7 @@ export struct SessionStatsSheet {
   }
 
   // 大数值 token 缩写（Token 用量卡专用）：k 档复用 tokenShort 口径，扩 M 档——长会话累计
-  // 可达百万级（竞品同场景 3.7M），「3644.9k」不可读；上轮实际卡维持 tokenShort 原样（单轮
-  // 值域小，迁卡不改形）
+  // 可达百万级，「3644.9k」不可读；上轮实际卡维持 tokenShort 原样（单轮值域小，迁卡不改形）
   private statToken(n: number): string {
     if (n >= 1000000) {
       return (Math.round(n / 100000) / 10) + 'M';
@@ -119,15 +122,16 @@ export struct SessionStatsSheet {
     return Math.floor(minutes / 1440) + ' 天';
   }
 
-  // 生成总耗时（累计精确值）：<60s 一位小数秒（上轮实际卡 durationValue 同口径），
-  // ≥60s「M 分 S 秒」（S 为 0 只留分——文案规约无多余括号）
+  // 生成总耗时（累计精确值）：<60s 一位小数秒（durationValue 同口径），≥60s「M 分 S 秒」
+  //（S 为 0 只留分）。秒段向下取整：round 会把 59.5~60s 进位成 60（如 119.6s 显「1 分
+  // 60 秒」），floor 恒落 0~59
   private durationText(ms: number): string {
     const seconds: number = ms / 1000;
     if (seconds < 60) {
       return (Math.round(seconds * 10) / 10) + 's';
     }
     const minutes: number = Math.floor(seconds / 60);
-    const rest: number = Math.round(seconds - minutes * 60);
+    const rest: number = Math.floor(seconds - minutes * 60);
     return rest > 0 ? minutes + ' 分 ' + rest + ' 秒' : minutes + ' 分';
   }
 
@@ -137,8 +141,7 @@ export struct SessionStatsSheet {
     return seconds < 60 ? (Math.round(seconds * 10) / 10) + 's' : Math.round(seconds) + 's';
   }
 
-  // 标签左·数值右的统计行（ContextUsageSheet.StatRow 同形制随两卡迁入——原面板两卡
-  // 退役后该件已无此行消费方，行 builder 归位本面板单源）
+  // 标签左·数值右的统计行（行形制随两卡自 ContextUsageSheet 迁入，单源归位本面板）
   @Builder
   StatRow(label: string, value: string) {
     Row() {
@@ -184,7 +187,7 @@ export struct SessionStatsSheet {
     }
     .width(CARD_PANEL_WIDTH)
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Start)
   }
@@ -202,14 +205,13 @@ export struct SessionStatsSheet {
     }
     .width(CARD_PANEL_WIDTH)
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Start)
   }
 
-  // Token 用量卡（原「本会话累计」卡移入扩形；行序 = 总 → 输入 → 缓存命中 → 输出 → 轮均
-  // → 耗时 → 速度 → 首字——缓存是输入子集相邻才读出「其中」关系，派生值〔轮均/耗时/速度/
-  // 首字〕殿后；★ 2026-09-23 首字耗时笔同日改判落点 = 本卡末行「平均首字耗时」）
+  // Token 用量卡（行序 = 总 → 输入 → 缓存命中 → 输出 → 轮均 → 耗时 → 速度 → 首字——
+  // 缓存是输入子集，相邻才读出「其中」关系；派生值殿后）
   @Builder
   TokenCard() {
     Column({ space: 10 }) {
@@ -233,10 +235,9 @@ export struct SessionStatsSheet {
           this.StatRow('平均速度', Math.round(this.sessionTotals()!.completionTokens /
             (this.sessionTotals()!.durationMs / 1000)) + ' tok/s')
         }
-        // 平均首字耗时（2026-09-23 首字耗时笔；同日两度改判落点：设置页总览格 → 上下文用量
-        // 面板 → 本卡）：会话级聚合的 fs ÷ fn，**分母只认有首字记录的轮**（存量轮与无产出
-        // 正文的轮恒 0 不进分母）；无记录不显（0 与未知区分同本面板口径）；数值形制随本卡
-        // 时间面行（秒一位小数带 s，同生成总耗时 <60s 档）；公式单源 = CALC 层 fmtFirstTokenMs
+        // 平均首字耗时：会话级聚合的 fs ÷ fn，**分母只认有首字记录的轮**（存量轮与无产出
+        // 正文的轮恒 0 不进分母）；无记录不显（0 与未知区分同本面板口径）；公式单源 =
+        // CALC 层 fmtFirstTokenMs
         if (this.sessionTotals()!.firstTokenRecords > 0) {
           this.StatRow('平均首字耗时',
             fmtFirstTokenMs(this.sessionTotals()!.firstTokenSumMs,
@@ -247,12 +248,12 @@ export struct SessionStatsSheet {
     }
     .width(CARD_PANEL_WIDTH)
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Start)
   }
 
-  // 上轮实际卡（原上下文面板同名卡原样迁入——行集与条件零改动）
+  // 上轮实际卡（行集与条件：输入/缓存(>0)/输出/用时与速度(durationMs>0)）
   @Builder
   LastRoundCard() {
     Column({ space: 10 }) {
@@ -273,7 +274,7 @@ export struct SessionStatsSheet {
     }
     .width(CARD_PANEL_WIDTH)
     .padding(16)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .alignItems(HorizontalAlign.Start)
   }
@@ -328,5 +329,9 @@ export struct SessionStatsSheet {
     .hideBackButton(true)
     .bindToScrollable([this.scroller])
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

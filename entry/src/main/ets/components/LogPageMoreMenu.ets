@@ -1,7 +1,7 @@
-// 「运行日志」页「更多」菜单层（2026-08-21 自 LogPage.ets 拆出，拆分规则见 LogPage.ets 头注释）：
+// 「运行日志」页「更多」菜单层（自 LogPage.ets 拆出，拆分规则见 LogPage.ets 头注释）：
 // 官方全局菜单 openMenu 的内容构建与节点宿主（锚点与定位几何见 LogPageContent.ets 锚点
-// 注释，选型与旋钮优先级见 AGENTS.md「菜单弹窗定位约定」节）。★ 2026-08-30 反馈轮 13：
-// 节点生命周期与弹出组装迁 AppMenuHost 基类，本文件只留 builder/回调接口/锚点 id/宿主壳。
+// 注释，选型与旋钮优先级见 AGENTS.md「菜单弹窗定位约定」节）。★ 节点生命周期与弹出组装 =
+// AppMenuHost 基类，本文件只留 builder/回调接口/锚点 id/宿主壳。
 import { ComponentContent, SymbolGlyphModifier } from '@kit.ArkUI';
 import { AppMenuHost } from '../common/AppMenuHost';
 import { menuDividerColor } from '../common/Theme';
@@ -32,17 +32,18 @@ export function LogMoreMenuBuilder(params: MoreMenuCallbacks) {
       .onClick(() => {
         params.onExport();
       })
-    // 清空沙箱日志（2026-09-04 新增）：官方 hilog.clean()（删除沙箱内全部 hilog 日志文件），
-    // 实现见 LogPage.clearSandboxLogs；trash 图标 = 项目既有删除键先例
-    MenuItem({ symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')), content: '清空沙箱日志' })
+    // 清除运行日志：官方 hilog.clean() 删沙箱内全部 hilog 日志文件 + 清进程级事件缓存，
+    // 实现见 LogPage.doClearLogs；点此项只弹确认（ConfirmDialog），确认后才执行——文案
+    // 对齐页面名与确认弹窗标题（勿回「清空沙箱日志」内部术语）；trash 图标 = 项目既有删除键先例
+    MenuItem({ symbolStartIcon: new SymbolGlyphModifier($r('sys.symbol.trash')), content: '清除运行日志' })
       .onClick(() => {
         params.onClear();
       })
   }
   // 官方菜单项分割线（menuItemDivider @since 12，官方文档「菜单项间分割线」接口；不设
   // 该属性不显示分割线）：只覆盖 color 与 mode，其余走官方默认（1px、左右边距 16vp）。
-  // ★ mode 必须 EMBEDDED_IN_MENU：2026-08-21 真机反馈上一版（默认 FLOATING_ABOVE_MENU）
-  // 分割线完全不可见——该模式是「浮于菜单上方」的悬浮层，菜单项紧密排列 + THICK 材质下
+  // ★ mode 必须 EMBEDDED_IN_MENU：上一版（默认 FLOATING_ABOVE_MENU）真机反馈分割线
+  // 完全不可见——该模式是「浮于菜单上方」的悬浮层，菜单项紧密排列 + THICK 材质下
   // 被盖住；官方示例（菜单组件文档「设置分割线样式」）特意用 EMBEDDED 内嵌绘制在菜单项
   // 内才可见。颜色走公共入口 menuDividerColor（深浅色分治，规范见 docs/菜单弹窗定位
   // 规范.md 五点五节）——全局 @Builder 无组件实例，深浅色直接读 AppStorage（EntryAbility
@@ -53,7 +54,7 @@ export function LogMoreMenuBuilder(params: MoreMenuCallbacks) {
   })
 }
 
-// 菜单节点宿主（2026-08-30 反馈轮 13 起 AppMenuHost 薄壳——buildNode 直呼自家 @Builder
+// 菜单节点宿主（AppMenuHost 薄壳——buildNode 直呼自家 @Builder
 // 函数（编译器静态校验），生命周期/弹出在基类；LogPage 侧 init/rebuild/show/dispose）
 export class LogMoreMenuHost extends AppMenuHost<MoreMenuCallbacks> {
   protected buildNode(uiContext: UIContext,

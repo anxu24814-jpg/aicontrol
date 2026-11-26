@@ -1,0 +1,6 @@
+{
+  "name": "libcodeexec.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "代码工作台 JSVM 桥（napi 入口 runScript / cancelRunning）"
+}

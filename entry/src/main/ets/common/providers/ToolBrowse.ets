@@ -1,50 +1,33 @@
-// 内置浏览器读域（2026-09-16 内置浏览器 P1，任务书-内置浏览器P1-20260916）：内置第
-// 20/21 件工具 browse_open（打开网页）与 browse_read（浏览当前页）——助手在后台用隐形
-// Web 宿主（common/BrowseWeb.ets）打开网址、经 ArkWeb AI 页面命令（getLiteDom，API 26
-// 起）读渲染后正文与可交互元素，覆盖「HTTP 抓不到正文」的 JS 渲染站。本文件 = 协议纯函数
-//（命令组装/结果解析/结果码映射/正文拼装/分段/预算收敛，全部零 ArkUI 依赖，app 域 107 组
-// 断言剥 import 直跑）+ 读侧两件执行器与 debug 探针模式；注册在 ToolTypes（本文件只供
-// 常量与 executor，照 ToolSkill/ToolChatTools 域纪律——契约自叶子 ToolContracts 引，禁
-// 自 ToolTypes 引防环）。★ 2026-09-18 修复笔（深挖卷开工单）：动作域 browse_act 整体外迁
-// providers/ToolBrowseAct.ets（本文件贴 1200 硬线 + 修复增量必超线，宪法拆域令），共用
-// 协议函数仍在本件由动作域 import（ToolBrowseAct → ToolBrowse → BrowseWeb 单向链）。
-// 修复面（docs/调研-内置浏览器深挖卷-隐形宿主与诊断探针-20260918.md §六）：#1 wants
-// 对象形态回正（D1 安全链）；#2①② 诊断（失败带旁注/空正文 note）；#3 内容就绪有界等待
-//（D5——onPageEnd ≠ 内容就绪）；#9 自注入正文兜底（官方通道正文空时 runJavaScript 直读，
-// 触发与元素数无关——二轮修复）；#11 元素标签旁路（三轮修复——内核对本宿主恒不返 text
-// 字段〔两轮真机铁证：wants 含 text 五连查全缺、其余字段全返〕，nodes 清单/动作回执/高危
-// 判定的目标文本全空 = 模型盲选 + 词表层失效；旁路 = xpath 列表经 runPageJs 取标签回填，
-// nodes 模式起下发 visible 供跳过隐藏元素）；#12 短序号定位（四轮修复——真机三轮回证
-// 441 主链条 = 模型回传内核长 nodeid 凭缩写重组必错〔|1351 从未在任何下发清单里〕，下发
-// id 改清单短序号 + lastListedNodes 缓存翻译 + 动作域当次快照重解析真实节点发命令）；
-// #13 动作注入兜底（五轮修复——真机四轮回证 nodeid 定位通道对本宿主恒坏：#12 链路全程
-// 正确〔序号 → 缓存 xpath → 当次快照配中真实节点 |9 → 命令带真实 nodeid 发出〕内核仍
-// 441/421，|9 小于清单首节点 |14 = 内核轻量 DOM 非文档序编号自证是内核自家 id〔上轮
-// 另一文档搜索框 |11 同形态〕，不需 nodeid 的 scroll/send_keys 全成功；修法 = 动作域命中
-// 改发官方 xpath 定位 + 定位族失败经 runPageJs 注入交付，纯函数面在本件）；
-// #14 动作注入优先（六轮修复——真机五轮回证：click 带官方 xpath 参数发出内核仍 421
-// 〔定位面双路 nodeid/xpath 对本隐形宿主全坏，#13 的 xpath 直发优先同为死路〕；type 注入
-// 成交后 Enter 两发 send_keys 假成功零效果〔无目标焦点路由恒空转〕；修法 = click/Enter
-// 改注入直投优先，click 脚本补 form.requestSubmit 兜底〔合成 click 无内建隐式提交保证〕、
-// Enter 走 buildEnterInjectScript〔键盘三连 + requestSubmit〕，目标 = 最近成交 type 的
-// xpath〔lastTypedXpathFor，URL 守卫防导航后误中〕，纯函数面在本件）；
-// #0 browse_read 增 mode=debug 诊断探针（结构化信号，一发定位）。
-// · 闸门：联网搜索卡、默认开，随联网域三级闸门（助手清单 ∩ 会话开关 ∩ 总开关）同进同出——
-//   声明层过滤在 ChatSendCtrl（isWebDomainTool 单源判据），执行器首行 isSearchServiceEnabled
-//   兜底（照 ScrapeWebExecutor，兜「轮内切开关」与绕过声明过滤的路径）。
+// 内置浏览器读域：内置第 20/21 件工具 browse_open（打开网页）与 browse_read（浏览当前页）
+//——助手在后台用隐形 Web 宿主（common/BrowseWeb.ets）打开网址、经 ArkWeb AI 页面命令
+//（getLiteDom，API 26 起）读渲染后正文与可交互元素，覆盖「HTTP 抓不到正文」的 JS 渲染站。
+// 本文件 = 协议纯函数（命令组装/结果解析/结果码映射/正文拼装/分段/预算收敛，全部零
+// ArkUI 依赖，app 域断言剥 import 直跑）+ 读侧两件执行器与 debug 探针模式；注册在
+// ToolTypes（契约自叶子 ToolContracts 引，禁自 ToolTypes 引防环）。动作域在
+// providers/ToolBrowseAct.ets（域级拆分），共用协议函数在本件由动作域 import
+//（ToolBrowseAct → ToolBrowse → BrowseWeb 单向链）。
+// ★ 隐形宿主三定案（真机多轮回证，现行行为的根因口径）：①内核对本宿主恒不返 text 字段
+//——元素标签经 xpath 旁路 runPageJs 回填（supplementNodeTexts / buildNodeLabelScript），
+// 正文链同病 → runFallbackText 兜底；②模型回传内核长 nodeid 凭缩写重组必错（441 主链）
+//——下发 id 改清单短序号 + lastListedNodes 缓存翻译（resolveListedXpath），动作域翻键后
+// 在当次快照重解析真实节点发命令；③内核 nodeid/xpath 定位通道对本宿主恒坏、send_keys
+// 无焦点路由恒空转——动作改注入直投优先（buildActInjectScript / buildEnterInjectScript，
+// 未成交回退内核原路），纯函数面在本件。
+// · 归属（浏览器控制独立域）：「浏览器控制」卡默认开——独立成域，不随联网三级闸门
+//（总开关/会话「联网」开关/助手清单含 search_web 均不约束本域），启用面只由助手工具页
+//   本卡开关决定（ScrapeWebExecutor 的兜底不随迁，它仍属联网域）。
 // · 串行：单 Web 实例是有状态资源，全部操作经 browseService.queued 排队（红线 4——工具
 //   轮默认并发，禁在 executor 里直接并发调控制器）。
-// · 长度红线（任务书 §2.2「长度预算」）：外层 clipToolResult 对非搜索载荷超 8192 是硬切
-//   （拦腰截断 = 模型收到坏 JSON），故本域两件结果自控「序列化整串 ≤ 8192」——先按文本
-//   上限取段 → fitResultBudget 按溢出量回缩（转义膨胀 \n→\\n 使预算失真，回缩循环收敛），
-//   note 后置补进预留位，offset 随回缩同步回退（续读连续性不破）。
-// · 归属校验：browse_read 每次先过 assertOwnership（跨会话不串页，校验在排队任务内做——
-//   防等待期间他轮换页后读到错页）；browse_open 写侧归属在执行器入口快照中转键随参下传
-//   （commitPage 禁自读——任务 20 秒级，晚读会把页归属到后切会话，自检轮 2026-09-16 修）。
+// · 长度红线：外层 clipToolResult 对非搜索载荷超 8192 是硬切（拦腰截断 = 模型收到坏
+//   JSON），故本域两件结果自控「序列化整串 ≤ 8192」——先按文本上限取段 → fitResultBudget
+//   按溢出量回缩（转义膨胀 \n→\\n 使预算失真，回缩循环收敛），note 后置补进预留位，
+//   offset 随回缩同步回退（续读连续性不破）。
+// · 归属校验：browse_read 每次先过 assertOwnership（跨会话不串页，校验在排队任务内做
+//  ——防等待期间他轮换页后读到错页）；browse_open 写侧归属在执行器入口快照随参下传
+//（commitPage 禁自读——任务 20 秒级，晚读会把页归属到后切会话）。
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ToolExecutor } from './ToolContracts';
-import { isSearchServiceEnabled } from '../AppPreferences';
-import { CHAT_ACTIVE_CONV_KEY } from './ToolChatSearch';
+import { ToolExecutor, toolArgsParseErrorText, toolErrorText } from './ToolContracts';
+import { ToolExecutionContext } from '../chat/MessageContracts';
 import { BrowsePageState, BrowseNavSignals, browseService,
   browseFailureSignals } from '../BrowseWeb';
 
@@ -58,8 +41,8 @@ export const TAG: string = 'ToolBrowse';
 export const BROWSE_TEXT_MAX_CHARS: number = 8000;
 // 空结果判据（正文达到即视为内容就绪；SPA 异步渲染常见：onPageEnd 时正文还没挂上 DOM）
 export const BROWSE_MIN_TEXT_CHARS: number = 200;
-// 内容就绪等待上限（#3 D5 修复笔定值：P1 的 3×500ms 窗口对 SPA 太短——官方就绪信号
-// 研究结论「onPageEnd ≠ 内容就绪」，SPA 渲染常 2~5s；取 12s 兜慢站，条件满足即停不等满）
+// 内容就绪等待上限（定值依据：onPageEnd ≠ 内容就绪，SPA 渲染常 2~5s——取 12s 兜慢站，
+// 条件满足即停不等满）
 export const BROWSE_READY_TIMEOUT_MS: number = 12000;
 // 就绪等待步长（每轮一次 getLiteDom 正文查询 + 条件判定）
 export const BROWSE_READY_STEP_MS: number = 500;
@@ -77,8 +60,8 @@ export const BROWSE_NOTE_RESERVE: number = 64;
 
 // ── 协议纯函数（107 组断言直跑面）──
 
-// getLiteDom 筛选规则（官方协议子集：tags/clickable/scrollable/isInViewport——本笔用前三维，
-// 视口维因离屏宿主恒空被 nodes 弃用，见 buildInteractiveRules 注释）
+// getLiteDom 筛选规则（官方协议子集 tags/clickable/scrollable/isInViewport——本域用前
+// 三维，视口维因离屏宿主恒空被弃用，见 buildInteractiveRules）
 export interface LiteDomRules {
   tags?: string[];
   clickable?: boolean;
@@ -86,18 +69,16 @@ export interface LiteDomRules {
   isInViewport?: boolean;
 }
 
-// wants 数组元素（#1 D1 修复笔回正）：字符串字段名（官方取值表 40+ 项）或对象项
-// {"attributes": ["type", …]}——官方 AIPageCommand 页明文「wants 类型 = Array<string |
-// Object>，数组项为 Object 且包含 attributes 时指定需要返回的 HTML 属性」（getLiteDom
-// 示例即对象项形态；2026-09-18 直取 URL = harmonyos-references/arkts-apis-webview-aipagecommand）
+// wants 数组元素：字符串字段名（官方取值表 40+ 项）或对象项 {"attributes": ["type", …]}
+//——官方 AIPageCommand 页明文「wants 类型 = Array<string | Object>，数组项为 Object 且
+// 包含 attributes 时指定需要返回的 HTML 属性」（getLiteDom 示例即对象项形态）
 export type LiteDomWant = string | Record<string, Object>;
 
 // 节点字段（本域消费的子集；id = ArkWeb 节点标识非 HTML id 属性——官方：frameToken|
 // documentToken|节点号三段组合编码，页面重载/frame 重建/DOM 重建后可能变化）。★ #12 起
 // 模型下发面的 id 被 clipNodesForModel 改写为清单短序号（1 起），内核长 id 只活在
-// lastListedNodes 翻译层。attributes = HTML 属性子集（wants 对象项指定，
-// P2 起判 password/submit）；visible/isInViewport/rect 仅 debug 探针查询（rect 官方形态
-// 未验，原样透传不逐字段解析）
+// lastListedNodes 翻译层。attributes = HTML 属性子集（wants 对象项指定，判 password/
+// submit）；visible/isInViewport/rect 仅 debug 探针查询（rect 官方形态未验，原样透传）
 export interface BrowseDomNode {
   id?: string;
   tag?: string;
@@ -150,18 +131,17 @@ export function buildLiteDomCommand(rules: LiteDomRules, wants: LiteDomWant[]): 
   return JSON.stringify(command);
 }
 
-// 正文筛选规则：块级文本标签白名单 + 不含 isInViewport（全页抽取——P1 不滚动，「读全页」
-// 走全页 DOM 筛选，任务书 §1.5）
+// 正文筛选规则：块级文本标签白名单 + 不含 isInViewport（全页抽取——不滚动，「读全页」
+// 走全页 DOM 筛选）
 export function buildArticleTextRules(): LiteDomRules {
   return { tags: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'td', 'th',
     'figcaption', 'dt', 'dd', 'pre'] };
 }
 
-// 可交互筛选规则（browser-use「交互元素过滤」同思路：可点元素）。★ 只筛 clickable 不带
-// isInViewport——官方协议里视口维与其余为 AND（任务书 §2.3 原文），而宿主离屏挂载
-//（position −9999）下页面元素全部不在可视区域，视口维恒 false ⇒ AND 恒空集（2026-09-16
-// 真机实锤：百度正文可提取、nodes 恒空）。P1 不滚动，「读全页」语义下全页可点元素即所需，
-// 与正文 tags 全页抽取同口径；60 条上限与单节点截断兜 token。
+// 可交互筛选规则（可点元素）。★ 只筛 clickable 不带 isInViewport——官方协议里视口维与
+// 其余为 AND，而宿主离屏挂载（position −9999）下页面元素全部不在可视区域，视口维恒
+// false ⇒ AND 恒空集（真机实锤：百度正文可提取、nodes 恒空）。「读全页」语义下全页可点
+// 元素即所需，与正文 tags 全页抽取同口径；60 条上限与单节点截断兜 token
 export function buildInteractiveRules(): LiteDomRules {
   return { clickable: true };
 }
@@ -409,12 +389,12 @@ export function clipNodeText(text: string): string {
 
 // 节点清单 → 模型面精简形（截 BROWSE_NODES_MAX 条、单条 text 截 80 字、五字段定形 +
 // visible 条件携带〔#11：查询含 visible 维时下发——隐藏元素标出即可跳过，隐藏 input 被
-// 当搜索框是 441 现场实锤形态；未含时键缺省，老调用面不串形〕）——
-// browse_read nodes 模式与动作回执（#4 D4 新元素清单）共用同一口径，模型认知零切换。
-// ★ #12（四轮修复）：下发 id = 清单内短序号（1 起）而非内核长 nodeid——真机三轮实锤
-// 70 字符三段式 id 模型回传必错（凭缩写重组出清单里不存在的 |1351 → 441 nodeid not
-// found）；序号经 resolveListedXpath 查 lastListedNodes 缓存翻译回真实定位（下标 =
-// 序号-1），模型只需回传一位数
+// 当搜索框是 441 现场实锤形态；未含时键缺省，老调用面不串形〕）——browse_read nodes
+// 模式与动作回执新元素清单共用同一口径，模型认知零切换。
+// ★ #12：下发 id = 清单内短序号（1 起）而非内核长 nodeid——真机实锤 70 字符三段式 id
+// 模型回传必错（凭缩写重组出清单里不存在的值 → 441 nodeid not found）；序号经
+// resolveListedXpath 查 lastListedNodes 缓存翻译回真实定位（下标 = 序号-1），模型只需
+// 回传一位数
 export function clipNodesForModel(nodes: BrowseDomNode[]): BrowseDomNode[] {
   const capped: BrowseDomNode[] = [];
   const limit: number = Math.min(nodes.length, BROWSE_NODES_MAX);
@@ -430,14 +410,13 @@ export function clipNodesForModel(nodes: BrowseDomNode[]): BrowseDomNode[] {
   return capped;
 }
 
-// ── #11 元素标签旁路（2026-09-18 三轮修复）──
+// ── #11 元素标签旁路 ──
 
 // 标签探针脚本组装（纯函数）：xpath 列表经 JSON.stringify 内嵌（引号/反斜杠自动转义，
 // 页面数据无法注入脚本面），JS 侧 document.evaluate 逐条解析回元素，按 innerText →
 // value → placeholder/aria-label/title/alt/name 取首个非空为标签（input 无 innerText，
-// 属性链是其标识的主要来源），单条预截 BROWSE_NODE_TEXT_MAX_CHARS、逐条 try/catch 失败
-// 位回空串，返回与入序对齐的 JSON 数组串。innerText 依赖布局不依赖绘制——离屏隐形宿主
-// 下实测可用（#9 兜底正文同通道已出正文）
+// 属性链是其标识的主要来源），单条预截、逐条 try/catch 失败位回空串，返回与入序对齐的
+// JSON 数组串。innerText 依赖布局不依赖绘制——离屏隐形宿主下实测可用（#9 兜底正文同通道已出正文）
 export function buildNodeLabelScript(xpaths: string[]): string {
   return '(function(){var xs=' + JSON.stringify(xpaths) + ';var out=[];' +
     'for(var i=0;i<xs.length;i++){var s="";try{' +
@@ -480,10 +459,10 @@ export function parseNodeLabels(raw: string, count: number): string[] {
   return labels.slice(0, count);
 }
 
-// 元素文本旁路回填（#11，browse_read nodes 模式 / 动作回执 / fetchTargetSemantics 三面共
-// 用）：text 为空的节点按 xpath 经 runPageJs 取标签回填。★ 只补空 text 节点——内核正常返
-// 文本的环境零旁路开销；无 xpath 的节点无法定位跳过；旁路失败（空串/坏返回）保持原文本
-// 不抛（退化 = 旧行为）。调用方保证排队内调用
+// 元素文本旁路回填（#11，browse_read nodes 模式 / 动作回执 / fetchTargetSemantics 三面
+// 共用）：text 为空的节点按 xpath 经 runPageJs 取标签回填。★ 只补空 text 节点（内核
+// 正常返文本的环境零旁路开销）；无 xpath 的节点跳过；旁路失败保持原文本不抛（退化 =
+// 旧行为）。调用方保证排队内调用
 export async function supplementNodeTexts(nodes: BrowseDomNode[]): Promise<void> {
   const slots: number[] = [];
   const xpaths: string[] = [];
@@ -506,16 +485,15 @@ export async function supplementNodeTexts(nodes: BrowseDomNode[]): Promise<void>
   }
 }
 
-// ── #12 短序号定位（2026-09-18 四轮修复，真机三轮回证）──
-// 内核 nodeid = frameToken|documentToken|节点号 三段长串（官方 AIPageInteraction 页示例），
-// 且官方明示「页面重新加载、frame 重建或 DOM 重建后可能变化」。三轮实锤 441 主链条：模型
-// 回传的长 id 是凭缩写记忆重组的错值（|1351——同文档三次 clickable 查询段恒 1357 起，该值
-// 从未在任何下发清单里出现），内核 type 只认清单节点 → nodeid not found；fetchTargetSemantics
-// 按错 id 匹配恒 null → 高危词表层/属性层随之一同空转。修复 = 模型面只接触短序号，本缓存 =
-// 序号 → 真实定位（xpath 为主键）的翻译表，动作域经 resolveListedXpath 翻键后在**当次快照**
-// 重解析出真实节点发命令（连「同文档 id 稳定」都不依赖）。单槽覆写：每次下发清单
-//（browse_read nodes / 动作回执）覆写、browse_open 清空；缓存即 clipNodesForModel 产物
-//（下标 = 序号-1），BROWSE_NODES_MAX 条有界。内存态不落盘，与页态同寿命（无新增隐私面）
+// ── #12 短序号定位 ──
+// 内核 nodeid = frameToken|documentToken|节点号 三段长串（官方明示「页面重载/frame/DOM
+// 重建后可能变化」），模型回传长 id 必错（凭缩写重组 → 441 nodeid not found，
+// fetchTargetSemantics 按错 id 匹配恒 null → 高危词表层/属性层一同空转）。修复 = 模型面
+// 只接触短序号，本缓存 = 序号 → 真实定位（xpath 为主键）的翻译表（下标 = 序号-1），动作
+// 域翻键后在**当次快照**重解析出真实节点发命令（连「同文档 id 稳定」都不依赖）。单槽
+// 覆写：每次下发清单（browse_read nodes / 动作回执）覆写、browse_open 清空；缓存即
+// clipNodesForModel 产物，BROWSE_NODES_MAX 条有界；内存态不落盘，与页态同寿命（无新增
+// 隐私面）
 let lastListedNodes: BrowseDomNode[] = [];
 
 // 下发即缓存（browseNodesNow / settleAfterAction 两写点）；nodes 即序号化副本本身
@@ -545,24 +523,22 @@ export function resolveListedXpath(locator: string): string {
   return lastListedNodes[index].xpath ?? '';
 }
 
-// ── #13 动作注入兜底（2026-09-18 五轮修复，真机四轮回证）──
-// 定案：内核 nodeid 定位通道对本隐形宿主恒坏——#12 翻译链全程正确（序号 → 缓存 xpath →
-// 当次快照配中真实节点 |9 → 命令带真实 nodeid 发出），内核仍 441/421；|9 小于清单首节点
-// |14（内核轻量 DOM 非文档序编号——上轮另一文档搜索框 |11 同形态），自证是内核自家发出的
-// id；不带 nodeid 的 scroll/send_keys 全成功，正好是「nodeid 注册表查询路径坏」的分叉形态。
-// 修法两层（动作域接线）：①命中改发官方 xpath 定位参数（绕注册表走 live DOM 求值）；
-// ②内核连 xpath 也拒（定位族码）时经 runPageJs 注入交付动作（通道同 #9/#11 已证可用）。
-// 本面 = 注入脚本组装与结果解析纯函数（127 组断言行直跑）。
+// ── #13 动作注入兜底 ──
+// 定案：内核 nodeid 定位通道对本隐形宿主恒坏——#12 翻译链全程正确（序号 → 缓存 xpath
+// → 当次快照配中真实节点 → 命令带真实 nodeid 发出），内核仍 441/421；不带 nodeid 的
+// scroll/send_keys 全成功，自证是内核自家注册表查询路径坏。修法两层（动作域接线）：
+// ①命中改发官方 xpath 定位参数（绕注册表走 live DOM 求值）；②内核连 xpath 也拒（定位族
+// 码）时经 runPageJs 注入交付动作（通道同 #9/#11 已证可用）。本面 = 注入脚本组装与
+// 结果解析纯函数。
 
-// 注入脚本组装（纯函数）：xpath 与 text 经 JSON.stringify 内嵌（引号/反斜杠自动转义——
-// 页面数据与模型输入都进不了脚本面，同 buildNodeLabelScript 口径）。click = 定位后
-// el.click() + 表单提交兜底（#14：合成 click 对提交控件的内建隐式提交不保证触发——
-// form 内提交控件〔input type=submit/image、button type∈{"",submit}〕再补
-// requestSubmit(el)，submit 事件层站点拦截面不破；校验异常吞掉不毁 ok 成交面）；
-// type = focus + 原生 value setter 写值 + input/change 冒泡事件（框架受控
-// 输入框〔React/Vue〕直接赋 value 会被框架覆写，走 HTMLInputElement/HTMLTextAreaElement
-// 原型 setter 再派事件 = 框架感知的标准注入形）。返回 'ok' / 'nf'（未定位到）/ 'nt'
-//（不是输入件）；不支持的动作回空串（调用方据此不启兜底）
+// 注入脚本组装（纯函数）：xpath 与 text 经 JSON.stringify 内嵌（页面数据与模型输入都进
+// 不了脚本面，同 buildNodeLabelScript 口径）。click = 定位后 el.click() + 表单提交兜底
+//（#14：合成 click 对提交控件的内建隐式提交不保证触发——form 内提交控件〔input type=
+// submit/image、button type∈{"",submit}〕再补 requestSubmit(el)，submit 事件层站点拦截
+// 面不破；校验异常吞掉不毁 ok 成交面）；type = focus + 原生 value setter 写值 +
+// input/change 冒泡事件（框架受控输入框〔React/Vue〕直接赋 value 会被框架覆写，走原型
+// setter 再派事件 = 框架感知的标准注入形）。返回 'ok' / 'nf'（未定位到）/ 'nt'（不是
+// 输入件）；不支持的动作回空串（调用方据此不启兜底）
 export function buildActInjectScript(action: string, xpath: string, text: string): string {
   const locate: string = 'var n=document.evaluate(' + JSON.stringify(xpath) +
     ',document,null,XPathResult.FIRST_ORDERED_NODE_TYPE,null).singleNodeValue;' +
@@ -606,15 +582,15 @@ export function parseActInjectOk(raw: string): boolean {
   return cur === 'ok';
 }
 
-// ── #14 Enter 注入与最近输入定位（2026-09-18 六轮修复，真机五轮回证）──
+// ── #14 Enter 注入与最近输入定位 ──
 // 定案：内核定位面双路（nodeid/xpath）对本隐形宿主恒坏（click 带官方 xpath 参数发出仍
-// 421）；send_keys 无目标焦点路由恒空转（type 注入成交后 Enter 两发假成功零效果）。
-// Enter 改注入直投：键盘三连（keydown/keypress/keyup，bubbles+cancelable——站点联想词等
-// 监听照常触发）→ keydown 未被 preventDefault 且元素有所属 form 时 requestSubmit() 兜底
+// 421）；send_keys 无目标焦点路由恒空转（type 注入成交后 Enter 两发假成功零效果）。Enter
+// 改注入直投：键盘三连（keydown/keypress/keyup，bubbles+cancelable——站点联想词等监听
+// 照常触发）→ keydown 未被 preventDefault 且元素有所属 form 时 requestSubmit() 兜底
 //（合成键事件无浏览器内建隐式提交，必须显式提交；requestSubmit 触发 submit 事件与表单
-// 校验，站点拦截面不破）。目标 = 最近成交 type 的 xpath（过闸证据链同源——只在 type 过闸
-// 成交后落笔，模型自造定位进不来）；URL 守卫 = 导航后旧 xpath 自动失效（防结果页同
-// xpath 误中他元素）。
+// 校验，站点拦截面不破）。目标 = 最近成交 type 的 xpath（过闸证据链同源——只在 type
+// 过闸成交后落笔，模型自造定位进不来）；URL 守卫 = 导航后旧 xpath 自动失效（防结果页
+// 同 xpath 误中他元素）。
 
 // Enter 注入脚本组装（纯函数）：xpath 空串 = 脚本内退 document.activeElement 输入件判定
 //（退化面——离屏宿主无真实焦点成交率≈0 但成本为零；调用方只在 lastTyped 命中时启动，
@@ -653,9 +629,9 @@ export function lastTypedXpathFor(url: string): string {
 
 // 正文族结果组装（browse_open 与 browse_read 的 text 模式共用）：记录 → 预算收敛（预留
 // note 位）→ 读回收缩后的 offset/totalChars 组 note（「还有 N 未读」与实际回传量一致）→
-// note 拼旁注（导航期事件面：拦截/下载/弹窗等）与 #2② 空正文提示（D2：正文空但标题在时
-// 原实现静默成功，模型误以为「页面就是空的」）与 #9 兜底来源标注。elementCount < 0 =
-// 不带该字段（read 无 / open 概览失败）
+// note 拼旁注（导航期事件面：拦截/下载/弹窗等）与空正文提示（正文空但标题在时原实现静默
+// 成功，模型误以为「页面就是空的」）与 #9 兜底来源标注。elementCount < 0 = 不带该字段
+//（read 无 / open 概览失败）
 function composeTextResult(url: string, title: string, slice: TextSlice, elementCount: number,
   pendingNote: string, fallbackUsed: boolean): string {
   const rec: Record<string, Object> = {};
@@ -709,13 +685,12 @@ export async function runLiteDom(rules: LiteDomRules, wants: LiteDomWant[]): Pro
 // ── 执行器（注册在 ToolTypes；契约 = 恒 resolve 不 reject，错误走 JSON 错误信息，文案
 //    actionable 告知模型这是终态勿重复调用）──
 
-// browse_open 主体（排队内执行）：导航 → 内容就绪等待（#3 D5：条件驱动 + 有界——正文达
+// browse_open 主体（排队内执行）：导航 → 内容就绪等待（条件驱动 + 有界——正文达
 // BROWSE_MIN_TEXT_CHARS 即停 / 正文非空且稳定 BROWSE_READY_STABLE_ROUNDS 轮即停 / 12s
-// 上限兜底；P1 的 3×500ms 固定窗口对 SPA 太短，真机现象②空壳即此因）→ 元素概览（仅
-// 统计条数进结果，失败不阻断）→ #9 兜底（官方通道正文空即 runJavaScript 直读 innerText，
-// 与元素数无关——2026-09-18 二轮修复，判据见函数内闸门注释）→ 提交当前页 → 首段组装。
-// convId = 执行器在工具边界快照的会话值（禁排队任务内现读中转键——任务可达 20 秒级，
-// 期间切会话再发送会改写键值，晚读即把 A 打开的页归属到 B；commitPage 形参即为此设）
+// 上限兜底；onPageEnd ≠ 内容就绪，SPA 渲染常 2~5s）→ 元素概览（仅统计条数进结果，失败
+// 不阻断）→ #9 兜底（官方通道正文空即 runJavaScript 直读 innerText，与元素数无关）→
+// 提交当前页 → 首段组装。convId = 执行器在工具边界快照的会话值（禁排队任务内现读中转键
+//——任务 20 秒级，期间切会话再发送晚读即把 A 打开的页归属到 B；commitPage 形参即为此设）
 async function browseOpenNow(url: string, convId: string): Promise<string> {
   await browseService.openPage(url);
   clearLastListedNodes(); // #12：新页即弃旧序号翻译表（上页 xpath 在新页快照配不中，早清更直）
@@ -767,12 +742,11 @@ async function browseOpenNow(url: string, convId: string): Promise<string> {
   } catch (e) {
     hilog.warn(DOMAIN, TAG, '元素概览获取失败（不阻断打开）：%{public}s', (e as Error).message);
   }
-  // #9 自注入兜底（深挖卷 §6 #9；2026-09-18 二轮修复闸门）：官方通道等满上限仍正文空 →
-  // 同 Web 实例退 runJavaScript 直读 body.innerText。★ 触发只看正文不看元素数——旧闸门
-  // 「正文空且无可交互元素」两轮真机永不可达（example.com 元素 1 个 / 百度 161 个，正文
-  // 均空）；正文真空本身就是该兜底的情形。只在退化分支启用（防两套正文口径），失败回空
-  // 串不抛（兜底失败交下方统一收口）。本兜底兼作判别探针：兜底出正文 ⇒ 内核 text 通道坏；
-  // 兜底也空 ⇒ 页面真空或 JS 环境坏
+  // #9 自注入兜底：官方通道等满上限仍正文空 → 同 Web 实例退 runJavaScript 直读
+  // body.innerText。★ 触发只看正文不看元素数——旧闸门「正文空且无可交互元素」真机永不
+  // 可达（example.com 元素 1 个 / 百度 161 个，正文均空）；正文真空本身就是该兜底的
+  // 情形。只在退化分支启用（防两套正文口径），失败回空串不抛。本兜底兼作判别探针：
+  // 兜底出正文 ⇒ 内核 text 通道坏；兜底也空 ⇒ 页面真空或 JS 环境坏
   let fallbackUsed: boolean = false;
   if (text === '') {
     const fallback: string = await browseService.runFallbackText();
@@ -782,8 +756,8 @@ async function browseOpenNow(url: string, convId: string): Promise<string> {
     }
   }
   if (text === '' && title === '') {
-    // #2① D2 修复：抛错带旁注——加载错误/HTTP 码/SSL/白屏四类来路不再同归一句兜底话
-    //（旁注由 BrowseHost 事件面写入，含主/子资源区分与错误码，D6）
+    // #2①：抛错带旁注——加载错误/HTTP 码/SSL/白屏四类来路不再同归一句兜底话
+    //（旁注由 BrowseHost 事件面写入，含主/子资源区分与错误码）
     const note: string = browseService.takePendingNote();
     const suffix: string = note !== '' ? '（' + note + '）' : '';
     throw lastError !== null ? new Error(lastError.message + suffix) :
@@ -796,9 +770,9 @@ async function browseOpenNow(url: string, convId: string): Promise<string> {
 }
 
 // browse_read 的 text 模式（排队内执行）：归属校验（排队后现判——防等待期间他轮换页）→
-// 当前页按 offset 续读
-async function browseReadTextNow(offset: number): Promise<string> {
-  const ownership: string = browseService.assertOwnership();
+// 当前页按 offset 续读。convId 由执行器经执行上下文携带传入
+async function browseReadTextNow(offset: number, convId: string): Promise<string> {
+  const ownership: string = browseService.assertOwnership(convId);
   if (ownership !== '') {
     throw new Error(ownership);
   }
@@ -813,8 +787,8 @@ async function browseReadTextNow(offset: number): Promise<string> {
 // browse_read 的 nodes 模式（排队内执行）：实时取当前页可交互元素（截 60 条、单条 text 截
 // 80 字），预算收敛后 note 报「总数与实返数」。#11：wants 带 visible（隐藏元素标出供模型
 // 跳过）+ 截断后按 xpath 旁路回填标签（内核 text 恒缺——旁路失败退化同旧，不阻断）
-async function browseNodesNow(): Promise<string> {
-  const ownership: string = browseService.assertOwnership();
+async function browseNodesNow(convId: string): Promise<string> {
+  const ownership: string = browseService.assertOwnership(convId);
   if (ownership !== '') {
     throw new Error(ownership);
   }
@@ -849,14 +823,13 @@ async function browseNodesNow(): Promise<string> {
   return JSON.stringify(out);
 }
 
-// browse_read 的 debug 模式（#0 诊断探针，深挖卷 §五）：读向只查，输出结构化诊断信号
-//（FCP/FMP 是否触发、页面高度、正文与元素查询三态、首节点原语、宿主可见比、命令历史、
-// 旁注）——真机一发定位「没渲染 / 渲染了抽取空 / 读得太早 / 命令通道坏」四分叉（判据表
-// 见深挖卷 §五·4）。★ 不做应用内自检项（2026-09-20 应用内自检全量退役——该域已不存在；
-// 探针诊断走构建期开关 BROWSE_DEBUG 与真机手测）；探针自身
+// browse_read 的 debug 模式（#0 诊断探针）：读向只查，输出结构化诊断信号（FCP/FMP 是否
+// 触发、页面高度、正文与元素查询三态、首节点原语、宿主可见比、命令历史、旁注）——真机
+// 一发定位「没渲染 / 渲染了抽取空 / 读得太早 / 命令通道坏」四分叉。★ 非应用内自检项
+//（应用内自检已全量退役；探针诊断走构建期开关 BROWSE_DEBUG 与真机手测）；探针自身
 // 可用性也是待验项——「无输出」本身即信息（FCP 未触发 ⇒ 没绘制过）
-async function browseDebugNow(): Promise<string> {
-  const ownership: string = browseService.assertOwnership();
+async function browseDebugNow(convId: string): Promise<string> {
+  const ownership: string = browseService.assertOwnership(convId);
   if (ownership !== '') {
     throw new Error(ownership);
   }
@@ -924,11 +897,7 @@ async function browseDebugNow(): Promise<string> {
 }
 
 export class BrowseOpenExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
-    if (!isSearchServiceEnabled()) {
-      return Promise.resolve(JSON.stringify({
-        error: '联网搜索已关闭。请让用户在 设置 → 联网搜索 打开总开关后重试，本次不要重复打开网页。' }));
-    }
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     let url: string = '';
     try {
       const parsed = JSON.parse(argsJson) as Record<string, Object>;
@@ -937,22 +906,30 @@ export class BrowseOpenExecutor implements ToolExecutor {
         url = raw.trim();
       }
     } catch (e) {
-      return Promise.resolve(JSON.stringify({ error: '参数解析失败' }));
+      return Promise.resolve(JSON.stringify({ error: toolArgsParseErrorText(argsJson) }));
     }
     if (!isHttpUrl(url)) {
       return Promise.resolve(JSON.stringify({ error: '网页地址无效，只支持 http 或 https 开头的地址' }));
     }
-    // 会话归属快照（工具边界一次取定，随参下传排队任务——中转键是「每次发送现写」的
-    // 可变值，任务最长 20 秒级，排队任务内晚读会串会话归属；坑58/P-19 口径）
-    const convId: string = AppStorage.get<string>(CHAT_ACTIVE_CONV_KEY) ?? '';
-    return browseService.queued((): Promise<string> => browseOpenNow(url, convId))
+    // 会话归属快照（工具边界一次取定，随参下传排队任务；坑58/P-19 口径）——快照值 =
+    // 执行上下文携带（接纳时铸造，随链下传零中转）
+    const convId: string = ctx.conversationId;
+    // S4 出队口取消核验（V5）：task 在队尾执行前判发起 run 是否仍在场——A 停止/离页后
+    // 未派发项直接放弃，无副作用（isRunActive 闭包经执行上下文下发，common 层不引组件）
+    return browseService.queued((): Promise<string> => {
+      if (!ctx.isRunActive(ctx.runId)) {
+        return Promise.resolve(JSON.stringify({
+          cancelled: true, error: '本次打开网页已随停止或离开会话取消，未执行' }));
+      }
+      return browseOpenNow(url, convId);
+    })
       .catch((e: Object): string => {
         hilog.warn(DOMAIN, TAG, '打开网页失败：%{public}s', (e as Error).message);
         const rec: Record<string, Object> = {};
-        rec['error'] = (e as Error).message;
-        // 失败回执附诊断信号（2026-09-20 笔试 #A）：open 路径页面未提交（无页可判），
-        // 归属判据 = 执行器快照 convId 与当刻活动会话比对（排队期间切会话则不附）
-        const signals: Record<string, Object> | null = browseFailureSignals(convId);
+        rec['error'] = toolErrorText(e);
+        // 失败回执附诊断信号：open 路径页面未提交（无页可判），归属判据 = 执行器快照
+        // convId 与当刻活动会话比对（排队期间切会话则不附）
+        const signals: Record<string, Object> | null = browseFailureSignals(convId, ctx.conversationId);
         if (signals !== null) {
           rec['signals'] = signals;
         }
@@ -962,11 +939,7 @@ export class BrowseOpenExecutor implements ToolExecutor {
 }
 
 export class BrowseReadExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
-    if (!isSearchServiceEnabled()) {
-      return Promise.resolve(JSON.stringify({
-        error: '联网搜索已关闭。请让用户在 设置 → 联网搜索 打开总开关后重试，本次不要重复读取。' }));
-    }
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     let mode: string = 'text';
     let offset: number = 0;
     try {
@@ -980,28 +953,36 @@ export class BrowseReadExecutor implements ToolExecutor {
         offset = offsetRaw;
       }
     } catch (e) {
-      return Promise.resolve(JSON.stringify({ error: '参数解析失败' }));
+      return Promise.resolve(JSON.stringify({ error: toolArgsParseErrorText(argsJson) }));
     }
     // 归属前置粗判（快速失败零排队；次序钉：守卫 → 归属 → mode 分支）+ 排队内终判
     //（防等待期间换页——browseReadTextNow / browseNodesNow / browseDebugNow 首行同校验）
-    const ownership: string = browseService.assertOwnership();
+    const ownership: string = browseService.assertOwnership(ctx.conversationId);
     if (ownership !== '') {
       return Promise.resolve(JSON.stringify({ error: ownership }));
     }
     if (mode !== 'text' && mode !== 'nodes' && mode !== 'debug') {
       return Promise.resolve(JSON.stringify({ error: 'mode 参数只支持 text、nodes 或 debug' }));
     }
-    const task: () => Promise<string> = mode === 'nodes' ?
-      (): Promise<string> => browseNodesNow() : (mode === 'debug' ?
-        (): Promise<string> => browseDebugNow() : (): Promise<string> => browseReadTextNow(offset));
+    // S4 出队口取消核验（V5）：排队等待期间发起 run 停止/离页则放弃副作用（同 open 路径）
+    const task: () => Promise<string> = (): Promise<string> => {
+      if (!ctx.isRunActive(ctx.runId)) {
+        return Promise.resolve(JSON.stringify({
+          cancelled: true, error: '本次读取已随停止或离开会话取消，未执行' }));
+      }
+      const inner: Promise<string> = mode === 'nodes' ?
+        browseNodesNow(ctx.conversationId) : (mode === 'debug' ?
+          browseDebugNow(ctx.conversationId) : browseReadTextNow(offset, ctx.conversationId));
+      return inner;
+    };
     return browseService.queued(task)
       .catch((e: Object): string => {
         hilog.warn(DOMAIN, TAG, '浏览当前页失败：%{public}s', (e as Error).message);
         const rec: Record<string, Object> = {};
-        rec['error'] = (e as Error).message;
-        // 失败回执附诊断信号（2026-09-20 笔试 #A）：read 路径页面在，归属由工厂内
-        // assertOwnership 终判（无页/跨会话返 null 不附）
-        const signals: Record<string, Object> | null = browseFailureSignals('');
+        rec['error'] = toolErrorText(e);
+        // 失败回执附诊断信号：read 路径页面在，归属由工厂内 assertOwnership 终判
+        //（无页/跨会话返 null 不附）
+        const signals: Record<string, Object> | null = browseFailureSignals('', ctx.conversationId);
         if (signals !== null) {
           rec['signals'] = signals;
         }

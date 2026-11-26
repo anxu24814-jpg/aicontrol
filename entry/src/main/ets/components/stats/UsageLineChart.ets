@@ -1,17 +1,12 @@
-// 用量趋势折线图纯展示组件（2026-09-08 趋势卡图表切换笔，决明指令「用量趋势也加切换，
-// 点击在柱状图与折线图切换」）：官方 Polyline 基础绘图组件承托——调研结论（本地 d.ts +
-// 官方文档双核）：ArkUI 无折线图图表组件（官方文档「折线图 如何实现」无组件级命中），
-// Polyline 为官方基础绘图件（@since 7，points 收二维 vp 坐标数组〔API 18 匿名对象修订后
-// 形态，旧百分比字符串格式不依〕）——选型 = 官方组件零 Canvas 自绘（实现选型三级优先
-// 第①级）。
-// 与 UsageBarChart 的关系：同一数据契约（@Link points/peak——坑16 热点，PageShell.content
-// @BuilderParam 内图组件禁 @Prop）+ 同一高度映射公式（折线点 y = 132 − 柱高公式值——
-// 两形态同一视觉映射，切换只换形不换义）；峰值行/范围行逐字复用（同一信息面）。宽度：
-// CARD_PANEL_WIDTH 为 calc 字符串非定值，折线 x 坐标需绘图区实宽——onAreaChange 实测
-// （热力图/柱状图横滚分支同款回调件）；≤14 点满宽均分、>14 点定步 15vp 横滚并初始定位
-// 最右（柱状图 >14 分支同参数同姿势）。
-// 峰值行含义、零值形态与柱状图对齐：peak ≤ 0（全零时段）= 灰线贴底（对零值灰柱）；
-// 数据点圆点仅 ≤14 满宽形态渲染（>14 密集形态省点，GitHub 趋势线惯例）。
+// 用量趋势折线图纯展示组件（与 UsageBarChart 双形态切换）：承托 = 官方 Polyline 基础绘图件
+//（ArkUI 无折线图图表组件，选官方件零 Canvas 自绘——实现选型第①级）。
+// 与 UsageBarChart 同数据契约（@Link points/peak——坑16：PageShell.content @BuilderParam
+// 内禁 @Prop）+ 同高度映射公式（折线点 y = 132 − 柱高公式值——切换只换形不换义）；峰值行/
+// 范围行逐字复用。宽度：CARD_PANEL_WIDTH 为 calc 字符串非定值，折线 x 需绘图区实宽——
+// onAreaChange 实测；≤14 点满宽均分、>14 点定步 15vp 横滚并初始定位最右（柱状图同参数）。
+// 峰值 ≤0（全零时段）= 灰线贴底（对零值灰柱）；数据点圆点仅 ≤14 满宽形态渲染（密集形态省点）。
+// ★ 2026-11-08 回弹笔：横滚分支显式 edgeEffect(Spring, alwaysEnabled true)——SDK 26 的
+// Scroll 默认 EdgeEffect.None，不显式设则横滑到头没有回弹（UsageHeatMap / UsageBarChart 同款）。
 import { TrendPoint, fmtCompact } from '../../common/store/UsageStatsCalc';
 import { badgeBg, cardDescColor, usageAccentColor } from '../../common/Theme';
 
@@ -41,8 +36,7 @@ export struct UsageLineChart {
     this.pendingEdge = true;
   }
 
-  // 点高（与 UsageBarChart.barHeight 同公式：value > 0 → max(8, round(value/峰值×120))；
-  // 零值 → 3——折线点 y = LINE_PLOT_HEIGHT − 本值，两形态同一映射）
+  // 点高（与 UsageBarChart.barHeight 同公式；折线点 y = LINE_PLOT_HEIGHT − 本值，两形态同一映射）
   private barHeight(value: number): number {
     if (value <= 0 || this.peak <= 0) {
       return 3;
@@ -51,8 +45,7 @@ export struct UsageLineChart {
   }
 
   // 折线点集（vp 坐标，相对绘图区左上）：≤14 满宽均分（x = i×plotWidth/(n−1)，n=1 居中）；
-  // >14 定步 15vp（x = pad + i×15）。满宽形态 plotWidth 未就绪返回空（onAreaChange 回填后
-  // @State 驱动重建出线——首帧空白为毫秒级量宽窗口）
+  // >14 定步 15vp。满宽形态 plotWidth 未就绪返回空（onAreaChange 回填后 @State 驱动重建出线）
   private linePoints(): number[][] {
     const n: number = this.points.length;
     if (n === 0) {
@@ -113,7 +106,7 @@ export struct UsageLineChart {
       }
       .alignItems(VerticalAlign.Bottom)
 
-      // 线区（高 132vp；≤14 满宽均分需实测宽，>14 横滚定步 15 并初始定位最右）
+      // 线区（≤14 满宽均分需实测宽，>14 横滚定步 15 并初始定位最右——见头注释）
       if (this.points.length <= LINE_FILL_MAX) {
         Stack({ alignContent: Alignment.TopStart }) {
           Polyline()
@@ -125,17 +118,18 @@ export struct UsageLineChart {
             .strokeWidth(2)
             .strokeLineCap(LineCapStyle.Round)
             .strokeLineJoin(LineJoinStyle.Round)
+          // 圆点键含值段（UsageBarChart 同口径）——@Watch 只在键变时重建，同 key 值变
+          // （同日追加用量）若无值段则圆点冻结旧坐标
           ForEach(this.points, (p: TrendPoint, index: number): void => {
             if (this.plotWidth > 0) {
               this.DataDot(this.linePoints()[index][0], this.linePoints()[index][1])
             }
-          }, (p: TrendPoint): string => p.key)
+          }, (p: TrendPoint): string => p.key + '|' + p.totalTokens)
         }
         .width('100%')
         .height(LINE_PLOT_HEIGHT)
         .onAreaChange((_oldValue: Area, newValue: Area): void => {
-          // Area.width 类型 Length（string|number 联合），运行时回调实为 vp 数值——Number()
-          // 收敛类型
+          // Area.width 类型 Length（string|number 联合），运行时回调实为 vp 数值——Number() 收敛
           this.plotWidth = Number(newValue.width);
         })
       } else {
@@ -153,7 +147,7 @@ export struct UsageLineChart {
           }
           .height('100%')
           .onAreaChange((): void => {
-            // 内容宽就绪后定位最右（首次触发消费标记即解除防重复；坑63 家族 try/catch）
+            // 内容宽就绪后定位最右（首触发消费标记防重复；坑63 家族 try/catch）
             if (this.pendingEdge) {
               this.pendingEdge = false;
               try {
@@ -166,6 +160,8 @@ export struct UsageLineChart {
         }
         .scrollable(ScrollDirection.Horizontal)
         .scrollBar(BarState.Off)
+        // SDK 26 的 Scroll 默认 EdgeEffect.None——显式挂 Spring 才有滑到头的回弹
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .width('100%')
         .height(LINE_PLOT_HEIGHT)
         .align(Alignment.TopStart)

@@ -108,8 +108,13 @@ function isPrivateHost(host: string): boolean {
   if (host.endsWith('.local')) {
     return true;
   }
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
-    return true; // IPv6 唯一本地地址与链路本地地址
+  // IPv6 唯一本地地址（fc00::/7）与链路本地地址（fe80::/10）。★ 冒号锚定（禁裸前缀）：
+  // 真实 IPv6 经 endpointHost 剥方括号后恒含 ':'，主机名经同函数切端口后永不含 ':'——
+  // 不锚会把 fda.gov / fc.example.com 等 fc/fd/fe80 开头的公网明文域名误判成私网，
+  // 等于给攻击者留一条免确认通道（头注释安全要点同族，2026-10-03 修复）
+  if (host.indexOf(':') >= 0 &&
+    (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80'))) {
+    return true;
   }
   if (!isIpv4Literal(host)) {
     return false;

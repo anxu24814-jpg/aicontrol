@@ -1,0 +1,19 @@
+{
+  "name": "AI Control 网页遥控",
+  "short_name": "AI Control",
+  "description": "在浏览器里查看并继续手机上的会话",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F7F7F9",
+  "theme_color": "#F7F7F9",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

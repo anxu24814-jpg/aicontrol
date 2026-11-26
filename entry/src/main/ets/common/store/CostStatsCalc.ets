@@ -1,30 +1,24 @@
-// 费用估计计算模块（2026-09-10 方案-费用估计-20260910 新增；职责缝 = 「价格配置解析/
-// 谷时判定/单事件折算/聚合/金额格式化」的公式层——照 UsageStatsCalc 先例零 import 零 UI
-// 依赖，专为断言脚本剥类型直跑而设：★本文件禁加 import★，类型标注只用可剥离形态。
-// 2026-09-11 价格模板笔补 priceSummary（价格摘要一行文案——模板列表副行消费，属价格域
-// 展示格式化，与 fmtCost 同层故落本文件而非页面）。
-// ★ 2026-09-13 工具补齐三件笔：补 COST_TOP_MODEL_MAX 条数上限常量（aggregateCosts 截断与
-// get_cost_stats 工具 desc 单源）；费用总览四格构造**不放本文件**——落 UsageStatsCalc
-// （UsageStatCell 格族之家；本文件禁加 import 的契约使然，见该函数注释）。
-// 单位口径（方案拍板）：全局人民币，价格 = 元/百万 tokens（美元计价服务商由用户手算
-// 折算填入——无汇率换算）；cachedInput 缺省回退 input（Cherry Studio 同款口径），显式
-// 0 = 缓存免费（2026-09-11 决明拍板放宽，留空才回退）；
-// valley 谷时第二套价缺省无峰谷全天统一价，valley 内单项缺回退平时对应价。
-// 价格 JSON 结构（price_config 列 / parsePriceConfig 唯一权威；★ 2026-09-11 谷时多时段笔
-// 起谷时写新形态，旧形态仅作读取兼容）：
+// 费用估计计算模块。职责缝 = 「价格配置解析/谷时判定/单事件折算/聚合/金额格式化/价格
+// 摘要」的公式层——零 import 零 UI 依赖，专为断言脚本剥类型直跑而设：★本文件禁加
+// import★，类型标注只用可剥离形态。费用总览四格构造不放本文件——落 UsageStatsCalc
+//（UsageStatCell 格族之家；禁 import 契约使然）。
+// 单位口径（拍板）：全局人民币，价格 = 元/百万 tokens（美元计价服务商由用户手算折算填入，
+// 无汇率换算）；cachedInput 缺省回退 input，显式 0 = 缓存免费（决明拍板，留空才回退）；
+// valley 缺省无峰谷全天统一价，valley 内单项缺回退平时对应价。
+// 价格 JSON 结构（price_config 列 / parsePriceConfig 唯一权威；新写恒新形态，旧形态仅
+// 读取兼容）：
 //   {"input":2,"cachedInput":0.5,"output":8,
 //    "valley":{"input":1,"cachedInput":0.25,"output":4,
 //              "segments":[{"start":"12:00","end":"14:00","days":[1,2]},
 //                          {"start":"00:00","end":"00:00","days":[6,0]}]}}
-//   旧形态 = valley 内直挂 start/end/days（无 segments），解析时归一为单段——存量配置
-//   零迁移零回归；新形态写出的库回退旧版 App 时旧解析器读不到 start/end → 整块丢弃谷价
-//   保留主价（不崩不误算，当前未上架可接受）。
+//   旧形态 = valley 内直挂 start/end/days（无 segments），解析归一为单段——存量配置零
+//   迁移；旧版 App 读新形态库时整块丢弃谷价保留主价（不崩不误算）。
 // 谷时按事件 createdAt 本地时区落点判价（历史事件回溯天然成立）。
 
 // 谷时段 = 一套适用条件（start/end = 'HH:mm' 本地时区；start==end 视为全天谷时；days =
 // 适用周几多选，Date.getDay() 口径 0=周日…6=周六，缺省/空 = 每天谷价〔存量配置兼容〕；
-// 跨午夜段周几归属 = 按段开始日算——2026-09-11 决明拍板：勾周五 22:00~06:00 则周六
-// 凌晨 0~6 点属周五那段照谷价）
+// 跨午夜段周几归属 = 按段开始日算〔决明拍板：勾周五 22:00~06:00 则周六凌晨 0~6 点属
+// 周五那段照谷价〕）
 export interface ValleySegment {
   start: string;
   end: string;
@@ -32,8 +26,8 @@ export interface ValleySegment {
 }
 
 // 谷时第二套价 = 一套谷时价 + 段列表（任一段命中即按谷价，全不命中按平时价）。价格挂
-// 顶层不逐段分（2026-09-11 决明拍板①：厂商给的是一个谷价，共用让重叠无歧义）；段序不
-// 影响判定、重叠无副作用，故不设优先级也不做重叠校验（拍板⑤）
+// 顶层不逐段分（决明拍板：厂商给的是一个谷价，共用让重叠无歧义）；段序不影响判定、
+// 重叠无副作用，不设优先级不做重叠校验（拍板）
 export interface ValleyPriceConfig {
   input: number;
   cachedInput?: number;
@@ -82,16 +76,16 @@ export interface CostByModelRow {
   total: number;
 }
 
-// 按用途费用行（四类：chat/title/memory/test，label 映射见 COST_PURPOSE_LABELS）
+// 按用途费用行（用途码全集见 COST_PURPOSES，label 映射见 COST_PURPOSE_LABELS）
 export interface CostByPurposeRow {
   purpose: string;
   total: number;
 }
 
-// 聚合结果（byModel = 费用降序前 COST_TOP_MODEL_MAX 名；byPurpose = 四类定序全量含零值行
-//——展示侧隐藏全零行；unpricedModels = 时段内出现但模型未配置价格的 modelId 去重集；
-// pricedEventCount = 已配置价格的事件数〔0 = 空态引导卡判据〕；pricedModelCount = 已配置价格
-// 且有费用的模型总数〔> byModel.length 即截断未展示，尾行提示用〕）
+// 聚合结果（byModel = 费用降序前 COST_TOP_MODEL_MAX 名；byPurpose = 按 COST_PURPOSES 定序
+// 全量含零值行——展示侧隐藏全零行；unpricedModels = 未配置价格 modelId 去重集；
+// pricedEventCount = 已配置价格事件数〔0 = 空态引导卡判据〕；pricedModelCount = 已计价
+// 模型总数〔> byModel.length = 截断未展示，尾行提示用〕）
 export interface CostAggregate {
   totals: CostTotals;
   byModel: CostByModelRow[];
@@ -108,18 +102,16 @@ export interface ModelPriceSourceRow {
   priceConfig: string;
 }
 
-// 谷时段数上限（2026-09-11 拍板②：真实组合〔工作日午间 + 夜间 + 周末全天 + 余量〕够用，
-// 防无界）。★ 单源常量——UI 添加键置灰与提示文案、解析侧截断都引它，禁各自写字面量
+// 谷时段数上限（拍板：真实组合〔工作日午间+夜间+周末全天+余量〕够用，防无界）。
+// ★ 单源常量——UI 添加键置灰与提示文案、解析侧截断都引它，禁各自写字面量
 export const VALLEY_SEGMENT_MAX: number = 6;
 
-// 模型费用排行条数上限（★ 2026-09-13 工具补齐三件笔新增：aggregateCosts 的截断与
-// get_cost_stats 工具 desc 的「前 N 个」同源引用，禁字面量双源）
+// 模型费用排行条数上限（aggregateCosts 截断与 get_cost_stats 工具 desc「前 N 个」同源
+// 引用，禁字面量双源）
 export const COST_TOP_MODEL_MAX: number = 10;
 
-// 用途码八值（与 UsageStatsDb 写入点约定一致；顺序 = 用途分布卡行序。2026-09-12 主动
-// 消息第一笔 +proactive——追加在尾，消费侧 purposeLabel 未知码透出与本表 for-of 定序
-// 均零改动自动进组；2026-09-15 附件 OCR 二期 +ocr 同款追加在尾；2026-09-19 推荐问题
-// 功能 +suggest 同款追加在尾；2026-09-23 上下文压缩笔 +compress 同款追加在尾）
+// 用途码八值（与 UsageStatsDb 写入点约定一致；顺序 = 用途分布卡行序）。新用途码一律
+// 追加在尾——purposeLabel 未知码透出与本表 for-of 定序零改动自动进组
 export const COST_PURPOSES: string[] = ['chat', 'title', 'memory', 'test', 'proactive', 'ocr',
   'suggest', 'compress'];
 // 用途码 → 展示名（用途分布卡与费用页共用单源）
@@ -188,8 +180,8 @@ function parseWeekdayCodes(v: Object | undefined): number[] | undefined {
 }
 
 // 单段校验：段非对象 / start 或 end 非 'HH:mm' 合法串 → null = 丢该段；days 非法或空 →
-// 不挂键 = 每天但**段保留**。★ 新形态的段对象与旧形态 valley 顶层同为 {start,end,days?}
-// 形态，两路共用本函数（逻辑单一来源）
+// 不挂键 = 每天但**段保留**。★ 新形态段对象与旧形态 valley 顶层同为 {start,end,days?}，
+// 两路共用本函数（逻辑单一来源）
 function parseValleySegment(raw: Object): ValleySegment | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return null;
@@ -209,10 +201,9 @@ function parseValleySegment(raw: Object): ValleySegment | null {
   return seg;
 }
 
-// 谷时字段 → 段列表（双形态归一，2026-09-11 谷时多时段笔；优先级为拍板外补强条）：①
-// segments 为数组且校验后至少一段 → 用新形态，遗留 start/end 忽略；②否则回退遗留单段；
-// ③两者皆无合法段 → 空数组（调用侧据此整块丢弃谷时）。合法段超上限 → 保留前
-// VALLEY_SEGMENT_MAX 段（添加序，不是丢尾不是整块丢）
+// 谷时字段 → 段列表（双形态归一）：①segments 为数组且校验后至少一段 → 用新形态，遗留
+// start/end 忽略；②否则回退遗留单段；③皆无合法段 → 空数组（调用侧据此整块丢弃谷时）。
+// 合法段超上限 → 保留前 VALLEY_SEGMENT_MAX 段（添加序，不是丢尾不是整块丢）
 function parseValleySegments(v: Record<string, Object>): ValleySegment[] {
   const rawSegments: Object | undefined = v['segments'];
   if (Array.isArray(rawSegments)) {
@@ -233,10 +224,9 @@ function parseValleySegments(v: Record<string, Object>): ValleySegment[] {
 }
 
 // 价格 JSON 串 → 配置。'' / 坏 JSON / input 或 output 缺失或非非负数 → null = 未配置；
-// cachedInput 缺失/非法 → 挂 undefined（回退 input），显式 0 = 合法（缓存免费，
-// 2026-09-11 决明拍板放宽）；valley 任一必要件缺失、合法时段为空或时间格式
-// 非法 → 整块丢弃（谷时配置不完整 = 不启用峰谷，静默回退全天统一价——保存链已逐项
-// 校验拦非法值，此处为库内脏数据的读取侧兜底）
+// cachedInput 缺失/非法 → 挂 undefined（回退 input），显式 0 = 合法（缓存免费，决明拍板）；
+// valley 任一必要件缺失、合法时段为空或时间格式非法 → 整块丢弃（不完整 = 不启用峰谷，
+// 静默回退全天统一价——保存链已逐项校验，此处为库内脏数据读取侧兜底）
 export function parsePriceConfig(json: string): ModelPriceConfig | null {
   if (json === '') {
     return null;
@@ -279,10 +269,10 @@ export function parsePriceConfig(json: string): ModelPriceConfig | null {
   return cfg;
 }
 
-// 配置 → 价格 JSON 串（serializePriceConfig）；未挂的可选字段不写键（缺省语义在解析侧
-// 收敛）；键序固定 input → cachedInput → output，valley 内 input → cachedInput → output
-// → segments，段内 start → end → days（round-trip 稳定，断言可钉）。★ 只写新形态——
-// 旧形态是读取兼容路径，不再产出
+// 配置 → 价格 JSON 串；未挂的可选字段不写键（缺省语义在解析侧收敛）；键序固定
+// input → cachedInput → output，valley 内 input → cachedInput → output → segments，
+// 段内 start → end → days（round-trip 稳定，断言可钉）。★ 只写新形态——旧形态是读取
+// 兼容路径，不再产出
 export function serializePriceConfig(cfg: ModelPriceConfig): string {
   const parts: string[] = [];
   parts.push('"input":' + cfg.input);
@@ -315,9 +305,8 @@ export function serializePriceConfig(cfg: ModelPriceConfig): string {
 
 // 谷时判定（本地时区 HH:mm 比较）：start<end 普通区间；start>end 跨午夜（t≥start 或
 // t<end）；start==end 视为全天谷时（用户显式配置的合法形态）。days = 适用周几
-// （Date.getDay() 口径；缺省/空 = 每天）——段归属按「谷段开始时刻所在日」算
-//（2026-09-11 决明拍板）：跨午夜段 t<e 的部分是前一天谷段的延续，查 days 含昨天
-//（(getDay+6)%7）；全天形态整日谷价查当天
+//（getDay() 口径；缺省/空 = 每天）——段归属按「谷段开始时刻所在日」算（决明拍板）：
+// 跨午夜段 t<e 的部分是前一天谷段的延续，查 days 含昨天（(getDay+6)%7）；全天形态查当天
 export function inValleyTime(createdAtMs: number, start: string, end: string,
   days?: number[]): boolean {
   const d: Date = new Date(createdAtMs);
@@ -342,9 +331,8 @@ export function inValleyTime(createdAtMs: number, start: string, end: string,
   return t >= s || t < e;
 }
 
-// 多段判定（2026-09-11 谷时多时段笔）：逐段调 inValleyTime，任一段命中即谷价；空段列表 →
-// 全不命中。★ 导出而非内联进 effectivePrices（后者私有）——断言脚本据此直达判定层，避免
-// 「段列表命中 → 切谷价」只能靠 costOfEvent 间接验
+// 多段判定：逐段调 inValleyTime，任一段命中即谷价；空段列表全不命中。★ 导出而非内联
+// 进 effectivePrices（后者私有）——断言脚本据此直达判定层，不必经 costOfEvent 间接验
 export function inAnyValleySegment(createdAtMs: number, segments: ValleySegment[]): boolean {
   for (const seg of segments) {
     if (inValleyTime(createdAtMs, seg.start, seg.end, seg.days)) {
@@ -396,9 +384,8 @@ export function costOfEvent(event: CostEventInput, price: ModelPriceConfig): Cos
   };
 }
 
-// 价格 map 构建：键 = providerId+'/'+modelId → 已解析配置；未配置/坏 JSON 行不进 map
-//（= 未配置，事件命中走 unpricedModels 计数）。Map 插入序 = rows 序（createdAt 升序，
-// modelId 单键兜底「首个命中」的确定序）
+// 价格 map 构建：键 = providerId+'/'+modelId → 已解析配置；未配置/坏 JSON 行不进 map（事件
+// 命中走 unpricedModels 计数）。Map 插入序 = rows 序（modelId 单键兜底「首个命中」的确定序）
 export function buildPriceMap(rows: ModelPriceSourceRow[]): Map<string, ModelPriceConfig> {
   const map: Map<string, ModelPriceConfig> = new Map();
   for (const row of rows) {
@@ -411,9 +398,9 @@ export function buildPriceMap(rows: ModelPriceSourceRow[]): Map<string, ModelPri
   return map;
 }
 
-// 事件 → 价格查找：先复合键精确命中；providerId 为空（小任务事件快照兜底态）或复合键
-// 未命中时，按 modelId 单键兜底首个命中（同模型名跨服务商共用价格的宽容路径）。null =
-// 未配置（计入 unpricedModels）
+// 事件 → 价格查找：先复合键精确命中；providerId 为空（小任务快照兜底态）或复合键未命中
+// 时按 modelId 单键兜底首个命中（同模型名跨服务商共用价格的宽容路径）。null = 未配置
+//（计入 unpricedModels）
 export function priceFor(map: Map<string, ModelPriceConfig>, providerId: string,
   modelId: string): ModelPriceConfig | null {
   const direct: ModelPriceConfig | undefined = map.get(providerId + '/' + modelId);
@@ -433,8 +420,8 @@ export function priceFor(map: Map<string, ModelPriceConfig>, providerId: string,
   return null;
 }
 
-// 时段费用聚合：未配置价格的事件不进任何金额（其 modelId 进 unpricedModels 去重集）；
-// byModel 费用降序 Top10；byPurpose 四类定序含零值行（展示侧隐藏全零）
+// 时段费用聚合：未配置价格的事件不进任何金额（modelId 进 unpricedModels 去重集）；
+// byModel 费用降序 Top10；byPurpose 按 COST_PURPOSES 定序含零值行（展示侧隐藏全零）
 export function aggregateCosts(events: CostEventInput[],
   map: Map<string, ModelPriceConfig>): CostAggregate {
   const totals: CostTotals = { total: 0, inputCost: 0, cachedCost: 0, outputCost: 0 };
@@ -470,7 +457,7 @@ export function aggregateCosts(events: CostEventInput[],
     return a.modelId < b.modelId ? -1 : 1;
   });
   const top: CostByModelRow[] = modelRows.slice(0, COST_TOP_MODEL_MAX);
-  // 用途五类定序（COST_PURPOSES 序；无事件/全未计价 = 0 值行，展示侧隐藏）
+  // 用途定序（COST_PURPOSES 序；无事件/全未计价 = 0 值行，展示侧隐藏）
   const purposeRows: CostByPurposeRow[] = [];
   for (const purpose of COST_PURPOSES) {
     purposeRows.push({ purpose: purpose, total: purposeSums.get(purpose) ?? 0 });
@@ -501,11 +488,10 @@ export function fmtCost(v: number): string {
   return '0';
 }
 
-// 价格摘要（2026-09-11 价格模板：模板列表行卡副行消费）：'' / 坏 JSON / 无合法主价 →
-// '未配置'（与 parsePriceConfig null 同判据——本函数只转述解析结果，不另立校验）；否则
-// '输入 X · 输出 Y'，cachedInput 挂键（显式配置含 0）追加 ' · 缓存 Z'，valley 整块在
-// 追加 ' · 含谷时价'。数字 String 原样输出（价格是元/百万 tokens 原值——不套 fmtCost，
-// 那是金额两位小数化，语义不同）
+// 价格摘要（模板列表行卡副行消费）：'' / 坏 JSON / 无合法主价 → '未配置'（与
+// parsePriceConfig null 同判据，不另立校验）；否则 '输入 X · 输出 Y'，cachedInput 挂键
+//（显式配置含 0）追加 ' · 缓存 Z'，valley 整块追加 ' · 含谷时价'。数字 String 原样
+// 输出（价格是元/百万 tokens 原值，不套 fmtCost——那是金额两位小数化，语义不同）
 export function priceSummary(json: string): string {
   const cfg: ModelPriceConfig | null = parsePriceConfig(json);
   if (cfg === null) {

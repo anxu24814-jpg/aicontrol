@@ -6,7 +6,8 @@
 // 检索纯函数自包含（groups 由调用方注入 HELP_GROUPS——零 DB 零网络零状态，断言脚本剥 TS
 // 求值直跑）；零命中空态 note 教模型如实说明不编造（A3 教训）。
 import { HELP_GROUPS, HelpGroup, HelpItem } from '../HelpContent';
-import { ToolExecutor } from './ToolContracts';
+import { ToolExecutor, toolArgsParseErrorText } from './ToolContracts';
+import { ToolExecutionContext } from '../chat/MessageContracts';
 // ── 帮助中心检索（2026-09-05 控制台助手；CherryStudio「Cherry 小助手」进程内工具分片
 //   取数同构——帮助全文不进提示词，检索时本地分片取）──
 
@@ -139,7 +140,7 @@ export function searchHelpTopics(groups: HelpGroup[], query: string,
 // 帮助中心检索执行器（控制台助手核心能力）：query 空守卫 + 结构化输出（detail 全文
 // 供模型给出准确入口路径）；零命中带 note 指引模型如实说明不编造（A3 教训）
 export class SearchHelpExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     let query: string = '';
     try {
       const parsed = JSON.parse(argsJson) as Record<string, Object>;
@@ -148,7 +149,7 @@ export class SearchHelpExecutor implements ToolExecutor {
         query = raw.trim();
       }
     } catch (e) {
-      return Promise.resolve(JSON.stringify({ error: '参数解析失败' }));
+      return Promise.resolve(JSON.stringify({ error: toolArgsParseErrorText(argsJson) }));
     }
     if (query === '') {
       return Promise.resolve(JSON.stringify({ error: '检索关键词不能为空' }));

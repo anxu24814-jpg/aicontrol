@@ -5,3 +5,45 @@
 entry/src/main/resources/rawfile/** linguist-vendored
 *.ets linguist-language=TypeScript
 *.json5 linguist-language=JSON5
+
+# 行尾统一（2026-09-27 换行治理笔，变更记录一千一百零一节）：本仓 blob 与断言锚点（源码抽取型
+# 判据的 '\n}' 族）一律按 LF 设计，而全局 core.autocrlf=true（Git for Windows 系统级配置）会在
+# git 写出文件时（clone / checkout / restore / stash pop / 切分支）把纯 LF 文件 materialize 成
+# CRLF——实测模拟检出后 tool-domain/knowledge-domain 三枚锚点钉假红；另有 7 个 .ets 曾整文件
+# CRLF 入库（autocrlf 对 blob 已含 CR 的文件双向豁免 = 永久钉死，编辑摇摆事故在案）。本段显式
+# 声明压过 autocrlf：入库强制规范化 LF + 检出恒写 LF。只列纯文本扩展名（rawfile 的 .js/.onnx
+# 等二进制/第三方文件绝不能进 text 转换）。
+# 2026-09-27 一千一百零五节补（同属换行治理的「工作区面」，三条）：①一千一百零一节刷净的是索引
+# blob 与当时点名的 7 件磁盘副本，**「i/lf」不等于「w/lf」**——其余 71 件整文件 CRLF + 4 件混行的
+# 磁盘副本是 1105 节逐件重铺才归 LF（git 视角零 diff：被刷的是工作区副本，索引本就 LF）；②编辑
+# 工具行为实测：整文件写入产出 LF，而**编辑既有文件会沿用该文件当时的换行**，故历史 CRLF 副本不会
+# 被后续编辑治愈、只会被无声保留（这就是「永远刷不干净」的机制）；③补 *.txt 与 *.html 两列，前者
+# 是本仓唯一既在存量 CRLF 名单里、又无属性覆盖的扩展（checkout 反复 materialize 回 CRLF 即
+# obfuscation-rules.txt 的成因），后者守官网留档「三副本逐字节一致」硬规则在任何本地 eol 配置下
+# 恒成立。④本文件自身亦声明一行（否则每次 add 都刷「LF will be replaced by CRLF」warning）。
+*.ets text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.json5 text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+/.gitattributes text eol=lf
+# 2026-11-20 2243 节：随包 CA 与 python-runtime 资产是逐字节比较的输入（assert-py-runtime
+# 2243-3 判 extras 内 cert.pem 与 assets/cacert.pem 字节相等）——pem 必须恒 LF，否则全局
+# core.autocrlf=true 在 clone/checkout 后写成 CRLF，断言必假红；otf 是二进制字体子集，禁转换
+scripts/python-runtime/assets/*.pem text eol=lf
+scripts/python-runtime/assets/*.otf binary
+# 2026-11-23 2247 自检节：*.sh / *.yml 一直无属性覆盖（实测 15 件全靠人手保 LF）——全局
+# core.autocrlf=true 下任一次 checkout 就会把它们写成 CRLF，本地 bash -n、gh api 推 builder、
+# Actions 读 workflow 全踩同一坑（本批 4 次手搓 LF 载荷的成因）。与 2243 节 pem/otf 同款处置；
+# 只列纯文本扩展名，二进制面不受影响。
+*.sh text eol=lf
+*.yml text eol=lf
+# 2026-11-24 2269 节（门 3 S0-1）：rawfile/node 的三个 .js 是 NodeRuntime.ets NODE_RAW_FILES
+# sha256 常量的对账对象（本机 i/lf w/lf 实测），异机 checkout 被 autocrlf 写成 CRLF 即落位
+# 必红（test-runtime.cjs S2 四件常量对账本机先拦）；tar.gz 与二进制面不动（tar.gz 绝不能进
+# text 转换）。附带收益：U1 新增的 npm-worker.js 落同目录自动被钉覆盖。
+entry/src/main/resources/rawfile/node/*.js text eol=lf

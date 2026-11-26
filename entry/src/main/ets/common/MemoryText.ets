@@ -1,37 +1,16 @@
-// 记忆文本纯函数域（2026-09-08 记忆域，任务书-记忆域-20260908 §2.3/§2.4/§2.7）：
-// 提取结果的解析/清洗/敏感过滤/去重 + 注入块拼装/双封顶 + 蒸馏输入拼接 + 提取带去重
-// 清单——零 import 纯函数约束（scripts/sse-assert.mjs 复制本文件为 .ts 直跑，
-// RequestInject 同款范式；IO 编排〔DB 读写/网络请求〕在 MemoryDb/MemoryGen，不在本域）。
-// ★ 2026-09-11 增「记忆优化」节（方案-记忆整理优化-20260911 §6.4/§6.5 二期）：优化模型
-// 建议 → 可执行改动计划的全部纯逻辑（解析 / 白名单校验 / 内容校验 / 改动量闸门 + 确认
-// 摘要与结果文案单源）；写库编排在 MemoryDb（事务批量原语）与 MemoryOpt（请求链）。
-// 输入输出口径：
-// · parseMemoryLines：模型原始输出 → 干净条目数组（编号前缀剥离/空行与「无」丢弃/
-//   单条截断/敏感命中丢弃/归一化去重/条数上限）
-// · selectMemoryEntries：条数/字符双封顶选取（注入块与去重清单同源）
-// · composeMemoryBlock：库内条目（卡片序）→ 注入用记忆块文本（对象入参；
-//   选取与渲染均按入参序 = 卡片序（用户排定的优先级），直出不再重排；超出加省略尾注；
-//   '' = 不注入）
-// · composeMemoryList：库内条目 → 提取请求的去重清单文本（先丢敏感命中条目，选取与
-//   注入块同源，无头无尾注；'' = 调用方不拼段）
-// · buildMemoryContent：会话消息 → 蒸馏输入（过滤/单条截断/压空白；超总量上限头尾
-//   都保——头部常含长期声明，尾部信息密度高）
-// ★ 2026-09-13 增「记忆检索」节（方案-记忆按需读取-20260913 §2.4）：search_memory 工具的
-// 全部纯逻辑（query 切词 / 关键词打分 / 相关度排序 / 双封顶选取 / 结果文本拼装）——零
-// 时钟依赖（新近度 = updatedAt 字段排序，非相对当前时间的衰减），断言脚本复制直跑复算；
-// 执行器与读库编排在 MemoryGen（IO 归口）。
-// ★ 2026-09-13 增「记忆管理」节（任务书-记忆管理工具-20260913）：manage_memory 工具
-// （第 15 件，控制台助手管理长期记忆库）的全部纯逻辑（参数校验 / 原文定位 / 分页收窄 /
-// 回执拼装）——同零 import 约束供断言复制直跑；执行器与 DB 编排在 ToolMemoryManage /
-// MemoryDb（IO 归口）。
+// 记忆文本纯函数域：提取结果解析/清洗/敏感过滤/去重 + 注入块拼装（双封顶）+ 蒸馏输入拼接
+// + 提取带去重清单 + 优化建议解析 + 检索打分 + 注入窗口判定 + 库页搜索过滤——零 import
+// 纯函数约束（scripts/sse-assert.mjs 复制本文件为 .ts 直跑，RequestInject 同款范式；IO
+// 编排在 MemoryDb/MemoryGen/MemoryOpt，不在本域）。各函数口径见各自就近注释。
+// 「记忆管理」节（manage_memory 族）已整节迁出至 common/MemoryManageText.ets，本件承载
+// 注入 / 优化 / 检索 / 窗口 / 库页搜索五族。
 
 // 单条记忆字数上限（建表注释同值；解析侧超长截断、记忆编辑页 maxLength 同源）
 export const MEMORY_CONTENT_MAX: number = 500;
 
-// 敏感内容关键词表（2026-09-08 记忆域 §2.6：自动提取条目命中即丢弃 + hilog 留痕；
-// 手动添加不拦截——用户自己的输入自己负责，记忆页说明行提示）。匹配 = 小写化子串
-//（中文 toLowerCase 无变化，英文关键词大小写通吃）；regex 段拦裸数字形态（手机号/
-// 身份证/长卡号——关键词拦不住纯数字输出）
+// 敏感内容关键词表（自动提取条目命中即丢弃 + hilog 留痕；手动添加不拦截——用户自己的输入
+// 自己负责，记忆页说明行提示）。匹配 = 小写化子串（英文关键词大小写通吃）；regex 段拦
+// 裸数字形态（手机号/身份证/长卡号——关键词拦不住纯数字输出）
 const SENSITIVE_WORDS: string[] = ['密码', '口令', '密钥', 'apikey', 'api key', 'api_key',
   'secret', 'password', '身份证', '银行卡', '卡号', '住址', '手机号', '电话号码'];
 const SENSITIVE_REGEXPS: RegExp[] = [/1[3-9]\d{9}/, /\d{17}[\dxX]/, /\d{16,19}/];
@@ -58,14 +37,12 @@ export function normalizeMemoryKey(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-// 来源标注 → 副行文案（三态单源；★ 2026-09-22 记忆导入笔）：值域 = memories.source 列
-// （建表默认 'auto'，无 CHECK 约束，故本函数是唯一映射点——未知值（旧版/脏值）回
-// 「自动整理」= 建表默认语义，与三态前行为逐字一致）。
-// ★ **全部**消费点必须同走本函数（库管理页行卡 / 助手记忆页只读行卡 / 快照详情页只读行卡
-// ——2026-09-22 记忆导入笔自检轮补第三处：原注释只数了两处、第三处漏改，导入条目在快照页被
-// 标成「自动整理」= 假话，正是本函数要消灭的形态；故枚举只作提示，真正的守法是断言侧的单源
-// 唯一性钉 + 逐处接线钉——新增任何读 source 上屏的行卡，先 grep 本函数名）。单一来源后
-// 加值只改这里
+// 来源标注 → 副行文案（三态单源）：值域 = memories.source 列（建表默认 'auto'，无 CHECK
+// 约束，故本函数是唯一映射点——未知值/旧版脏值回「自动整理」= 建表默认语义）。
+// ★ **全部**消费点必须同走本函数（库管理页 / 助手记忆页 / 快照详情页三处行卡——曾因第三处
+// 漏改致导入条目在快照页被标成「自动整理」= 假话，正是本函数要消灭的形态；真正的守法是
+// 断言侧的单源唯一性钉 + 逐处接线钉）。新增任何读 source 上屏的行卡，先 grep 本函数名；
+// 单一来源后加值只改这里
 export function memorySourceLabel(source: string): string {
   if (source === 'manual') {
     return '手动添加';
@@ -90,6 +67,17 @@ function isNoneAnswer(stripped: string): boolean {
   return bare === '无' || bare === '';
 }
 
+// 定长截断的安全切点（照 SkillText.safeCutIndex 口径本地一份——本域零 import 拿不到对方，
+// 防跨域混注）：emoji 等增补平面字符占两码元，定长硬切会劈开一对、留下孤立代理字符——落
+// memories 表经记忆页行卡上屏成乱码。判据 = 切点末位落在高代理项（0xD800~0xDBFF）时回退一位
+function safeMemoryCut(text: string, max: number): number {
+  if (text.length <= max) {
+    return text.length;
+  }
+  const last: number = text.charCodeAt(max - 1);
+  return (last >= 0xD800 && last <= 0xDBFF) ? max - 1 : max;
+}
+
 // 提取结果解析：raw = 模型原始输出全文；maxCount = 条数上限（生成链传 5）；existingKeys =
 // 库内既有条目的 normalizeMemoryKey 集（跨次去重）。流程 = 逐行清洗 → 丢空行与「无」→
 // 单条截 500 加 … → 敏感命中丢弃 → 归一化去重（本次内 + 库内）→ 截 maxCount
@@ -111,7 +99,7 @@ export function parseMemoryLines(raw: string, maxCount: number, existingKeys: st
       continue;
     }
     const content: string = cleaned.length > MEMORY_CONTENT_MAX ?
-      cleaned.substring(0, MEMORY_CONTENT_MAX) + '…' : cleaned;
+      cleaned.substring(0, safeMemoryCut(cleaned, MEMORY_CONTENT_MAX)) + '…' : cleaned;
     // 敏感命中整条丢弃（调用方无法在此 hilog——零 import 域，留痕在 MemoryGen 侧对
     // 返回值差集记录）
     if (hitSensitiveContent(content) !== '') {
@@ -127,10 +115,13 @@ export function parseMemoryLines(raw: string, maxCount: number, existingKeys: st
   return out;
 }
 
-// 注入块头（供参考语义 + 过时声明——记忆是蒸馏快照非实时真相，让模型以用户当前说法
-// 为准，防旧记忆压过新指令）
+// 注入块头（供参考语义 + 过时声明——记忆是蒸馏快照非实时真相，让模型以用户当前说法为准，
+// 防旧记忆压过新指令）。★ 含「不复述」句（kel/rik 源码对标，决明拍板）——防模型向用户
+// 罗列或转述记忆内容本身、防「根据记忆，你……」式生硬表达。长度变化自动随动（注入贪心
+// reservedChars 与窗口判定同引本常量，无第二处硬编码）。
 export const MEMORY_BLOCK_HEADER: string =
-  '以下是从过往对话沉淀的长期记忆，供参考。可能过时，以用户当前说法为准。';
+  '以下是从过往对话沉淀的长期记忆，供参考。可能过时，以用户当前说法为准。' +
+  '自然参考即可，不要向用户罗列或转述记忆内容本身，除非用户问起。';
 // 双封顶截断尾注
 const MEMORY_BLOCK_OMIT_NOTE: string = '（更多记忆已省略）';
 
@@ -141,15 +132,12 @@ export interface MemoryEntryItem {
   createdAt: number;
 }
 
-// 双封顶选取（注入块与去重清单同源——同一贪心，仅 reservedChars 不同）：条数 maxCount
-// 与字符 maxChars 双封顶，超出的整条不进；至少保 1 条（字符预算极小时防 0 条死块）；
-// reservedChars = 调用方预留开销（注入块传头行长度，去重清单传 0）。
-// ★ 卡序口径（2026-09-12 记忆自定义注入顺序笔）：入参序 = 卡片序（用户排定的优先级），
-// 超限时保卡序前 N 条（顶部 30 条 = 注入窗口）。
-// ★ 泛型化（2026-09-11 记忆优化笔）：优化输入侧需要带 id 的条目（序号 → 行的映射要能落库），
-// 而本函数只读 content——加类型参数 T 让调用方拿回自己的元素类型，避免为此复制一份贪心
-// （P2-4：同一贪心第二份拷贝 = 两处漂移面）。T 约束 MemoryEntryItem 即保证 content/createdAt
-// 两字段在场，既有三处调用（注入块 / 去重清单）类型推断后行为逐字不变。
+// 双封顶选取（注入块与去重清单同源——同一贪心，仅 reservedChars 不同）：条数与字符双封顶，
+// 超出的整条不进；至少保 1 条（字符预算极小时防 0 条死块）；reservedChars = 调用方预留开销
+//（注入块传头行长度，去重清单传 0）。★ 卡序口径：入参序 = 卡片序（用户排定的优先级），
+// 超限保前 N 条（顶部 30 条 = 注入窗口）。★ 泛型化：优化输入侧需要带 id 的条目，加类型参数
+// T 让调用方拿回自己的元素类型，避免复制第二份贪心（P2-4：第二份拷贝 = 两处漂移面）；
+// 既有三处调用行为逐字不变。
 export function selectMemoryEntries<T extends MemoryEntryItem>(items: T[], maxCount: number,
   maxChars: number, reservedChars: number): T[] {
   const selected: T[] = [];
@@ -169,10 +157,9 @@ export function selectMemoryEntries<T extends MemoryEntryItem>(items: T[], maxCo
 }
 
 // 注入块拼装：items = 库内条目（卡片序——调用方 queryMemories 三键保证）；选取与渲染均按
-// 入参序直出（★ 2026-09-12 记忆自定义注入顺序笔：删原 compareMemoryOrder 的 createdAt
-// 升序重排——卡序即注入序，用户排定什么顺序就注入什么顺序；「同 DB 状态恒同块字符串」
-// 目标由 queryMemories 三键确定性 + 渲染直出等价承接，前缀缓存契约不破）；条数/字符双封顶，
-// 超出的整条不进 + 尾注；items 空 → ''（= 不注入）
+// 入参序直出（卡序即注入序，用户排定什么顺序就注入什么顺序——原 createdAt 升序重排已删，
+//「同 DB 状态恒同块字符串」由 queryMemories 三键确定性 + 渲染直出等价承接，前缀缓存契约
+// 不破）；条数/字符双封顶，超出的整条不进 + 尾注；items 空 → ''（= 不注入）
 export function composeMemoryBlock(items: MemoryEntryItem[], maxCount: number,
   maxChars: number): string {
   if (items.length === 0) {
@@ -194,10 +181,10 @@ export function composeMemoryBlock(items: MemoryEntryItem[], maxCount: number,
   return block;
 }
 
-// 去重清单文本（提取请求用，P1-1）：先丢敏感命中条目（清单随提取请求发到记忆提取模型
-// 服务商，可能与聊天服务商不同家——手动条目不过敏感过滤的既定口径下，此处守卫消除新增
-// 外发面）→ 与注入块同源选取（reservedChars = 0，无头行开销）→ '- 内容' 逐行，无头无
-// 尾注；空入/全丢空/全截空 = ''（调用方不拼段）
+// 去重清单文本（提取请求用，P1-1）：先丢敏感命中条目（清单随提取请求发到记忆提取模型服务
+// 商，可能与聊天服务商不同家——手动条目不过敏感过滤的既定口径下，此处守卫消除新增外发面）
+// → 与注入块同源选取（reservedChars = 0）→ '- 内容' 逐行，无头无尾注；空入/全丢空/全截空
+// = ''（调用方不拼段）
 export function composeMemoryList(items: MemoryEntryItem[], maxCount: number,
   maxChars: number): string {
   if (items.length === 0) {
@@ -251,7 +238,7 @@ export function buildMemoryContent(messages: MemoryMessageRow[]): string {
   const lines: string[] = [];
   for (const m of picked) {
     const text: string = m.content.length > MEMORY_CONTENT_MAX ?
-      m.content.substring(0, MEMORY_CONTENT_MAX) + '…' : m.content;
+      m.content.substring(0, safeMemoryCut(m.content, MEMORY_CONTENT_MAX)) + '…' : m.content;
     lines.push(m.role + ': ' + text.replace(/\s+/g, ' ').trim());
   }
   const joined: string = lines.join('\n');
@@ -264,19 +251,16 @@ export function buildMemoryContent(messages: MemoryMessageRow[]): string {
     joined.substring(joined.length - tail);
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// 记忆优化（「记忆优化模型」pass，2026-09-11 方案-记忆整理优化-20260911 §6.4/§6.5 二期）
-// ══════════════════════════════════════════════════════════════════════════════
-// 定位（方案 §1）：提取 pass 管「新增侧不再变坏」，本 pass 管「把已经攒下的收拾干净」——
-// 存量重复合并 + 粒度统一 + 压短表述（注入窗口按 updatedAt 取前 30 条 / 2000 字，库内可存
-// 200 条；压短 = 更多不同事实挤进窗口）。★ 治不了「缺漏」：本 pass 手里只有条目、没有对话
-// 原文，让它凭条目猜「应该还有什么」只会产生幻觉条目（方案 §2）。
-// 协议（方案 §6.4）：输入按序号 1..N 编号送模型（**不送行 id**——id 是 mem_ 长串，模型抄错
-// 一位就是改错行）；输出每行一条 JSON，只认 rewrite / merge 两种 op：
-//   {"op":"rewrite","targets":[5],"text":"..."}
-//   {"op":"merge","targets":[3,7,9],"text":"..."}
-// 未提及的条目一律不动（白名单式——防「模型少说几条就静默删库」）。
-// 本域负责「建议 → 可执行改动计划」的全部纯逻辑；网络与写库编排在 MemoryOpt / MemoryDb。
+// ══ 记忆优化（「记忆优化模型」pass）══
+// 定位：提取 pass 管「新增侧不再变坏」，本 pass 管「把已经攒下的收拾干净」——存量重复合并 +
+// 粒度统一 + 压短表述（注入窗口按 updatedAt 取前 30 条 / 2000 字，库内可存 200 条；压短 =
+// 更多不同事实挤进窗口）。★ 治不了「缺漏」：本 pass 手里只有条目、没有对话原文，让它凭
+// 条目猜「应该还有什么」只会产生幻觉条目。
+// 协议：输入按序号 1..N 编号送模型（**不送行 id**——id 是 mem_ 长串，模型抄错一位就是改错
+// 行）；输出每行一条 JSON，只认 rewrite / merge 两种 op：
+//   {"op":"rewrite","targets":[5],"text":"..."} / {"op":"merge","targets":[3,7,9],"text":"..."}
+// 未提及的条目一律不动（白名单式——防「模型少说几条就静默删库」）。本域负责「建议 →
+// 可执行改动计划」的全部纯逻辑；网络与写库编排在 MemoryOpt / MemoryDb。
 
 export const MEMORY_OPT_OP_REWRITE: string = 'rewrite';
 export const MEMORY_OPT_OP_MERGE: string = 'merge';
@@ -284,10 +268,10 @@ export const MEMORY_OPT_OP_MERGE: string = 'merge';
 // 优化结果态（页面出提示的唯一依据，文案映射单源 = memoryOptToastText；形制照 MemoryGen
 // 的 MemorySinkResult 六态）：
 // · applied——已应用（changed/merged/ignored 有意义）
-// · none——没有可优化的内容（库空 / 模型给的建议全被丢弃 / 模型答「无」）
-// · config——优化模型不可用（两键未配置 / 服务商或模型停用 / Key 池空 / 明文缺失）
-// · tooLarge——模型给出的改动量超过闸门，整批放弃（方案 §6.5 兜底）
-// · failed——本次优化没能完成（请求重试耗尽、异常终止）
+// · none——没有可优化的内容（库空 / 建议全被丢弃 / 模型答「无」）
+// · config——优化模型不可用（未配置 / 停用 / Key 池空 / 明文缺失）
+// · tooLarge——改动量超闸门，整批放弃
+// · failed——请求重试耗尽、异常终止
 // · skipped——守卫未放行且用户无事可做（在途重复触发、库态未就绪），页面保持沉默
 // · ready——模型给出了可应用的改动（仅 prepare 阶段出现：页面据此出确认弹窗；toast 映射
 //   恒 ''——还没应用，不出提示）
@@ -343,8 +327,7 @@ export interface MemoryOptPlan {
 }
 
 // 优化输入选取：先丢敏感命中条目（与 composeMemoryList 同口径——优化请求发往的服务商未必
-// 与聊天同家，手动条目的敏感内容不外发）→ 与注入块/去重清单同一贪心（条数 + 字符双封顶，
-// 卡序口径：入参序 = queryMemories 的卡片序，超限保卡序前 N 条）。返回数组即序号基准。
+// 与聊天同家，手动条目的敏感内容不外发）→ 同一贪心双封顶（卡序口径）。返回数组即序号基准。
 export function selectMemoryOptItems(items: MemoryOptInputItem[], maxCount: number,
   maxChars: number): MemoryOptInputItem[] {
   const safe: MemoryOptInputItem[] = [];
@@ -365,15 +348,15 @@ export function composeMemoryOptList(items: MemoryEntryItem[]): string {
   return lines.join('\n');
 }
 
-// 单行建议解析：'' / 「无」类空答由调用方先滤掉；本函数对任何形态问题（坏 JSON / 未知 op /
-// 序号越界或非整数 / 序号重复 / rewrite 序号数非 1 / merge 序号数不足 2 / 文本空或超长或
-// 命中敏感）一律返回 null，由调用方计入 ignored。行首编号由 cleanMemoryLine 先剥（模型可能
-// 把 JSON 也逐条编号）
-// ★ 序号重复必须拒（2026-09-11 自检轮补，脏输入实测出的数据丢失路径）：merge 的保留行 =
-// 首个序号行、其余序号行进 deleteIds——`targets:[3,3]` 会产出 keepId == deleteIds[0]，落库
-// 时先按新文本更新该行、紧接着把它删掉，**合并结果与原文一起消失**（用户看到「合并 2 条为
-// 1 条」，实际 0 条留存）。重复序号本身就说明模型对这几行的关系判断不可信，故整条丢（记
-// ignored），不做「去重后照用」——那等于替模型猜它的意思
+// 单行建议解析：'' /「无」类空答由调用方先滤掉；任何形态问题（坏 JSON / 未知 op / 序号越界
+// 或非整数或重复 / rewrite 序号数非 1 / merge 序号数不足 2 / 文本空或超长或命中敏感）一律
+// 返回 null，由调用方计入 ignored；行首编号由 cleanMemoryLine 先剥（模型可能把 JSON 也
+// 逐条编号）。
+// ★ 序号重复必须拒（脏输入实测的数据丢失路径）：merge 保留行 = 首个序号行、其余序号行进
+// deleteIds——`targets:[3,3]` 会产出 keepId == deleteIds[0]，落库时先按新文本更新该行、紧
+// 接着把它删掉，**合并结果与原文一起消失**（用户看到「合并 2 条为 1 条」，实际 0 条留存）。
+// 重复序号本身说明模型对这几行的关系判断不可信，故整条丢，不做「去重后照用」——那等于
+// 替模型猜它的意思
 function parseMemoryOptLine(line: string, count: number): MemoryOptSuggestion | null {
   let parsed: Record<string, Object>;
   try {
@@ -421,7 +404,7 @@ function parseMemoryOptLine(line: string, count: number): MemoryOptSuggestion | 
   return { op: op, targets: targets, text: text };
 }
 
-// 计划构建（解析 + 校验 + 改动量闸门——方案 §6.5 三道防线全在本函数）：
+// 计划构建（解析 + 校验 + 改动量闸门——三道防线全在本函数）：
 // ① 动作白名单：只认 rewrite / merge，**不提供 drop**（「这条不值得留」是主观判断，交给
 //    用户自己删；merge 的副产物删除是允许的——合并本就要删被并入的行）
 // ② 内容校验：≤ MEMORY_CONTENT_MAX 字（与库内单条上限同源）、命中敏感词表即丢、归一化
@@ -430,9 +413,9 @@ function parseMemoryOptLine(line: string, count: number): MemoryOptSuggestion | 
 //    序号重复同样拒（见 parseMemoryOptLine——保留行会被自己删掉 = 内容净丢失）
 // ③ 改动量闸门：将被删除的行数 ≤ 库内条数的 1/3 且 合并组数 ≤ 库内条数的 1/2，超限
 //    oversized 置位、changes 清空 = 整批放弃（模型跑飞的兜底）；小库按下限 1 保底
-//    （2 条重复的库若按 1/3 取整为 0，任何合并都被闸门拒 = 最该合并的场景反而不可用）
+//    （2 条库按 1/3 取整为 0，任何合并都被拒 = 最该合并的场景反而不可用）
 // 入参 total = 库内总行数（**只用于截断告知**：items 是双封顶后的子集，total > items.length
-// 即「只覆盖了最近一部分」，页面据此如实说明；纯函数不吃 DB，故由调用方传入）
+// 即「只覆盖了最近一部分」，页面据此如实说明；纯函数不吃 DB，由调用方传入）
 export function buildMemoryOptPlan(raw: string, items: MemoryOptInputItem[],
   total: number): MemoryOptPlan {
   const count: number = items.length;
@@ -531,9 +514,8 @@ export function buildMemoryOptPlan(raw: string, items: MemoryOptInputItem[],
   };
 }
 
-// 确认弹窗正文（单源；plan 空改动时返回 ''——调用方据此不出弹窗）：先摘要再后果警示
-//（方案 R1 缓解 = 确认弹窗 + 改动量上限 + 不许 drop + 帮助建议先导出备份）。★ 后果句按
-// plan 形态分岔——只改写时不说「被合并掉的条目会删除」（没合并却说删除 = 假话，P0-1）
+// 确认弹窗正文（单源；plan 空改动时返回 ''——调用方据此不出弹窗）：先摘要再后果警示。
+// ★ 后果句按 plan 形态分岔——只改写时不说「被合并掉的条目会删除」（没合并却说删除 = 假话，P0-1）
 export function memoryOptConfirmText(plan: MemoryOptPlan): string {
   const parts: string[] = [];
   if (plan.mergeGroups > 0) {
@@ -553,8 +535,8 @@ export function memoryOptConfirmText(plan: MemoryOptPlan): string {
 // 结果 → 用户提示文案（纯函数单源；'' = 不出提示）。除 skipped 外每态都有回声；applied 带
 // 改动量、合并组数、截断告知与被丢弃建议数——「只覆盖了靠前一部分」「模型给的建议有几条
 // 没被采用」都是用户该知道的事实（P0-1：不许假装整理过全库）；ignored 用「无法采用」而非
-// 「无法识别」——该桶同时装解析失败与「解析成功但不可采用」（越界序号 / 无变化 / 撞车 /
-// 敏感 / 超长），说「无法识别」在后者是假话
+//「无法识别」——该桶同时装解析失败与「解析成功但不可采用」（越界序号/无变化/撞车/敏感/
+// 超长），说「无法识别」在后者是假话
 export function memoryOptToastText(outcome: MemoryOptOutcome): string {
   if (outcome.status === MEMORY_OPT_STATUS_APPLIED) {
     let text: string = '已优化 ' + outcome.changed + ' 条记忆';
@@ -584,12 +566,11 @@ export function memoryOptToastText(outcome: MemoryOptOutcome): string {
   return '';
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// 记忆检索（search_memory 工具纯函数面，2026-09-13 方案-记忆按需读取-20260913 §2.4）
-// ══════════════════════════════════════════════════════════════════════════════
-// 定位（方案 §1.2/§2.4）：读取方式切「按需读取」后，模型经工具调用自主决定何时查记忆
-// ——本节只管「query → 相关条目 → 结果文本」的纯逻辑；检索在端内完成（零请求零费用），
-// 库 ≤200 条全量内存打分（不做 SQL 端检索，避免 FTS 依赖与 SQL/内存双实现分叉）。
+// ══ 记忆检索（search_memory 工具纯函数面）══
+// 定位：读取切「按需读取」后，模型经工具调用自主决定何时查记忆——本节只管「query → 相关
+// 条目 → 结果文本」的纯逻辑；检索在端内完成（零请求零费用），库 ≤200 条全量内存打分
+//（不做 SQL 端检索，避免 FTS 依赖与 SQL/内存双实现分叉）。零时钟依赖（新近度 =
+// updatedAt 字段排序，非相对当前时间的衰减），断言脚本复制直跑复算；执行器在 MemoryGen。
 
 // 工具返回双封顶（宪法数据有界；比注入窗口 30/2000 小一档——检索结果按相关度已聚焦，
 // 8 条/1500 字覆盖典型问询，超出由尾行提示模型收窄关键词）
@@ -597,9 +578,12 @@ export const MEMORY_TOOL_RESULT_MAX_COUNT: number = 8;
 export const MEMORY_TOOL_RESULT_MAX_CHARS: number = 1500;
 // 触上限尾行（selected < ranked = 双封顶截断了命中集）
 const MEMORY_SEARCH_CAP_NOTE: string = '已达返回上限，可用更具体的关键词再检索';
+// 空关键词索要句（单源）：切分后无词（空串/纯标点）时的答复——纯函数结果面用它，
+// search_memory 执行器按「请求不合法族」包 error 形态时复用**同一常量**，两处恒同句
+export const MEMORY_SEARCH_NEED_QUERY_TIP: string = '请提供要检索的关键词。';
 
-// 检索条目（打分需要 updatedAt 新近度；extends MemoryEntryItem 保 selectMemoryEntries
-// 泛型直接复用——同一贪心不复制。入参序 = 调用方 queryMemories 的卡片序，同库三键保证）
+// 检索条目（打分需要 updatedAt 新近度；extends MemoryEntryItem 保 selectMemoryEntries 泛型
+// 直接复用——同一贪心不复制；入参序 = queryMemories 的卡片序）
 export interface MemorySearchItem extends MemoryEntryItem {
   updatedAt: number;
 }
@@ -611,9 +595,9 @@ interface MemorySearchScoredItem {
   order: number;
 }
 
-// 检索词切分：按空白与中英文标点切，去空去重（保首现顺序）。中文整句无空格时整句成一个
-// 词——工具 desc 已指引模型传关键词（「多个用空格分隔」），此处不做滑窗泛化（帮助检索
-// searchHelpTerms 面向用户原话须泛化；本工具面向模型，输入自律性更高，克制不加）
+// 检索词切分：按空白与中英文标点切，去空去重（保首现顺序）。中文整句无空格时整句成一个词
+//——工具 desc 已指引模型传关键词（「多个用空格分隔」），此处不做滑窗泛化（帮助检索面向
+// 用户原话须泛化；本工具面向模型，输入自律性更高，克制不加）
 export function splitMemoryQuery(query: string): string[] {
   const tokens: string[] = [];
   const seen: Set<string> = new Set<string>();
@@ -679,7 +663,8 @@ export function rankMemorySearchResults(items: MemorySearchItem[], tokens: strin
 }
 
 // 检索结果文本（模型消费面，简洁中文——文案规约不适用于模型面）：
-// · 空库 → 「记忆库为空。」；query 切分后为空（纯标点/空白）→ 索要关键词
+// · 空库 → 「记忆库为空。」；query 切分后为空（纯标点/空白）→ 索要关键词（常量单源见上，
+//   工具面按「请求不合法族」包 error 形态，本纯函数分支留作直跑面）
 // · 无命中 → 未检索到 + 库内条数 + 换词提示
 // · 命中 → 计数头行 + '[序号] 内容' 逐行；双封顶截断加尾行提示收窄关键词
 // 选取复用 selectMemoryEntries 双封顶贪心（字符预算按既有 '- ' 行计——渲染前缀 '[3] ' 比它
@@ -690,7 +675,7 @@ export function composeMemorySearchResult(items: MemorySearchItem[], query: stri
   }
   const tokens: string[] = splitMemoryQuery(query);
   if (tokens.length === 0) {
-    return '请提供要检索的关键词。';
+    return MEMORY_SEARCH_NEED_QUERY_TIP;
   }
   const ranked: MemorySearchItem[] = rankMemorySearchResults(items, tokens, query.trim());
   if (ranked.length === 0) {
@@ -709,236 +694,96 @@ export function composeMemorySearchResult(items: MemorySearchItem[], query: stri
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 记忆管理（manage_memory 工具纯函数面，2026-09-13 任务书-记忆管理工具-20260913）
+// 记忆窗口（2026-09-27 任务书-记忆库窗口搜索与整理存档-20260927 §3）
 // ══════════════════════════════════════════════════════════════════════════════
-// 定位：控制台助手对长期记忆库的管理面——list 完整查看条数/内容/顺序 + create/update/delete
-// 三写（含 delete，拍板 1：记忆删除无「N 会话引用」级联链，UI 记忆页有完整管理兜底）。本节
-// 只管纯逻辑；DB 读写与广播编排在 ToolMemoryManage（执行器）。回执恒纯文本（manage_prompts
-// 的 JSON 载荷形态不沿用——记忆条目本身是自然语言文本，纯文本对模型最直接），文案规约不
-// 适用于模型面。
-// ★ 定位方式 = 记忆原文精确匹配（拍板 2）：update/delete 的 content 与库内条目 trim 后逐字
-//   相等才命中——0 命中回名单、≥2 命中拒歧义（manage_prompts 的 name 定位同形迁移）。弃
-//   index 序号（连续删除下漂移删错条）与行 id（mem-<时间戳>-<序号> 模型不可抄，RikkaHub
-//   #1830 实证 id 空洞被误读）——回执里的原文即下次操作的定位键。
+// 定位：把「哪些条目会进注入块」从**藏在贪心里的结果**变成**可显示、可干预的窗口**——库页
+// 据此标出窗口外条目，并给「移到窗口内」一键重排。判定与注入块**同源**：同一个
+// selectMemoryEntries 贪心 + 同一 reservedChars（头行长度）+ 同一双封顶常量，故「窗口内」
+// 与实际注入的那批恒等价（不做「前 30 条」式简化——字符封顶会让靠后的条目在第 5 条就出局，
+// 简化判据会给出与实际注入不符的显示）。
+// ★ 纯计算域：不写库、不改注入行为（composeMemoryBlock 逐字节不动）；重排是调用方的事
+//（库页写 saveMemoryOrder / saveAssistantMemoryOrder），本域只出顺序。
 
-// list 分页口径（拍板 6）：默认 30 对齐注入窗口语义（ChatSendCtrl 的 MEMORY_INJECT_MAX_COUNT
-// 同值 30——两处 30 同值不同源，改注入窗口时须同查本常量，74 组回归钉在 ChatSendCtrl 侧）；
-// 上限 50
-export const MEMORY_MANAGE_LIST_DEFAULT_COUNT: number = 30;
-export const MEMORY_MANAGE_LIST_MAX_COUNT: number = 50;
-// 页内总字数软顶：超则自动收窄本页条数（至少 1 条）——防 clipToolResult 8192 硬顶截尾丢翻页
-// 提示（最坏 50 条 × 500 字 = 25000 字；典型 60 字/条时 50 条约 3000 字不受影响）
-export const MEMORY_MANAGE_PAGE_SOFT_CHARS: number = 6000;
+// 注入双封顶（**唯一来源**；★ 2026-09-27 自 ChatSnapshotCtrl.ets 上收本件——注入链（chat 域）
+// 与记忆库管理页（settings 域）都要用，叶子域单源化后两处同引，禁任何组件层再持本地副本）。
+// 消费方 = ChatSnapshotCtrl.buildMemoryBlock（注入块）与记忆库管理页（窗口判定）
+export const MEMORY_INJECT_MAX_COUNT: number = 30;
+export const MEMORY_INJECT_MAX_CHARS: number = 2000;
 
-// 校验结果（纯函数可断言）：ok = true 时 action 与对应参数就绪；offset/limit 为归一后值
-export interface ManageMemoryValidation {
-  ok: boolean;
-  action: string;
-  content: string;
-  newContent: string;
-  offset: number;
-  limit: number;
-  error: string;
-}
-
-function rejectManageMemory(error: string): ManageMemoryValidation {
-  return { ok: false, action: '', content: '', newContent: '', offset: 1,
-    limit: MEMORY_MANAGE_LIST_DEFAULT_COUNT, error: error };
-}
-
-// 参数校验纯函数：坏 JSON / 非法 action / create 缺 content / update 缺 content 或
-// new_content / content 与 new_content 空、超 MEMORY_CONTENT_MAX 全拒；list 的 offset/limit
-// 脏值归默认不报错（offset <1 或非整数 → 1；limit <1、>上限或非整数 → 30——模型少一轮纠错）
-export function validateManageMemoryArgs(argsJson: string): ManageMemoryValidation {
-  let action: string = '';
-  let content: string = '';
-  let newContent: string = '';
-  let offset: number = 1;
-  let limit: number = MEMORY_MANAGE_LIST_DEFAULT_COUNT;
-  try {
-    const parsed = JSON.parse(argsJson) as Record<string, Object>;
-    const rawAction: Object | undefined = parsed['action'];
-    const rawContent: Object | undefined = parsed['content'];
-    const rawNewContent: Object | undefined = parsed['new_content'];
-    const rawOffset: Object | undefined = parsed['offset'];
-    const rawLimit: Object | undefined = parsed['limit'];
-    if (typeof rawAction === 'string') {
-      action = rawAction.trim();
-    }
-    if (typeof rawContent === 'string') {
-      content = rawContent.trim();
-    }
-    if (typeof rawNewContent === 'string') {
-      newContent = rawNewContent.trim();
-    }
-    if (typeof rawOffset === 'number' && Number.isInteger(rawOffset)) {
-      offset = rawOffset;
-    }
-    if (typeof rawLimit === 'number' && Number.isInteger(rawLimit)) {
-      limit = rawLimit;
-    }
-  } catch (e) {
-    return rejectManageMemory('参数解析失败，需要 action 参数');
-  }
-  if (action !== 'list' && action !== 'create' && action !== 'update' && action !== 'delete') {
-    return rejectManageMemory('action 必须是 list、create、update 或 delete');
-  }
-  // offset/limit 归一（脏值归默认——拍板 6）
-  if (offset < 1) {
-    offset = 1;
-  }
-  if (limit < 1) {
-    limit = MEMORY_MANAGE_LIST_DEFAULT_COUNT;
-  }
-  if (limit > MEMORY_MANAGE_LIST_MAX_COUNT) {
-    limit = MEMORY_MANAGE_LIST_MAX_COUNT;
-  }
-  if (action === 'create' || action === 'update' || action === 'delete') {
-    if (content === '') {
-      return rejectManageMemory('action 为 ' + action +
-        ' 时需要 content 参数，值为目标记忆全文（update/delete 为要操作的原文）');
-    }
-    if (content.length > MEMORY_CONTENT_MAX) {
-      return rejectManageMemory('content 超过 ' + MEMORY_CONTENT_MAX + ' 字上限，当前 ' +
-        content.length + ' 字，请精简');
-    }
-  }
-  if (action === 'update') {
-    if (newContent === '') {
-      return rejectManageMemory('action 为 update 时需要 new_content 参数，值为修改后的记忆全文');
-    }
-    if (newContent.length > MEMORY_CONTENT_MAX) {
-      return rejectManageMemory('new_content 超过 ' + MEMORY_CONTENT_MAX + ' 字上限，当前 ' +
-        newContent.length + ' 字，请精简');
-    }
-  }
-  return { ok: true, action: action, content: content, newContent: newContent,
-    offset: offset, limit: limit, error: '' };
-}
-
-// 管理条目（定位与回执需要的最小行形态——零 import 域不引 DB 类型，执行器以 MemoryRow 适配）
-export interface MemoryManageItem {
+// 窗口条目（判定需要 id 才能把结果映射回行卡；零 import 域不引 DB 类型——调用方显式映射）
+export interface MemoryWindowItem extends MemoryEntryItem {
   id: string;
-  content: string;
 }
 
-// 定位结果三态：unique = 唯一命中（hitId/hitContent 就绪）；none = 零命中；multi = 多命中
-//（hits = 全部命中条渲染行 '[全库序号] 原文'，供回执列出区分）
-export interface MemoryLocateOutcome {
-  state: string; // 'unique' | 'none' | 'multi'
-  hitId: string;
-  hitContent: string;
-  hits: string[];
+// 判定结果：inIds = 会进注入块的条目 id（卡序）；outCount = 窗口外条数
+export interface MemoryWindowInfo {
+  inIds: string[];
+  outCount: number;
 }
 
-// 原文精确匹配定位（拍板 2）：两侧 trim 后逐字相等才命中；items = 库序（queryMemories 三键）
-export function locateMemoryByContent(items: MemoryManageItem[],
-  content: string): MemoryLocateOutcome {
-  const needle: string = content.trim();
-  const hits: string[] = [];
-  let hitId: string = '';
-  let hitContent: string = '';
-  for (let i: number = 0; i < items.length; i++) {
-    if (items[i].content.trim() === needle) {
-      if (hitId === '') {
-        hitId = items[i].id;
-        hitContent = items[i].content;
-      }
-      hits.push('[' + (i + 1).toString() + '] ' + items[i].content);
-    }
-  }
-  if (hits.length === 0) {
-    return { state: 'none', hitId: '', hitContent: '', hits: [] };
-  }
-  if (hits.length > 1) {
-    return { state: 'multi', hitId: '', hitContent: '', hits: hits };
-  }
-  return { state: 'unique', hitId: hitId, hitContent: hitContent, hits: [] };
-}
-
-// 定位失败回执（纯文本错误态，执行器原样返回）：
-// · none：附库前 10 条清单 + 逐字引用指引（manage_prompts 0 匹配回显名单先例同形）
-// · multi：列出全部命中条 + 区分指引（manage_prompts 多匹配拒歧义先例同形）
-export function composeMemoryManageNoHit(items: MemoryManageItem[]): string {
+// 窗口判定（与 composeMemoryBlock 同口径：同 selectMemoryEntries 贪心 + 同 reservedChars =
+// 头行长度 + 同双封顶常量）。入参序 = 调用方 queryMemories 的卡片序；空入 → 空窗（不是
+// 「全部在窗内」，库空时页面走空态分支，两值都不会被读）
+export function computeMemoryWindow(items: MemoryWindowItem[]): MemoryWindowInfo {
   if (items.length === 0) {
-    return '记忆库为空，没有可以修改或删除的记忆。';
+    return { inIds: [], outCount: 0 };
   }
-  const previewCount: number = Math.min(10, items.length);
-  const lines: string[] = [];
-  for (let i: number = 0; i < previewCount; i++) {
-    lines.push('[' + (i + 1).toString() + '] ' + items[i].content);
+  const selected: MemoryWindowItem[] = selectMemoryEntries(items, MEMORY_INJECT_MAX_COUNT,
+    MEMORY_INJECT_MAX_CHARS, MEMORY_BLOCK_HEADER.length);
+  const inIds: string[] = [];
+  for (const item of selected) {
+    inIds.push(item.id);
   }
-  const head: string = previewCount === items.length ?
-    '当前库全部 ' + items.length + ' 条：' :
-    '当前库前 ' + previewCount + ' 条（共 ' + items.length + ' 条）：';
-  return '没有找到这条记忆——content 必须与库内某条记忆的原文逐字一致。\n' + head + '\n' +
-    lines.join('\n') + '\n请先用 list 查看全部记忆，再逐字引用要操作的那条原文。';
+  return { inIds: inIds, outCount: items.length - inIds.length };
 }
 
-export function composeMemoryManageMultiHit(hits: string[]): string {
-  return '有 ' + hits.length + ' 条内容完全相同的记忆，无法确定要操作哪一条，本次未执行。全部命中条：\n' +
-    hits.join('\n') + '\n请让用户补充更长的原文片段以区分，或指引用户在 设置 → 记忆 手动处理。';
-}
-
-// list 回执（纯文本；items = 库序，编号 = 全库序号——翻页连续〔offset=31 起的本页从 [31]
-// 编起〕、与注入序同源，禁页内 1..K 重编号；单条全显不截断——「完整查看内容」是需求点）。
-// 结构：计数头 + '[序号] 内容' 逐行 + 收窄/翻页/末尾尾注 + 注入口径行。offset/limit 脏值在
-// 此二次归一（含 offset ≤ total 收口——越过末页的 offset 收到末条，模型恒见内容不落空页）
-export function composeMemoryManageList(items: MemoryManageItem[], offset: number,
-  limit: number): string {
-  const total: number = items.length;
-  if (total === 0) {
-    return '记忆库为空。';
+// 「移到窗口内」重排：targetId 插到**窗口内最后一条之前**（占其位 → 目标必进窗，原末位可能
+// 被挤出——这是有意的：窗口只有一个名额让出来）。窗口为空（字符预算连第一条都装不下等极端
+// 态）→ 目标前置首位。
+// 防御两态（调用方据此不出菜单项）：targetId 不在 ids、或已在 inIds → 返回入参序副本。
+export function moveIntoWindowOrder(ids: string[], inIds: string[],
+  targetId: string): string[] {
+  if (!ids.includes(targetId) || inIds.includes(targetId)) {
+    return ids.slice();
   }
-  let start: number = offset < 1 ? 1 : offset;
-  if (start > total) {
-    start = total;
-  }
-  let count: number = limit < 1 ? MEMORY_MANAGE_LIST_DEFAULT_COUNT : limit;
-  if (count > MEMORY_MANAGE_LIST_MAX_COUNT) {
-    count = MEMORY_MANAGE_LIST_MAX_COUNT;
-  }
-  // 页内切片 + 软顶收窄：累计字数超 MEMORY_MANAGE_PAGE_SOFT_CHARS 即止（至少 1 条——首条
-  // 恒放行，单条 ≤500 字恒在预算内）
-  const lines: string[] = [];
-  let shown: number = 0;
-  let used: number = 0;
-  while (shown < count && start - 1 + shown < total) {
-    const item: MemoryManageItem = items[start - 1 + shown];
-    const line: string = '[' + (start + shown).toString() + '] ' + item.content;
-    if (shown > 0 && used + line.length > MEMORY_MANAGE_PAGE_SOFT_CHARS) {
-      break;
+  const rest: string[] = [];
+  for (const id of ids) {
+    if (id !== targetId) {
+      rest.push(id);
     }
-    lines.push(line);
-    used += line.length;
-    shown++;
   }
-  const lastShown: number = start - 1 + shown;
-  const parts: string[] = ['共 ' + total + ' 条记忆，按注入顺序排列（序号小先注入）。本页第 ' +
-    start + '~' + lastShown + ' 条：'];
-  parts.push(lines.join('\n'));
-  if (shown < count && lastShown < total) {
-    parts.push('本页因长度限制只显示前 ' + shown + ' 条');
+  if (inIds.length === 0) {
+    return [targetId].concat(rest);
   }
-  if (lastShown < total) {
-    parts.push('还有 ' + (total - lastShown) + ' 条，可用 offset=' + (lastShown + 1) + ' 继续');
-  } else {
-    parts.push('已到末尾');
+  const lastInId: string = inIds[inIds.length - 1];
+  const at: number = rest.indexOf(lastInId);
+  if (at < 0) {
+    // 防御：inIds 与 ids 不同源（调用方传错）——没有可插的锚点，落到首位而非越界切片
+    return [targetId].concat(rest);
   }
-  parts.push('注：会话自动注入时最多携带前 ' + MEMORY_MANAGE_LIST_DEFAULT_COUNT + ' 条。');
-  return parts.join('\n');
+  return rest.slice(0, at).concat([targetId]).concat(rest.slice(at));
 }
 
-// 四写回执（纯文本——回执即向用户复述改了什么的载体，控制台提示词「执行后确认」行为约束
-// 据此满足；create 回执的原文用调用方传入的 content 归一值——库内行即此串）
-export function composeMemoryManageCreateReply(content: string, totalAfter: number): string {
-  return '已新增记忆（现共 ' + totalAfter + ' 条）：\n' + content;
+// ══════════════════════════════════════════════════════════════════════════════
+// 记忆库搜索（2026-09-27 同任务书 §4）
+// ══════════════════════════════════════════════════════════════════════════════
+// 定位：记忆库管理页顶部常显搜索框的过滤纯函数——按**内容子串**实时过滤，纯内存过滤不查库
+//（库内 ≤200 条，与 search_memory 工具的「全量内存打分」同一量级取舍，P1-2 合规）。
+// ★ 空词口径与其他搜索面**有意不同**：空词 = 不过滤、全显（会话搜索页 filterRows 是提交式
+// 搜索，空词返空；本页是常显框 + 实时过滤，空词返空会让清空输入后列表空掉 = 换不回全量）。
+// 只匹配 content——来源与时间不参与（要按来源筛选另说）。
+export function filterMemoryItemsByKeyword<T extends MemoryEntryItem>(items: T[],
+  keyword: string): T[] {
+  const kw: string = keyword.trim().toLowerCase();
+  if (kw === '') {
+    return items.slice();
+  }
+  const out: T[] = [];
+  for (const item of items) {
+    if (item.content.toLowerCase().includes(kw)) {
+      out.push(item);
+    }
+  }
+  return out;
 }
 
-export function composeMemoryManageUpdateReply(oldContent: string, newContent: string): string {
-  return '已修改记忆：\n旧：' + oldContent + '\n新：' + newContent;
-}
-
-export function composeMemoryManageDeleteReply(content: string, remaining: number): string {
-  return '已删除记忆：\n' + content + '\n现剩余 ' + remaining + ' 条。';
-}

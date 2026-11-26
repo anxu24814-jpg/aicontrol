@@ -1,59 +1,66 @@
-// Kimi 半模态面板共享样式（2026-08-23 三十六改提取：P2-4——「添加文件 / 选择模型 /
-// 选择工作区」三面板同款；自 FileSheet.ets 迁出）。官方文件选择器样式定稿：
-// · 面板底 = 弹层族材质（ImmersiveLevel.overlayMaterial，基准 THICK，随沉浸光感总档）——
-//   ★ 2026-09-22 决明指令「半模态/弹窗也改 thick」：原「面板固定实底 app.color.page_bg、
-//   永久退出 uiMaterial 光感档位体系」（坑66 定论：实底全高一致无导航条分割带）就此推翻
-//   为：有档 = 材质、总档「无」= Material.empty 回落 page_bg 实底（原实底语句保留为
-//   「无」档专用回退，勿删）；坑66 的导航条分割带现象若在材质态复现，按真机复核处置
-//   （回退路径 = 总档调「无」或报告后单点调整）；
-// · 标题栏 GRADIENT_BLUR + enableScrollEffect=false = 静止直接生效渐变模糊（官方表实锤，
-//   「直接生效模糊」语义）+ **标题栏 HDS 材质**（systemMaterialEffect @since 23；材质档下
-//   官方配套默认：GRADIENT_BLUR + 材质 + false 时 backgroundColor 默认 sys.color.
-//   comp_background_gray、blurRadius 默认 12 = 浅灰蒙层 + 材质光感 + 模糊透出，外观近
-//   官方 picker 顶部；原 35 改的纯透明 + blur16 由官方默认接替——统一三面板）；
-//   ★ 四十二改（决明真机确认定稿）：标题栏材质随沉浸光感总档（原写死
-//   IMMERSIVE+ADAPTIVE 系统自适应、不随档；2026-09-12 分项退役前随沉浸光感总档）
-//   ——同 hdsTitleBarOptions 姿势：
-//   resolveEffectiveLevel + hdsMaterialParams 映射；「无」档彻底不设 systemMaterialEffect
-//   （NONE 也属「已配置」，会触发 comp_background_gray 默认规则——hdsTitleBarOptions 第五轮
-//   结论）+ 背板显式透明 + 关闭键换官方无光感纯色圆底。★ 面板底于 2026-09-22 决明指令起
-//   改用弹层族材质（见首节），原「面板实底仍退出档位体系（坑66 病根，不动）」随该指令解除。
+// Kimi 半模态面板共享样式（「添加文件 / 选择模型 / 选择工作区」三面板同款提取）。定稿口径：
+// · 面板底 = 半模态专用材质（sheetMaterial，基准 ULTRA_THICK 随沉浸光感总档——2026-10-18
+//   决明「全部半模态底改厚，光感弱一档」）；总档「无」= Material.empty 回落 page_bg 实底
+//  （原实底语句保留为「无」档专用回退，勿删；坑66 导航条分割带若在材质态复现，按真机复核处置）；
+// · 标题栏 GRADIENT_BLUR + enableScrollEffect=false（静止直接生效渐变模糊，官方表实锤）+
+//   标题栏 HDS 材质随总档（resolveEffectiveLevel + hdsMaterialParams 映射）；「无」档彻底
+//   不设 systemMaterialEffect（NONE 也属「已配置」，会触发 comp_background_gray 默认规则）+
+//   关闭键换官方无光感纯色圆底；
+//   ★ 2026-10-29 背板恒透明（决明拍板「删蒙层、不删模糊」）：原「材质档吃官方默认
+//   backgroundColor = comp_background_gray（不透明浅灰白）」口径已推翻——那层灰白实底就是
+//   白蒙层本体；现两档统一显式 Transparent，回退阶梯见下方 originalStyle 处注释；
+// · ★ blurStrategy 同页面级单源（2026-11-05 契约固化笔）：显式 ADAPTIVE = SDK 官方默认
+//   （hdsBaseComponent.d.ets @default，@since 6.0.0(20)），零行为变化。快速滚动时系统可临时
+//   关模糊保帧率、停止后恢复，属官方默认策略，**不作缺陷立项**；半模态恒
+//   enableComponentSafeArea: true（内容避让标题栏、不穿透），模糊背后是面板底，降级几乎无感。
+//   禁改 ENABLE（代价 = 滚动帧率/功耗上升，先拍板）。语义与分档判据 =
+//   ImmersiveLevel.hdsTitleBarOptions 头注释 + docs/规范-搜索交互.md §6。
 // · divider AUTO（官方 picker 跟手分割线；真机若 AUTO 在 false 下不显示，回退 ON）。
-// 坑69 不适用于声明式 bindSheet（内容属页面树、深浅色随动）；编程式（ComponentContent）
-// 面板在本文件外不复用本样式（坑66 同源）。
-// ★ 2026-09-23 半模态关闭确认笔：本件同时是「关闭前确认弹窗」的形制单源（SheetCloseConfirm +
-// confirmSheetClose，文件尾）——半模态的关闭意图分三路（标题栏自绘关闭键 / 宿主 onWillDismiss
-// 〔下拉·侧滑·三键 back·ESC·点蒙层，框架转交〕/ 面板内容件关闭键上行），需要二次确认的站点
-// 三路都调该函数，键序与键色只在本处一份。
+// 坑69 不适用于声明式 bindSheet（内容属页面树、深浅色随动）；编程式（ComponentContent）面板
+// 不复用本样式（坑66 同源）。
+// ★ 本件同时是「关闭前确认弹窗」的形制单源（SheetCloseConfirm + confirmSheetClose，文件尾）
+//——半模态关闭意图三路（标题栏自绘关闭键 / 宿主 onWillDismiss〔下拉·侧滑·back·ESC·点蒙层〕
+// / 面板内容件关闭键上行）需要二次确认的站点都调该函数，键序与键色只在本处一份。
 import { UIContext } from '@kit.ArkUI';
 import {
-  DividerShowType, HdsNavigationTitleBarOptions,
-  HdsTitleBarContentStyle, ScrollEffectType, TitleBarContentOptions, TitleBarStyleOptions
+  BlurStrategy, BottomBuilderParams, DividerShowType, HdsNavigationMenuContentOptions,
+  HdsNavigationTitleBarOptions, HdsTitleBarContentStyle, ScrollEffectType, TitleBarContentOptions,
+  TitleBarStyleOptions
 } from '@kit.UIDesignKit';
 import { SHEET_MASK_COLOR } from '../../common/Theme';
-import { hdsMaterialParams, overlayMaterial, resolveEffectiveLevel } from '../../common/ImmersiveLevel';
+import {
+  hdsMaterialParams, overlayMaterial, resolveEffectiveLevel, sheetMaterial
+} from '../../common/ImmersiveLevel';
 
-// 面板标题栏（MODAL 标题栏 + xmark 官方关闭键（menu 数组）+ AUTO 分割线 + 静止渐变模糊 +
-// 标题栏 HDS 材质随沉浸光感总档（★ 四十二改：原写死 IMMERSIVE+ADAPTIVE 系统自适应
-// 不随档；现同 hdsTitleBarOptions：>=0 档 hdsMaterialParams 映射，<0「无」档彻底不设材质 +
-// 背板透明 + 关闭键官方无光感纯色圆底——2026-08-20 二级页「无」档同因定稿：透明圆底+提亮
-// 压暗在实色背景上看不出按钮背景）；文字/图标色显式 font_primary 系——官方默认此时为
-// on_primary 白字，灰蒙层+透出下不可读，显式覆盖必要；两态同色防十五改白字白图标浅色底不可读）
-// ★ 二一七改（回退二一五改的参数化——决明指引「参考列表类半模态（选择模型）的顶部
-// 模糊，它就是可以的」）：dividerShow/componentSafeArea 两参数删除，函数恢复 5 参原样
-// （AUTO 分割线 + enableComponentSafeArea true = 模型选择面板同款、真机验收过的好观感；
-// 二一五改的 OFF/内容延伸在半模态标题栏上实测反而出现分割线且下移——过度自定义，
-// 教训：半模态顶部跟随既有面板规格，不自创）
-// ★ 2026-08-31 演进（可选第 6 参 confirmAction，向后兼容——现有 5 参调用零改动）：
-// 右上角「保存勾」键（checkmark，获取模型同步面板用）——菜单键数组 = [保存勾, xmark 关闭]
-//（HDS 标题栏菜单键自右缘排布，保存为主操作靠右；真机若顺序观感不佳调换数组序即可）
+// 面板标题栏（MODAL 标题栏 + xmark 官方关闭键〔menu 数组〕+ AUTO 分割线 + 静止渐变模糊 +
+// 标题栏 HDS 材质随总档：>=0 档 hdsMaterialParams 映射，<0「无」档彻底不设材质 + 背板透明 +
+// 关闭键官方无光感纯色圆底〔透明圆底在实色背景上看不出按钮背景，二级页「无」档同因定稿〕）。
+// 文字/图标色显式 font_primary 系——官方默认此时 on_primary 白字，灰蒙层下不可读，两态
+// 同色防白字白图标浅色底不可读。参数化回退教训（决明指引「参考选择模型半模态的顶部模糊」）：
+// dividerShow/componentSafeArea 两参数已删、恢复 5 参原样（AUTO + enableComponentSafeArea
+// true = 真机验收过的好观感；OFF/内容延伸实测反而分割线下移——半模态顶部跟随既有面板规格，
+// 不自创）。
+// 第 5 参 confirmAction（可选，向后兼容）：右上角「保存勾」键——菜单键数组 = [保存勾,
+// xmark 关闭]（HDS 菜单键自右缘排布，保存靠右）。
+// 第 6 参 menuOverride（可选）：完整菜单内容覆盖——排队面板标题栏双键（左启动/暂停、右
+// 清空）无 xmark，关闭 = 下拉手势经宿主 onWillDismiss。传本参时 onClose / confirmAction
+// 均不参与菜单构造（标题栏其余结构仍由本函数单源）；不传 = 行为与既有逐字一致。
+// 第 7 参 bottomBuilder（可选）：标题栏下方自定义区（官方 BottomBuilderParams，@since 20）——
+// 现用途 = **面板内搜索框吸顶**（2026-10-31「两处半模态搜索框合入标题自定义区」笔；官方
+// 《设置自定义区域》导语明示用途即「标题下方区域增加搜索框、页签」）。带宽算式单源 =
+// ImmersiveLevel.segmentBandParams（带内下移 8 + 内容高 40 = 48），消费方勿另算。★ 本壳恒
+// enableComponentSafeArea: true（内容区本就避让标题栏），加带后带高自动并入组件安全区 ⇒
+// 面板内容零手算让位（页面级 PageShell 才要 searchBandContentTop）；动态收起 = 调用点传
+// undefined（同 PageShell titleBarBottomHidden 机理——标题栏逐帧按新选项重建，带随之收放）。
 export function sheetTitleBarOptions(mainTitle: string, subTitle: string,
-  onClose: () => void, level: number,   confirmAction?: () => void): HdsNavigationTitleBarOptions {
+  onClose: () => void, level: number, confirmAction?: () => void,
+  menuOverride?: HdsNavigationMenuContentOptions,
+  bottomBuilder?: BottomBuilderParams): HdsNavigationTitleBarOptions {
   const resolvedLevel: number = resolveEffectiveLevel(level);
   const titleBarContent: TitleBarContentOptions = {
     title: { mainTitle: mainTitle, subTitle: subTitle },
     divider: { showType: DividerShowType.AUTO },
-    menu: {
+    menu: menuOverride !== undefined ? menuOverride : {
       value: confirmAction === undefined ? [{
         content: {
           // 关闭键图标（官方 xmark 系统符号；icon 尺寸走 HDS 菜单键官方默认）
@@ -94,70 +101,86 @@ export function sheetTitleBarOptions(mainTitle: string, subTitle: string,
       enableScrollEffect: false,
       scrollEffectType: ScrollEffectType.GRADIENT_BLUR
     },
-    // ★ 四十二改：标题栏 HDS 材质随沉浸光感总档驱动（原写死 IMMERSIVE+
-    // ADAPTIVE 系统自适应——hdsMaterial 与 uiMaterial 两体系无关、不随应用档位；现按
-    // hdsMaterialParams(resolvedLevel) 映射：0=ADAPTIVE 系统策略 / 2=SMOOTH / 3=GENTLE /
-    // 4=EXQUISITE。2026-09-12 分项退役前随沉浸光感总档）。材质档下官方配套默认（无需显式设 backgroundStyle）：false 模式
-    // backgroundColor = comp_background_gray（深浅分治）、blurRadius 12。
-    // 「无」档（resolvedLevel<0）：不设 systemMaterialEffect（NONE 属「已配置」，触发
-    // comp_background_gray 默认规则嫌疑——hdsTitleBarOptions 第五轮结论）+ 背板显式透明，
-    // 只留 GRADIENT_BLUR 常显蒙层（「不设 = 透明」无官方依据，显式设防默认规则兜底）
+    // 官方默认档显式固化，与页面级 hdsTitleBarOptions 同值同链（零行为变化，见文件头条）
+    blurStrategy: BlurStrategy.ADAPTIVE,
+    // 标题栏材质随总档（hdsMaterialParams(resolvedLevel) 映射：0=ADAPTIVE / 2=SMOOTH /
+    // 3=GENTLE / 4=EXQUISITE）。
+    // ★ 2026-10-29 背板恒透明（决明拍板「删蒙层、不删模糊」）：原高档分支不设 backgroundColor，
+    // 命中官方默认规则「GRADIENT_BLUR + 已配置材质 + enableScrollEffect:false ⇒ 背板
+    // comp_background_gray（不透明浅灰白）」——那层灰白实底就是白蒙层本体；现两档统一显式
+    // 透明（与 hdsTitleBarOptions 同形），顶部只剩「面板底 + 标题栏材质 + 模糊」三层。
+    // 回退阶梯（真机嫌太透按序单点调，禁整段回滚）：①blurRadius 调 8~10（d.ts @since 23，
+    // 取值 [0,128]）；②材质收一档 GENTLE；③才考虑极淡半透明背板（手写 alpha 色深浅两套）。
+    // maskExtraHeight 恒 0（官方默认 32vp 蒙层下探盖住首卡上沿，真机教训）；透明后如需软化
+    // 下沿边界只可试 8~16，禁回 32。
     originalStyle: {
-      backgroundStyle: resolvedLevel < 0
-        ? { backgroundColor: Color.Transparent, maskExtraHeight: 0 }
-        : { maskExtraHeight: 0 },
+      backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: 0 },
       contentStyle: textStyle
     }
   };
   if (resolvedLevel >= 0) {
     style.systemMaterialEffect = hdsMaterialParams(resolvedLevel);
   }
-  // 三十九改：maskExtraHeight: 0——官方默认 32vp 蒙层下探会盖住首卡上沿（决明真机反馈
-  //「首卡进入渐变模糊区」）；标题栏区模糊/材质采样不受影响（滚动内容滚入标题栏区仍被模糊）
+  // 标题栏下方自定义区（用途/算式/收起口径见函数头第 7 参注释）——不传 = 标题栏结构与既有逐字一致
+  if (bottomBuilder) {
+    titleBarContent.bottomBuilder = bottomBuilder;
+  }
+  // enableComponentSafeArea: true = 内容区避让标题栏（官方指南示例同款）；maskExtraHeight 缘由见上方
   return { enableComponentSafeArea: true, content: titleBarContent, style: style };
 }
 
-// 面板 SheetOptions（官方标准双停靠位 + 显式遮罩色 + 弹层族材质（overlayMaterial，基准
-// THICK 随沉浸光感总档；★ 2026-09-22 决明指令；「无」档 Material.empty → 官方语义下材质
-// 关闭、backgroundColor 恢复生效，即实底回退路径）；maskColor 与页面其余弹层同源
-//（Theme.SHEET_MASK_COLOR）。
-// ★ onWillDismiss（可选，37 改 onDisappear → 43 改换用）：手势关闭（遮罩点击/下滑/系统
-// 返回键）在**关闭动画开始前**同步回调（d.ts 实锤：onWillDismiss @since 12；
-// onDisappear 是「动画结束后才回调」——43 改竞态根因：A 关闭动画结束时的迟到回调把
-// sheetShow 回写 false，快速打开的 B 被误杀自动收起）。在此回写显示状态 = 手势关闭路径
-// 全部动画前同步置 false，无迟到回调窗口：「关闭再开不弹」（37 改真机复现：sheetShow 残留
-// true 值不变不触发刷新）继续解决，且「关 A 立即开 B」不再竞态。代码置 false（xmark/
-// 选中）不触发本回调（且这两路径已在代码侧同步置 false）。回调须幂等（关闭后置 false，
-// 面板已 false 时赋值无副作用）
+// 面板 SheetOptions（官方标准双停靠位 + 显式遮罩色 + 面板底材质 sheetMaterial〔基准
+// ULTRA_THICK 随总档，「无」档 Material.empty = 材质关闭、backgroundColor 恢复生效即实底
+// 回退〕；maskColor 与页面其余弹层同源 Theme.SHEET_MASK_COLOR）。
+// ★ onWillDismiss（可选）：手势关闭（遮罩/下滑/返回键）在**关闭动画开始前**同步回调
+//（d.ts 实锤；onDisappear 是动画结束后才回调——其迟到回调把 sheetShow 回写 false 会误杀
+// 快速打开的下一个面板）。在此回写显示状态 = 手势路径全部动画前同步置 false，「关 A 立即
+// 开 B」无竞态。代码置 false（xmark/选中）不触发本回调。回调须幂等。
+// ★ 关闭链统一件（全仓挂载点一体收口）：①可见性一律 `$$` 布尔双向（程序化关闭 = 赋
+// false，官方示例唯一形态）；②onWillDismiss 回调内调 action.dismiss() 放行（官方《绑定
+// 半模态页面（bindSheet）》「二次确认能力」节：注册后所有关闭操作都需经 dismiss()，漏调
+// 则关不掉）；放行两变体——零暂存站点恒放行，确认站点确认通过才放行；③关闭恒不复位内容
+// 形态（关闭写点只置可见性，禁写内容形态串）；④下拉回弹口径——缺省直落不回弹，含二次
+// 确认的形态传 pullSpringBack=true 保留官方回弹。
 // detents 元组类型（SheetOptions.detents = [第一档, 第二档?, 第三档?]，d.ts 实锤非数组）
 export type SheetDetents = [string | number | Resource, (string | number | Resource)?,
   (string | number | Resource)?];
 
-// ★ 2026-09-15（决明指令「选择模型半模态默认展开全屏、取消半屏态、全屏下拉直接收起」）：
-// **全屏单挡位** = 唯一挡位 LARGE——开局即全屏（API 参考原文「底部弹窗竖屏生效，元组中第一
-// 个高度为初始高度」；本场景即底部弹窗竖屏）+ 下拉无中间停靠直达关闭（无第二挡位可停；官方
-// FAQ 场景三原文「即使已经停靠在最小挡位高度，也能通过滑动弹窗继续下拉，松手后系统会依据
-// 下拉速度和距离，关闭半模态弹窗或者是回弹到最小挡位高度」）。单一来源：选择模型面板三站点
-// （对话页 / 助手模型设置 / 功能模型）共用本常量，改此一行三处同效——档位是 bindSheet 宿主
-// 参数，不在面板件（ModelPickerSheet）内部。
+// ★ 全屏单挡位（决明指令「选择模型半模态默认展开全屏、取消半屏态、全屏下拉直接收起」）：
+// 唯一挡位 LARGE = 开局即全屏（元组第一高度即初始高度）+ 下拉无中间停靠直达关闭（官方
+// FAQ 场景三：停靠最小挡位后仍可继续下拉关闭或回弹）。选择模型面板三站点（对话页 / 助手
+// 模型设置 / 功能模型）共用本常量，改此一行三处同效——档位是 bindSheet 宿主参数，不在
+// 面板件（ModelPickerSheet）内部。
 export const DETENTS_FULL: SheetDetents = [SheetSize.LARGE];
 
+// pullSpringBack（第三参；缺省 = 项目口径「下拉直落不回弹」）：缺省时注册空
+// onWillSpringBackWhenDismiss（官方指南：声明后回弹须自行 springBack() 处理，无此逻辑则
+// 不回弹；不注册则官方默认「先回弹再决定是否关闭」= 上下闪动两步，judder 源；d.ts @since 12）。
+// ★ 传 true = 保留官方回弹——只给含二次确认（下拉被拦）的形态用：确认弹窗「取消」后面板
+// 须靠预回弹复位；零暂存（下拉即关）形态一律缺省直落。保留回弹三形态 = 获取模型 /
+// 功能模型页提示词 / 对话页压缩，其余全量直落。
+// onDisappear（第四参，可选）：离场动效**结束后**回调——给「列表行连续点开同一面板」形态
+// 做「等动效结束再补开」的完成信号（官方：离场动效不支持打断，须完全结束才可再次拉起；
+// 消费方 = 会话轨迹页 / 请求日志页）。其余站点不传 = 零行为变化。
 export function sheetPanelOptions(onWillDismiss?: (action: DismissSheetAction) => void,
-  detents?: SheetDetents): SheetOptions {
+  detents?: SheetDetents, pullSpringBack?: boolean,
+  onDisappear?: () => void): SheetOptions {
   const options: SheetOptions = {
     maskColor: SHEET_MASK_COLOR,
     showClose: false,
     enableFloatingDragBar: true,
-    // 「无」档专用实底回退（材质生效时官方忽略 backgroundColor、Material.empty 时恢复；
-    // 官方《组件适配沉浸光感》「弹出框」节）
+    // 「无」档专用实底回退（材质生效时官方忽略 backgroundColor、Material.empty 时恢复）
     backgroundColor: $r('app.color.page_bg'),
-    systemMaterial: overlayMaterial()
+    systemMaterial: sheetMaterial(),
+    // ★ 滚动区跟手刷新（决明真机报障 + 指令）：官方默认 FOLLOW_DETENT = 滑动结束后才更新
+    // 内容显示区域——拖拽换档期间内容区不跟手、旧底边以下整片空白；CONTINUOUS = 滑动过程
+    // 中持续刷新（出处 = API 参考《半模态转场》scrollSizeMode + d.ts 枚举注释）。全站统一
+    // 设于本函数 = 全工程唯一 SheetOptions 构造点；单档位面板无换档拖动，本项空转无副作用。
+    scrollSizeMode: ScrollSizeMode.CONTINUOUS
   };
-  // 四十改：detents 参数化——默认官方双停靠位 MEDIUM/LARGE（★ 2026-09-15 自检轮订正：唯一
-  // 吃本默认者 = FunctionalModelPage 提示词编辑面板〔传 undefined 分支〕，不是「列表类面板」
-  // ——列表类面板今已全部显式传参）。★ 同日：提示词/附件面板（ChatPage 'prompt' 分支）改传
-  // 同值 [MEDIUM, LARGE]——决明指令「默认半屏、仍支持拉全屏」，原 [FIT_CONTENT, LARGE] 档位
-  // 自此零在役消费者；选择模型面板改传 DETENTS_FULL 全屏单挡位，不再吃本默认
+  // 默认官方双停靠位 MEDIUM/LARGE——唯一吃本默认者 = FunctionalModelPage 提示词编辑面板
+  //（undefined 分支）；提示词/附件面板与它同值 [MEDIUM, LARGE]（决明指令「默认半屏、仍
+  // 支持拉全屏」），选择模型面板传 DETENTS_FULL 全屏单挡位
   if (detents !== undefined) {
     options.detents = detents;
   } else {
@@ -166,24 +189,29 @@ export function sheetPanelOptions(onWillDismiss?: (action: DismissSheetAction) =
   if (onWillDismiss !== undefined) {
     options.onWillDismiss = onWillDismiss;
   }
+  if (pullSpringBack !== true) {
+    // 缺省直落口径见函数头：空实现不调 springBack()，无「回弹再关」两步闪动
+    options.onWillSpringBackWhenDismiss = (_spring: SpringBackAction): void => {
+    };
+  }
+  if (onDisappear !== undefined) {
+    options.onDisappear = onDisappear;
+  }
   return options;
 }
 
-// ── 关闭前确认弹窗（形制单源；2026-09-23 半模态关闭确认笔）──
+// ── 关闭前确认弹窗（形制单源）──
 // 站点只供文案（SheetCloseConfirm 四字段），键序 / 键色 / 取消语义三件固定在本函数：
-// · 键序 = [取消, 确认]（确认在右）：取消键 sys.color.font_secondary、确认键 font_primary
-//  （压缩面板 2026-09-23 修复笔现役口径，统一到它保三站点同形）；
+// · 键序 = [取消, 确认]（确认在右）：取消键 sys.color.font_secondary、确认键 font_primary；
 // · 返回值 = 用户是否选「确认」（放弃改动 / 停止生成）：true 才放行关闭；
 // · 取消语义——三种「非确认出口」全部落「不关面板」：①点蒙层关掉确认弹窗 ②弹窗期间按系统
 //   返回（autoCancel 官方默认只关弹窗——**勿改 false**，那会把出口①变成无出口死结）
-//   ③弹窗自身异常（catch 返回 false）。★ 2026-09-23 自检轮订正：出口③**不弹提示**（只是不关
-//   面板，用户看到面板还在会再点一次），故这里**不是**「P0-1 不静默」的适用面——它的取舍是
-//   「宁可多问一次，不可误弃」，本件全程零静默数据丢弃；原注释自称「P0-1 不静默」与此不符，
-//   已按自检轮实测（异常路径无 toast）改为现述。
-// 判据来源：官方《绑定半模态页面（bindSheet）》「二次确认能力」节原文——「声明 onWillDismiss
-// 接口后，半模态页面的所有关闭操作，包括侧滑、点击关闭按钮、点击蒙层和下拉关闭，都需通过调用
-// dismiss 方法来实现。若未实现此逻辑，半模态页面将无法响应上述关闭操作。」（本仓自绘关闭键
-// 不进该漏斗，故站点须把标题栏关闭键一路也指到同一收口方法）
+//   ③弹窗自身异常（catch 返回 false，不弹提示——只是不关面板，用户看到面板还在会再点一次；
+//   取舍是「宁可多问一次，不可误弃」，全程零静默数据丢弃）。
+// 判据来源：官方《绑定半模态页面（bindSheet）》「二次确认能力」节——「声明 onWillDismiss
+// 接口后，半模态页面的所有关闭操作……都需通过调用 dismiss 方法来实现。若未实现此逻辑，
+// 半模态页面将无法响应上述关闭操作。」（本仓自绘关闭键不进该漏斗，故站点须把标题栏关闭
+// 键一路也指到同一收口方法）
 export interface SheetCloseConfirm {
   title: string;
   message: string;

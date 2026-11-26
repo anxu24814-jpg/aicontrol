@@ -1,52 +1,40 @@
-// 知识库条目编辑页（2026-09-21 世界书知识库首版，任务书-世界书知识库-20260921 §4.5③）：
-// 条目三字段（名称 / 关键词 / 正文）与附件文件的新建与编辑——param = KnowledgeEditParam
-//（bookId + entryId，'' = 新建）。
-// ★ 2026-09-23 知识库文件笔：整页由「单页单卡表单」改**三段分段胶囊**（条目 / 正文 / 文件），
-// 骨架照 SkillEditPage（Stack 叠〔内容滚动层 + 分段胶囊悬浮固定层〕，胶囊吸顶不随内容滚，参数
-// 单源在 SegmentBar）。原「不做分段页签：只有三个字段，分段是纯噪声」的判断随本次新增第三段
-// （文件）而失效——三段里第三段与前两段是**异构内容**（字段 / 长文 / 附件清单），分段才有收益。
-// · ★ 新建态两段（条目 / 正文）：附件要挂在条目行上，尚未落库时没有可配对象——第三段整段
-//   不出现，而不是「出现了但空」（SkillEditPage 同款口径）。落库后仍 pop 回清单页，附件在
-//   重进编辑页时配。
-// · 标题栏「保存」单键（checkmark；HDS 官方菜单数组 + 回退 nav 数组两条路径都给）——**保存
-//   的是条目三字段**，附件在自己的编辑页里即时落库（两处职责不串）。
-// · 保存链：加载闸（编辑态必须读回行后才许保存——未加载完落库会把空表单覆盖既有行，
-//   SkillEditPage 的 O-13 闸同款）→ 名称校验（去空格为空即 toast 并中断，P0-1 不静默）
-//   → **重名拦截**（2026-09-21 知识库第二笔下本：同书同名 toast 拦截不落库，判定单源 =
+// 知识库条目编辑页：条目三字段（名称 / 关键词 / 正文）+ 注入配置 + 触发精度 + 附件文件，
+// param = KnowledgeEditParam（bookId + entryId，'' = 新建）。
+// 骨架照 SkillEditPage：三段分段胶囊（条目 / 正文 / 文件），经标题栏下方带承载（公共件
+// PageTopSegmentBand），吸顶不随内容滚，参数单源在 SegmentBar。分段成立的理由 = 第三段与字段/长文
+// 是异构内容（附件清单）。新建态两段（条目 / 正文）——附件要挂在条目行上，未落库时第三段
+// 整段不出现，落库后 pop 回清单页，重进编辑页再配附件。
+// · 标题栏「保存」单键（checkmark；HDS 菜单数组），**只保存条目
+//   三字段**；附件在文件编辑页里即时落库（两处职责不串）。
+// · 保存链：进行中闸（防双击并发过查重窗双插）→ 加载闸（编辑态读回行后才许保存，否则空表单
+//   覆盖既有行）→ 名称校验（空即 toast 中断）→ 重名拦截（同书标题唯一，判定单源 =
 //   KnowledgeText.knowledgeTitleTaken）→ insert（source='user'）/ update（0 行 affected 由
 //   KnowledgeDb 抛中文错）→ toast「已保存」→ pop({ saved: true }) 触发书详情页 onPop 重拉。
-// · 关键词字段是**可选**的（仅参与检索加权与展示，不接触发逻辑）；正文也允许为空
-//   （条目至少有个名字就能在清单里看见并按名称命中）。
-// · 附件链（2026-09-23 知识库文件笔）：文件卡列出本条目附件（件名 + 字数 + 行内编辑/删除图标
-//   键）+ 「新建文件」「上传文件」并排胶囊双键；上传 = DocumentViewPicker 免权限选择器 → 读
-//   UTF-8（KnowledgePack.readPickedKnowledgeFileText 带字节粗拦与乱码判拒）→ 校验 → **带初值
-//   进文件编辑页**让用户先过目再存（SkillEditPage 同款审阅哲学）。件名查重与件数上限两道硬拒
-//   在 KnowledgeDb 写入侧（本页只做入口拦截与文案）。
-// · 卡内说明分层（2026-09-23 文案收束 + 同日字段标签补正）：多句的机制说明（是什么 / 为什么）
-//   收进卡标题行右端 ⓘ 气泡（InfoHintButton 单源复用），卡面只留「输入时就用得到」的短句与
-//   **字段标签行**。★ 标签 ≠ 说明，收说明时不可连标签一起收：多字段卡（条目的名称 / 关键词）
-//   每个输入框头顶一个 13fp 灰标签（「标签在上 + 整宽输入框」，两字段各包一层 Column space 6），
-//   单字段卡（正文 / 附件文件）由卡标题承载标签——两者合起来 = 每个输入框都有**恒可见**的字段名
-//   （占位符在框内一有内容就不显示，只靠它认字段，编辑态两个框就分不清了）。形制先例 =
-//   ProviderConfigPanel.FieldInput「名称 / Base URL」、BalanceConfigPage.BalanceField、
-//   ModelEditPage 基础卡「模型 ID / 模型名称」，口径见 SearchEngineDetailPage 头注释「表单形制：
-//   卡标题即字段标签（标签在上 + 整宽输入框）」。正面依据另有《规范-列表卡片与组卡》§4.3
-//   「长说明文字一律收入板块头气泡，板块面只留标题」；宪法「功能设置卡布局次序」约束的是
-//   「说明小字垫在操作按钮行下方」，不适用于输入框的字段标签与字段说明。
+// · 关键词可选（参与检索加权与自动注入匹配）；正文也允许为空（有条目名就能在清单看见）。
+// · 附件链：文件卡列附件（件名 + 字数 + 行内编辑/删除图标键）+「新建文件」「上传文件」并排
+//   胶囊双键；上传 = DocumentViewPicker 免权限选择器 → UTF-8 读取（KnowledgePack 带字节粗拦
+//   与乱码判拒）→ 校验 → 带初值进文件编辑页让用户过目再存。件名查重与件数上限两道硬拒在
+//   KnowledgeDb 写入侧（本页只做入口拦截与文案）。
+// · 卡内说明分层：机制说明收进卡标题行右端 ⓘ 气泡（InfoHintButton 单源复用），卡面只留输入
+//   时用得上的短句与**字段标签行**（13fp 灰标签在上 + 整宽输入框，形制先例 =
+//   ProviderConfigPanel.FieldInput；也见 SearchEngineDetailPage 头注释「卡标题即字段标签」）。
+//   标签 ≠ 说明，收说明时不可连标签一起收——占位符一有内容就不显示，只靠它认字段。
+// · 注入配置独立成卡（三行常显由 PromptInjectConfig 承担）；正文卡字数计数在卡头；附件行带
+//   文件图标块。字段、校验与保存链如上。
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
-import { SegmentButtonV2Items, SymbolGlyphModifier } from '@kit.ArkUI';
+import { SegmentButtonV2Items } from '@kit.ArkUI';
 import { HdsNavigationMenuContentOptions } from '@kit.UIDesignKit';
 import { PageShell } from '../../common/PageShell';
 import { ROUTE_KNOWLEDGE_EDIT_PAGE, ROUTE_KNOWLEDGE_FILE_EDIT_PAGE } from '../../common/RouteNames';
 import {
-  CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor, SECTION_TITLE_FONTSIZE,
-  SEGMENT_BAR_HEIGHT
+  CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor, CARD_SECTION_TITLE_FONTSIZE,
+  SEGMENT_BAR_HEIGHT, wellBg, CARD_RADIUS
 } from '../../common/Theme';
-import { SegmentBar } from '../SegmentBar';
+import { PageTopSegmentBand } from '../SegmentBar';
 import {
-  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont,
-  fallbackButtonMaterial, fallbackButtonStateEffect, overlayMaterial
+  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonBgTinted, fallbackButtonFont, fallbackButtonFontTinted,
+  fallbackButtonMaterial, fallbackButtonMaterialTinted, fallbackButtonStateEffect, overlayMaterial
 } from '../../common/ImmersiveLevel';
 import {
   broadcastKnowledgeList, deleteEntryFile, insertEntry, KnowledgeEntryInput,
@@ -55,7 +43,8 @@ import {
 } from '../../common/store/KnowledgeDb';
 import { pickedKnowledgeName, readPickedKnowledgeFileText } from '../../common/KnowledgePack';
 import {
-  KNOWLEDGE_CONTENT_MAX, KNOWLEDGE_FILE_CONTENT_MAX, KNOWLEDGE_FILE_EXTS,
+  clampKnowledgePriority, clampKnowledgeScan, KNOWLEDGE_CONTENT_MAX,
+  KNOWLEDGE_FILE_CONTENT_MAX, KNOWLEDGE_FILE_EXTS,
   KNOWLEDGE_FILE_MAX_COUNT, KNOWLEDGE_KEYWORDS_MAX,
   KNOWLEDGE_TITLE_MAX, KnowledgeFileValidation, knowledgeTitleTaken,
   validateKnowledgeFileArgs
@@ -64,6 +53,11 @@ import { KnowledgeEditParam } from './KnowledgeBookPage';
 import { KnowledgeFileEditParam } from './KnowledgeFileEditPage';
 import { InfoHintButton } from '../InfoHintButton';
 import { ConfirmDialog } from '../chat/ConfirmDialog';
+// 注入配置组（复用提示词编辑页域件：@Link 三值 + 两回调，联动钳位照 PromptEditPage）
+import { PromptInjectConfig, sanitizeInjectPosition, sanitizeInjectDepth,
+  sanitizeInjectRole } from './PromptInjectConfig';
+import { INJECT_POSITION_HEAD, INJECT_ROLE_ASSISTANT,
+  INJECT_ROLE_SYSTEM } from '../../common/providers/RequestInject';
 
 // 标题栏「保存」单键（checkmark；SkillEditPage / MemoryEditPage 同款形制）
 function knowledgeSaveMenuHds(onSave: () => void): HdsNavigationMenuContentOptions {
@@ -77,16 +71,10 @@ function knowledgeSaveMenuHds(onSave: () => void): HdsNavigationMenuContentOptio
   } as HdsNavigationMenuContentOptions;
 }
 
-function knowledgeSaveMenuNav(onSave: () => void): NavigationMenuItem[] {
-  return [{
-    value: '保存',
-    symbolIcon: new SymbolGlyphModifier($r('sys.symbol.checkmark')),
-    action: onSave
-  } as NavigationMenuItem];
-}
-
 @Component
 export struct KnowledgeEditPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI；写库等数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
@@ -97,22 +85,42 @@ export struct KnowledgeEditPage {
   @State private title: string = '';
   @State private keywords: string = '';
   @State private content: string = '';
+  // 注入配置三值（启用开关已迁条目卡，本页不读写 enabled）：新建态默认 system/head/0；
+  // 编辑态从行读并经 sanitize 钳脏值
+  @State private injectRole: string = 'system';
+  @State private injectPosition: string = 'head';
+  @State private injectDepth: number = 0;
+  // 触发精度四态：数字字段 @State 存 string（number 无法表达空框，会被迫落 0）；保存时
+  // parseInt + clampKnowledgePriority/clampKnowledgeScan（归一单源在 KnowledgeText，禁本页另写钳位）
+  @State private matchCase: boolean = false;
+  @State private matchWhole: boolean = false;
+  @State private priorityText: string = '100';
+  @State private scanText: string = '8';
   // 附件文件清单（仅编辑态加载——新建态尚无条目行可挂文件，见文件头）
   @State private files: KnowledgeFileRow[] = [];
   // 分段页签选中项（0 条目 / 1 正文 / 2 文件——@State 驱动面板切换）
   @State private segIndex: number = 0;
-  // 加载完成闸（★ SkillEditPage 的 O-13 闸同款）：.catch 只 toast 而页面仍停在「编辑态空
-  // 表单」——此时用户填写保存会走 updateEntry(this.entryId) 命中真实行并覆盖其内容。
-  // 闸 = 未加载完成不许落库；新建态无待读行、显式置真；读成功置真；读失败保持假 = 保存链
-  // 首拦一道显式提示（不弹出用户，返回重进即可重读）。普通成员即可（不驱动 UI 勿 @State）
+
+  // 标题栏下方带承载（几何与带内下移量单源 = 公共件 PageTopSegmentBand）
+  @Builder
+  TopSegmentBand() {
+    PageTopSegmentBand({
+      items: this.entryId === '' ? this.tabItemsNew : this.tabItemsEdit,
+      selectedIndex: $segIndex
+    })
+  }
+  // 加载完成闸（SkillEditPage O-13 闸同款）：读失败时页面停在空表单，保存会 updateEntry 覆盖
+  // 真实行——未加载完成不许落库。新建态直接置真；普通成员（不驱动 UI 勿 @State）
   private loaded: boolean = false;
+  // 保存进行中闸（HttpTemplatePage F6 闸同款；普通成员）：查重与落库无 UNIQUE 兜底，双击快连
+  // 会并发过查重窗插两行同名——串行化，finally 复位
+  private saving: boolean = false;
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   // 文件卡双键胶囊的双态入参（内容区回退函数族，口径见 common/ImmersiveLevel.ets 头注释）
   @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-  // 分段页签选项（两套预建实例，build 内按 entryId 择一）：编辑态三段；新建态两段（附件要
-  // 挂在条目行上，没行就没有这一页，见文件头）。段数在本页生命周期内恒不变（entryId 构造后
-  // 不变，坑30），故非响应式成员即可
+  // 分段页签选项（两套预建实例按 entryId 择一）：编辑态三段、新建态两段。entryId 构造后不变
+  //（坑30），故用非响应式成员
   private tabItemsEdit: SegmentButtonV2Items = new SegmentButtonV2Items([
     { text: '条目' },
     { text: '正文' },
@@ -155,6 +163,9 @@ export struct KnowledgeEditPage {
     }
     queryEntry(this.entryId)
       .then((row: KnowledgeEntryRow | null): void => {
+        if (this.departed) {
+          return;
+        }
         if (row === null) {
           this.getUIContext().getPromptAction().showToast({ message: '条目不存在或已删除' });
           this.pathStack.pop();
@@ -163,10 +174,26 @@ export struct KnowledgeEditPage {
         this.title = row.title;
         this.keywords = row.keywords;
         this.content = row.content;
+        // 注入三值回填（同 PromptEditPage 口径：system 恒 head、assistant 无深度 0）。
+        // enabled 不回填也不写——开关已迁条目卡
+        const role: string = sanitizeInjectRole(row.injectRole);
+        this.injectRole = role;
+        this.injectPosition = role === INJECT_ROLE_SYSTEM ? INJECT_POSITION_HEAD
+          : sanitizeInjectPosition(row.injectPosition);
+        const rawDepth: number = sanitizeInjectDepth(row.injectDepth);
+        this.injectDepth = role === INJECT_ROLE_ASSISTANT && rawDepth === 0 ? 1 : rawDepth;
+        // 触发精度四值回填：布尔列 0/1（=== 1 为真）；两数字经 clamp 归一后写文本态
+        this.matchCase = row.matchCase === 1;
+        this.matchWhole = row.matchWhole === 1;
+        this.priorityText = String(clampKnowledgePriority(row.priority));
+        this.scanText = String(clampKnowledgeScan(row.scanDepth));
         this.loaded = true;
         this.reloadFiles();
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({
           message: '条目读取失败：' + (e as Error).message
         });
@@ -181,9 +208,15 @@ export struct KnowledgeEditPage {
     }
     queryEntryFiles(this.entryId)
       .then((rows: KnowledgeFileRow[]): void => {
+        if (this.departed) {
+          return;
+        }
         this.files = rows;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '附件读取失败：' + (e as Error).message });
       });
   }
@@ -197,9 +230,8 @@ export struct KnowledgeEditPage {
     });
   }
 
-  // 上传文件：DocumentViewPicker 免权限选择器（SkillEditPage.uploadFile 同款机制）→ 读 UTF-8
-  //（带字节粗拦与乱码判拒）→ 校验 → **带初值进文件编辑页**而不是直接入库——用户先过目再存。
-  // 扩展名白名单在读取前后各判一次：校验那一判当场给中文原因（别让用户填一半才被告知格式不对）
+  // 上传文件：选择器 → UTF-8 读取（字节粗拦与乱码判拒）→ 校验 → 带初值进文件编辑页审阅，
+  // 不直接入库。扩展名在校验处先判，当场给中文原因（别让用户填一半才被告知格式不对）
   private async uploadFile(): Promise<void> {
     if (this.files.length >= KNOWLEDGE_FILE_MAX_COUNT) {
       this.getUIContext().getPromptAction().showToast({
@@ -210,11 +242,13 @@ export struct KnowledgeEditPage {
     try {
       const ctx: common.Context = this.getUIContext().getHostContext() as common.Context;
       const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(ctx);
-      // 上传 = 单文件动作（后续只取 uris[0]）：不设 maxSelectNumber 时系统面板默认多选，
-      // 多选件除首个外静默丢失——SkillEditPage / DataSyncPage 同款守卫
+      // 单文件动作：不设 maxSelectNumber 时系统面板默认多选，除首个外静默丢失
       const selectOpts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
       selectOpts.maxSelectNumber = 1;
       const uris: Array<string> = await docPicker.select(selectOpts);
+      if (this.departed) {
+        return;
+      }
       if (uris.length === 0) {
         return; // 用户取消，静默
       }
@@ -227,6 +261,9 @@ export struct KnowledgeEditPage {
       }
       this.openFilePage('', v.name, v.content);
     } catch (e) {
+      if (this.departed) {
+        return;
+      }
       this.getUIContext().getPromptAction().showToast({ message: '读取文件失败：' + (e as Error).message });
     }
   }
@@ -245,17 +282,47 @@ export struct KnowledgeEditPage {
     this.fileDeleteTarget = null;
     deleteEntryFile(target.id)
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '已删除' });
         this.reloadFiles();
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '删除失败：' + (e as Error).message });
       });
   }
 
-  // 保存（校验 → 重名拦截 → 落库 → 广播 → 带 result 返回）
-  private save(): void {
-    // 加载完成闸（未加载完 = 表单是空初值，落库即覆盖既有行——SkillEditPage 同款理由）
+  // 保存（闸壳防重入见 saving 注释；校验 → 重名拦截 → 落库 → 广播 → 带 result 返回）
+  private async save(): Promise<void> {
+    if (this.saving) {
+      return;
+    }
+    this.saving = true;
+    try {
+      await this.saveInner();
+    } finally {
+      this.saving = false;
+    }
+  }
+
+  // 注入脏值钳位（PromptEditPage 同口径：system 恒 head、assistant 不含深度 0——注入成末条
+  // 会被 Gemini 拒且跨模型不一致）
+  private sanitizePositionValue(): string {
+    return sanitizeInjectRole(this.injectRole) === INJECT_ROLE_SYSTEM ?
+      INJECT_POSITION_HEAD : sanitizeInjectPosition(this.injectPosition);
+  }
+
+  private sanitizeDepthValue(): number {
+    const d: number = sanitizeInjectDepth(this.injectDepth);
+    return sanitizeInjectRole(this.injectRole) === INJECT_ROLE_ASSISTANT && d === 0 ? 1 : d;
+  }
+
+  private async saveInner(): Promise<void> {
+    // 加载完成闸（未加载完即空表单，落库会覆盖既有行）
     if (!this.loaded) {
       this.getUIContext().getPromptAction().showToast({
         message: '条目未加载完成，暂不能保存，请返回重进'
@@ -270,41 +337,65 @@ export struct KnowledgeEditPage {
     const input: KnowledgeEntryInput = {
       title: trimmedTitle,
       keywords: this.keywords.trim(),
-      content: this.content.trim()
+      content: this.content.trim(),
+      // 注入三值经 sanitize 钳位（与回填同口径）。enabled 不传：开关已迁条目卡（setEntryEnabled
+      // 单列写），updateEntry 见 undefined 保留原值，insertEntry 落默认 1
+      injectRole: sanitizeInjectRole(this.injectRole),
+      injectPosition: this.sanitizePositionValue(),
+      injectDepth: this.sanitizeDepthValue(),
+      // 布尔转 0/1；数字 parseInt + clamp 归一（NaN 落默认 100/8——InputType.Number 挡不住
+      // 越界与超长，clamp 必做）
+      matchCase: this.matchCase ? 1 : 0,
+      matchWhole: this.matchWhole ? 1 : 0,
+      priority: clampKnowledgePriority(Number.parseInt(this.priorityText, 10)),
+      scanDepth: clampKnowledgeScan(Number.parseInt(this.scanText, 10))
     };
-    // 重名拦截（决策 8：同一本书内条目标题唯一）——**新建与编辑两态同判**，编辑态排除自身 id
-    // （改回原名不算重名）。判定单源 = KnowledgeText.knowledgeTitleTaken（工具侧 manage_knowledge
-    // 同用，禁本页另写一套比较逻辑）；命中即 toast 并**中断**，不落库
-    queryEntries(this.bookId)
-      .then((entries: KnowledgeEntryRow[]): void => {
-        if (knowledgeTitleTaken(toEntryItems(entries), trimmedTitle, this.entryId)) {
-          this.getUIContext().getPromptAction().showToast({
-            message: '已有同名条目，换一个名称再试。'
-          });
-          return;
-        }
-        this.persist(input);
-      })
-      .catch((e: Object): void => {
+    // 重名拦截（同书标题唯一）：新建与编辑两态同判，编辑态排除自身 id。判定单源 =
+    // KnowledgeText.knowledgeTitleTaken（工具侧 manage_knowledge 同用，禁另写比较逻辑）；命中即中断
+    try {
+      const entries: KnowledgeEntryRow[] = await queryEntries(this.bookId);
+      if (this.departed) {
+        return;
+      }
+      if (knowledgeTitleTaken(toEntryItems(entries), trimmedTitle, this.entryId)) {
         this.getUIContext().getPromptAction().showToast({
-          message: '保存失败：' + (e as Error).message
+          message: '已有同名条目，换一个名称再试。'
         });
+        return;
+      }
+      // persist 内部自吞失败并 toast——await 恒 resolve，闸复位交给 save 壳的 finally
+      await this.persist(input);
+      if (this.departed) {
+        return;
+      }
+    } catch (e) {
+      if (this.departed) {
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({
+        message: '保存失败：' + (e as Error).message
       });
+    }
   }
 
-  // 落库（新增 / 编辑两路；source 只在新增时定——'user' = 用户从本页写，与助手经
-  // manage_knowledge 写入的 'assistant' 区分，照技能库内置标同思路）
+  // 落库（新增/编辑两路；source 只在新增时定 'user'，与助手 manage_knowledge 的 'assistant' 区分）
   private persist(input: KnowledgeEntryInput): void {
     const chain: Promise<void> = this.entryId === '' ?
       insertEntry(this.bookId, input, 'user').then((): void => {
       }) : updateEntry(this.entryId, input);
     chain
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '已保存' });
         broadcastKnowledgeList();
         this.pathStack.pop({ saved: true });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
       });
   }
@@ -312,25 +403,22 @@ export struct KnowledgeEditPage {
   @Builder
   CardTitleRow(title: string) {
     Text(title)
-      .fontSize(SECTION_TITLE_FONTSIZE)
-      .fontWeight(FontWeight.Bold)
+      .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+      .fontWeight(FontWeight.Medium)
       .fontColor(cardTitleColor())
       .width('100%')
   }
 
   // ── 第一段：条目（名称 + 关键词）──
-  // 两字段各配恒可见标签行（FieldInput 同构，理由与先例见文件头「卡内说明分层」条——占位符
-  // 填了内容就不显示，只靠它认字段，编辑态两个框分不清哪个是哪个）。说明分三层：①机制说明
-  //（一条写一个知识点 / 名称权重最高 / 命中读的是正文）收进标题行右端 ⓘ 气泡；②标签留在卡面；
-  // ③关键词那一句**必须留在卡面**不进气泡——KnowledgeText 的通用格式导出只收带关键词的条目，
-  // 「留空合法」这条得在看得见的地方讲清
+  // 两字段各配恒可见标签行（理由见文件头）；机制说明收进 ⓘ 气泡，关键词的「留空合法」句
+  // 必须留在卡面（KnowledgeText 的通用格式导出只收带关键词的条目）
   @Builder
   EntryCard() {
     Column({ space: 12 }) {
       Row() {
         Text('条目')
-          .fontSize(SECTION_TITLE_FONTSIZE)
-          .fontWeight(FontWeight.Bold)
+          .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+          .fontWeight(FontWeight.Medium)
           .fontColor(cardTitleColor())
           .layoutWeight(1)
         InfoHintButton({
@@ -364,26 +452,203 @@ export struct KnowledgeEditPage {
           .onChange((value: string): void => {
             this.keywords = value;
           })
-        Text('多个关键词用顿号或逗号分隔。留空则只按名称与正文检索。')
+        // 留空 = 不参与自动注入（检索语义不变）
+        Text('多个关键词用顿号或逗号分隔。留空则不会被自动注入，仍可按名称与正文检索。')
           .fontSize(13)
           .fontColor(cardDescColor())
           .width('100%')
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
+      // 启用开关在上一级条目卡（更多键左侧即时开关）：本页无启用行，保存不写 enabled 列
+      //（停用后不参与自动注入与工具检索，管理清单仍可见）
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
     }
     .width(CARD_PANEL_WIDTH)
     .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  // ── 触发设置卡：先决定怎么命中，再决定命中后放哪，故居注入方式卡之前（不加分段——与
+  // 名称/关键词同属配置表单，分段只在异构时用）。开关行 = Toggle 右置且是唯一控制面（行不可
+  // 点）；数字字段 = 标签在上 + 定宽输入框（76×36、TextAlign.Center、maxLength 4，形制照
+  // WebServiceSettingsPage 端口输入；onChange 只留数字、失焦 clamp 归一回写）。整词说明行
+  // 交代行为差异（中文键回落子串），必须留在卡面可见位 ──
+  @Builder
+  TriggerCard() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('触发设置')
+          .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(cardTitleColor())
+          .layoutWeight(1)
+        InfoHintButton({
+          text: '发送前用关键词匹配最近的消息。命中的条目按优先级从大到小参与注入，' +
+            '同优先级按知识库排列顺序在前。注入条数与总字数有上限，先装排在前面的。'
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      Text('匹配方式')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .width('100%')
+      Row() {
+        Text('区分大小写')
+          .fontSize(15)
+          .fontColor(cardTitleColor())
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.matchCase })
+          .onChange((isOn: boolean): void => {
+            this.matchCase = isOn;
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      Text('关闭后英文不区分大小写。')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .width('100%')
+      Row() {
+        Text('整词匹配')
+          .fontSize(15)
+          .fontColor(cardTitleColor())
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.matchWhole })
+          .onChange((isOn: boolean): void => {
+            this.matchWhole = isOn;
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      Text('只对英文单词生效，中文关键词仍按包含匹配。')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .width('100%')
+      Text('检查最近消息')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .width('100%')
+      Row({ space: 8 }) {
+        TextInput({ text: this.scanText })
+          .type(InputType.Number)
+          .maxLength(4)
+          .width(76)
+          .height(36)
+          .fontSize(15)
+          .textAlign(TextAlign.Center)
+          .onChange((value: string): void => {
+            // 只留数字（归一兜底在 blur 与保存链）
+            this.scanText = value.replace(/[^0-9]/g, '');
+          })
+          .onBlur((): void => {
+            // 失焦归一回写（端口输入同款）：空串保留空（保存时落默认），非空经 clamp 显示
+            if (this.scanText !== '') {
+              this.scanText = String(clampKnowledgeScan(Number.parseInt(this.scanText, 10)));
+            }
+          })
+        Text('条')
+          .fontSize(15)
+          .fontColor(cardTitleColor())
+        Text('在最近几条消息里找关键词，留空按 8 条。')
+          .fontSize(13)
+          .fontColor(cardDescColor())
+          .layoutWeight(1)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      Text('优先级')
+        .fontSize(13)
+        .fontColor(cardDescColor())
+        .width('100%')
+      Row({ space: 8 }) {
+        TextInput({ text: this.priorityText })
+          .type(InputType.Number)
+          .maxLength(4)
+          .width(76)
+          .height(36)
+          .fontSize(15)
+          .textAlign(TextAlign.Center)
+          .onChange((value: string): void => {
+            this.priorityText = value.replace(/[^0-9]/g, '');
+          })
+          .onBlur((): void => {
+            if (this.priorityText !== '') {
+              this.priorityText = String(clampKnowledgePriority(Number.parseInt(this.priorityText, 10)));
+            }
+          })
+        Text('命中多条时，数值大的先注入，同优先级按知识库排列顺序。')
+          .fontSize(13)
+          .fontColor(cardDescColor())
+          .layoutWeight(1)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+    }
+    .width(CARD_PANEL_WIDTH)
+    .padding(16)
+    .backgroundColor(cardBg(this.appColorMode))
+    .borderRadius(CARD_RADIUS)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  // ── 注入方式卡（自条目卡分家：条目管名称/关键词，注入管身份/位置/深度）；三行常显由
+  // PromptInjectConfig 承担，说明句在组件内 ──
+  @Builder
+  InjectCard() {
+    Column({ space: 12 }) {
+      this.CardTitleRow('注入方式')
+      PromptInjectConfig({
+        role: $injectRole,
+        injectPosition: $injectPosition,
+        depth: $injectDepth,
+        onRoleChanged: (role: string): void => {
+          this.injectRole = role;
+          // 联动：身份 system → 位置强制 head；assistant → 深度 0 钳位 1（域件口径）
+          if (role === INJECT_ROLE_SYSTEM) {
+            this.injectPosition = INJECT_POSITION_HEAD;
+          } else if (role === INJECT_ROLE_ASSISTANT && this.injectDepth === 0) {
+            this.injectDepth = 1;
+          }
+        },
+        onPositionChanged: (position: string, depth: number): void => {
+          this.injectPosition = position;
+          this.injectDepth = depth;
+        }
+      })
+    }
+    .width(CARD_PANEL_WIDTH)
+    .padding(16)
+    .backgroundColor(cardBg(this.appColorMode))
+    .borderRadius(CARD_RADIUS)
     .alignItems(HorizontalAlign.Start)
   }
 
   // ── 第二段：正文 ──
   @Builder
   ContentCard() {
-    Column({ space: 10 }) {
-      this.CardTitleRow('正文')
+    Column({ space: 12 }) {
+      // 标题行 + 字数计数（与提示词/技能正文卡同形）
+      Row({ space: 8 }) {
+        Text('正文')
+          .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(cardTitleColor())
+          .layoutWeight(1)
+        Text(this.content.length + ' / ' + KNOWLEDGE_CONTENT_MAX)
+          .fontSize(13)
+          .fontColor(cardDescColor())
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
       TextArea({ placeholder: '写下这条知识的正文，助手命中后会读到全文', text: this.content })
         .width('100%')
         .height(240)
@@ -391,11 +656,6 @@ export struct KnowledgeEditPage {
         .onChange((value: string): void => {
           this.content = value;
         })
-      Text(this.content.length + ' / ' + KNOWLEDGE_CONTENT_MAX)
-        .fontSize(13)
-        .fontColor(cardDescColor())
-        .width('100%')
-        .textAlign(TextAlign.End)
       Text('正文是纯文本，写清术语含义、规则或背景即可。')
         .fontSize(13)
         .fontColor(cardDescColor())
@@ -404,21 +664,20 @@ export struct KnowledgeEditPage {
     .width(CARD_PANEL_WIDTH)
     .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(HorizontalAlign.Start)
   }
 
   // ── 第三段：附件文件组卡（仅编辑态可达）──
-  // 行 = 件名 + 字数 + 两个行内图标键（编辑 / 删除）；下方「新建文件」「上传文件」并排胶囊
-  // 双键（行内图标键形制与 SkillsEditPage 文件卡逐字同源）。标题行右端 ⓘ 气泡承载格式支持
-  // 说明（卡面只留标题与操作，说明按需展开——InfoHintButton 单源复用勿另起气泡件）
+  // 行 = 件名 + 字数 + 行内图标键（编辑/删除，形制同 SkillsEditPage 文件卡）；格式说明收进 ⓘ
+  //（卡面只留标题与操作；InfoHintButton 单源复用勿另起气泡件）
   @Builder
   FilesCard() {
     Column({ space: 10 }) {
       Row() {
         Text('附件文件')
-          .fontSize(SECTION_TITLE_FONTSIZE)
-          .fontWeight(FontWeight.Bold)
+          .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+          .fontWeight(FontWeight.Medium)
           .fontColor(cardTitleColor())
           .layoutWeight(1)
         InfoHintButton({
@@ -436,6 +695,17 @@ export struct KnowledgeEditPage {
       } else {
         ForEach(this.files, (row: KnowledgeFileRow) => {
           Row({ space: 8 }) {
+            // 文件图标块（装饰块不是按钮；与技能附件页成对）
+            Column() {
+              SymbolGlyph($r('sys.symbol.doc_text'))
+                .fontSize(18)
+                .fontColor([cardDescColor()])
+            }
+            .width(32)
+            .height(32)
+            .borderRadius(9)
+            .backgroundColor(wellBg(this.appColorMode))
+            .justifyContent(FlexAlign.Center)
             Column({ space: 3 }) {
               Text(row.name)
                 .fontSize(15)
@@ -471,18 +741,17 @@ export struct KnowledgeEditPage {
           }
           .width('100%')
           .alignItems(VerticalAlign.Center)
-          // 键含 id + 件名 + 字数（行上屏的内容有哪几项，键就得含哪几项：改名而字数不变时
-          // 键不变会让 ForEach 不重建该行，列表里显示的还是旧名——坑16 家族）
+          // 键含 id + 件名 + 字数（上屏项全进键：漏项会让 ForEach 不重建行——坑16 家族）
         }, (row: KnowledgeFileRow): string => row.id + '|' + row.name + '|' +
           String(row.content.length))
       }
-      // ── 附件双键（并排胶囊；两键同形制 = 等宽次钮，不设主次——两件事都是「加一份」）──
+      // 附件双键（并排胶囊等宽淡彩；两键都是「加一份」，不设主次）
       Row({ space: 10 }) {
         Button('新建文件')
           .fontSize(14)
-          .fontColor(fallbackButtonFont(this.contentFallback, false))
-          .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
-          .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
+          .fontColor(fallbackButtonFontTinted(this.contentFallback))
+          .backgroundColor(fallbackButtonBgTinted(this.contentFallback, this.immersiveLevel))
+          .systemMaterial(fallbackButtonMaterialTinted(this.contentFallback, this.immersiveLevel))
           .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
           .layoutWeight(1)
           .onClick((): void => {
@@ -496,9 +765,9 @@ export struct KnowledgeEditPage {
           })
         Button('上传文件')
           .fontSize(14)
-          .fontColor(fallbackButtonFont(this.contentFallback, false))
-          .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
-          .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
+          .fontColor(fallbackButtonFontTinted(this.contentFallback))
+          .backgroundColor(fallbackButtonBgTinted(this.contentFallback, this.immersiveLevel))
+          .systemMaterial(fallbackButtonMaterialTinted(this.contentFallback, this.immersiveLevel))
           .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
           .layoutWeight(1)
           .onClick((): void => {
@@ -510,16 +779,14 @@ export struct KnowledgeEditPage {
     .width(CARD_PANEL_WIDTH)
     .padding(14)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(HorizontalAlign.Start)
   }
 
-  // 页面内容（坑39 红线：@BuilderParam content 位挂组件内 @Builder 方法）。
-  // 骨架 = SkillEditPage 同款吸顶穿透：Stack 叠〔内容滚动层 + 分段胶囊悬浮固定层〕——滚动层
-  // 从屏幕顶开始，顶部留白 = 胶囊悬浮位（topPad−8 钳位 0）+ 胶囊总高 SEGMENT_BAR_HEIGHT +
-  // 间距 28；胶囊层恒驻标题栏下沿、不随内容滚。
-  // 三段面板按 segIndex 单渲染（一页一板块）：切换 = 该段销毁、目标段重建——表单值全在父页
-  // @State，重建时以当前值重新构造输入件，来回切不丢内容；文件清单同理（@State files）
+  // 页面内容（坑39 红线：@BuilderParam content 位挂组件内 @Builder 方法）。骨架照 SkillEditPage
+  // 吸顶穿透：滚动层顶部留白 = 胶囊位（topPad−8 钳位 0）+ SEGMENT_BAR_HEIGHT + 28；分段胶囊
+  // 经标题栏下方带承载恒驻标题栏下沿（titleBarBottom → PageTopSegmentBand）。三段按 segIndex
+  // 单渲染，切换即销毁重建——表单值全在父页 @State，来回切不丢内容
   @Builder
   Content() {
     Stack({ alignContent: Alignment.Top }) {
@@ -527,10 +794,14 @@ export struct KnowledgeEditPage {
         Column({ space: 12 }) {
           if (this.segIndex === 0) {
             this.EntryCard()
+            // 先决定怎么命中，再决定命中后放哪——故居条目卡与注入方式卡之间
+            this.TriggerCard()
+            // 注入方式独立成卡（条目管名称/关键词，注入管身份/位置/深度）
+            this.InjectCard()
           } else if (this.segIndex === 1) {
             this.ContentCard()
           } else {
-            // 第三段（文件）只在编辑态可达——新建态页签只两段，segIndex 到不了 2
+            // 文件段仅编辑态可达（新建态只有两段，segIndex 到不了 2）
             this.FilesCard()
           }
         }
@@ -545,17 +816,7 @@ export struct KnowledgeEditPage {
       .height('100%')
       .align(Alignment.TopStart)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-
-      // ── 分段胶囊悬浮固定层（Stack 顶层后声明在上）：位置 = 标题栏下沿 + 蒙层渐隐边缘
-      // 8vp（回退路径 topPad=0 钳位 0）；本层仅悬浮定位与宽度约束，胶囊参数在 SegmentBar
-      Column() {
-        SegmentBar({
-          items: this.entryId === '' ? this.tabItemsNew : this.tabItemsEdit,
-          selectedIndex: $segIndex
-        })
-      }
-      .width(CARD_PANEL_WIDTH)
-      .margin({ top: Math.max(this.topPad - 8, 0) })
+      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
@@ -564,15 +825,20 @@ export struct KnowledgeEditPage {
   build() {
     PageShell({
       title: this.entryId === '' ? '新建条目' : '编辑条目',
+      // 标题栏下方带承载
+      titleBarBottom: (): void => {
+        this.TopSegmentBand();
+      },
       menuHds: knowledgeSaveMenuHds((): void => {
-        this.save();
-      }),
-      menuNav: knowledgeSaveMenuNav((): void => {
         this.save();
       }),
       content: (): void => {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

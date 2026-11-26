@@ -1,22 +1,12 @@
-// 服务商列表卡片段（2026-08-30 反馈轮 2 自 ProviderPage.ets 域级最小拆出——该页自包
-// PageShell 壳后 402 行触 400 红线；照 SessionCardItem 先例卡片独立成件，形态/回调不变）：
-// 名称 + 徽章行（协议名 / N 模型 / 余额（启用且查得时显示））+ 启用开关 + 四点菜单键。
-// ★ baseUrl 副行已移除（2026-08-30 领导指令：卡不显示 API 链接——地址在详情页可见）。
+// 服务商列表卡片段（自 ProviderPage 域级最小拆出，照 SessionCardItem 先例卡片独立成件）：名称 + 徽章行
+//（协议名 / N 模型 / 明文标记 / 余额）+ 启用开关 + 四点菜单键；baseUrl 副行不显示（地址在详情页可见）。
 // 纯展示 + 回调上行（开关落库/菜单/跳转编排在 ProviderPage）。
-// ★ 2026-08-30 数据自持有重构（领导「手动刷新也不对，退回设置页再回才变」驱动——根因
-// 定稿：@BuilderParam content（PageShell.content）内组件入参 @Prop 不随父 @State 更新，
-// 多轮 @Prop/onPop/刷新键修复全中此传播链；订阅式 @Link/@StorageProp 与 ForEach 行增删
-// 均正常）——结构性解：行显示数据（名称/protocol/模型计数/余额徽章）改卡内自持有
-// @State + 自拉库（queryProviders + queryBalanceState + queryModels）。
-// ★ 坑16·2026-08-30 二次修复（领导「仍 0 模型/余额不变」驱动）：tick 广播在 push 页内
-// @StorageProp @Watch 实测不触发（hilog 取证从未见 tick 重拉），且徽章 @Builder 值参
-// 直调 = 按值快照——状态更新时 Builder 内 UI 不重渲、冻结在首帧值（官方按值传参规则；
-// 「复进管理页正常」= 异步赋值赶在首帧前混入创建值的假象）。刷新链收敛为：管理页
-// reload 自增 cardEpoch → ForEach 键含纪元整卡重建（aboutToAppear 重拉）+ 详情/排序页
+// ★ 数据自持有：@BuilderParam content（PageShell.content）内组件入参 @Prop 不随父 @State 更新——行显示数据
+//（名称/protocol/模型计数/余额徽章）改卡内 @State + 自拉库（queryProviders + queryBalanceState + queryModels）。
+// ★ 坑16：tick 广播在 push 页内 @StorageProp @Watch 实测不触发，且徽章 @Builder 值参直调 = 按值快照（冻结在
+// 首帧值）。刷新链 = 管理页 reload 自增 cardEpoch → ForEach 键含纪元整卡重建（aboutToAppear 重拉）+ 详情/排序页
 // onPop 回 reload；徽章行改 ForEach（键 = 文本本身，文本变即重建子项）。
-// row（普通成员）仅承担行定位/开关/菜单/跳转（id/enabled），自展示字段起显示兜底
-//（自拉完成前显示 row 初值或占位）。
-// ★ 拖拽手柄/「使用中」/「已停用」徽章移除口径见旧注（反馈轮 6/9/11 定稿）。
+// row（普通成员）仅承担行定位/开关/菜单/跳转（id/enabled），自展示字段起显示兜底（自拉完成前显示 row 初值/占位）。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -26,40 +16,34 @@ import { BalanceState, queryBalanceState } from '../../common/store/ProviderBala
 import { ENDPOINT_CHAT, PROTOCOL_OPENAI, protocolLabel } from '../../common/providers/AiTypes';
 import { KEY_PICK_ROTATE } from '../../common/store/ProviderKeyDb';
 import { CLEARTEXT_BADGE_TEXT, isPublicCleartextEndpoint } from '../../common/providers/EndpointPolicy';
-import { badgeBg, cardBg, cardDescColor, cardTitleColor, LIST_CARD_TITLE_FONTSIZE } from '../../common/Theme';
+import { badgeBg, cardBg, cardDescColor, cardTitleColor, LIST_CARD_TITLE_FONTSIZE, CARD_RADIUS } from '../../common/Theme';
 
-// （坑16·2026-08-30：PROVIDER_CARD_REFRESH_KEY tick 广播已删——push 页内
-// @StorageProp @Watch 实测不触发（管理页属 Navigation push 页）；行刷新改 =
-// 管理页 reload 自增 cardEpoch 进 ForEach 键整卡重建 + 详情页 onPop 回 reload，
-// 见 ProviderPage 头注释）
-
-// 打点 TAG（2026-08-30「刷新后行内数据不变」定位桩：运行日志页按 TAG 过滤）
+// 打点 TAG（「刷新后行内数据不变」定位桩：运行日志页按 TAG 过滤）
 const DOMAIN: number = 0xD5A5;
 const TAG: string = 'ProviderCardItem';
 
 // 服务商卡片（自持有展示数据 + 回调；徽章行 = 协议名 / N 模型 / 余额）
 @Component
 export struct ProviderCardItem {
-  // 行定位与交互（id/enabled/sortOrder——自展示字段不读 row；★ 与「行在场/归段/排序」
-  // 一同由父 rows 驱动，ForEach 键 = row.id 的增删序变已验有效）
+  // 页面存活守卫：置位后本组件迟到异步回调不写状态、不碰 UI、不上行；写库意图照常完成
+  private departed: boolean = false;
+  // 行定位与交互（id/enabled/sortOrder——自展示字段不读 row；行在场/归段/排序由父 rows 驱动，
+  // ForEach 键 = row.id 的增删序变已验有效）
   row: ProviderRow = { id: '', name: '', baseUrl: '', enabled: true, sortOrder: 0, createdAt: 0,
     balanceEnabled: false, balanceLastText: '', protocol: PROTOCOL_OPENAI, headers: '',
     endpoint: ENDPOINT_CHAT, promptCacheEnabled: false, promptCacheTtl: '5m', bodyOverrides: '',
-    keyPickMode: KEY_PICK_ROTATE };
+    keyPickMode: KEY_PICK_ROTATE, builtin: false };
   onOpen: (row: ProviderRow) => void = () => {
   };
   onToggle: (row: ProviderRow, isOn: boolean) => void = () => {
   };
   onMenu: (row: ProviderRow) => void = () => {
   };
-  // 卡片菜单锚点 id（openMenu TargetInfo 定位目标 = 本四点键——2026-08-30 反馈轮 8 领导
-  // 拍板：勿锚整卡，按钮卡内垂直居中，整卡锚点使菜单低于按钮 ≈30vp 观感偏低；空串 =
-  // 不定位，ProviderPage 恒传）
+  // 卡片菜单锚点 id（openMenu TargetInfo 定位目标 = 本四点键——勿锚整卡：按钮卡内垂直居中，整卡锚点使菜单
+  // 低于按钮 ≈30vp；空串 = 不定位，ProviderPage 恒传）
   menuAnchorId: string = '';
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // （坑16·2026-08-30：tick 广播订阅已删——push 页内 @StorageProp @Watch 实测不触发；
-  // 重拉 = 父页 ForEach 键含 cardEpoch 整卡重建，见 ProviderPage 头注释）
-  // 自持有展示数据（卡内自拉——不依赖父状态传播）
+  // 自持有展示数据（卡内自拉——不依赖父状态传播；tick 广播订阅已删，重拉经父页 ForEach 键含 cardEpoch）
   @State private name: string = '';
   @State private protocol: string = PROTOCOL_OPENAI;
   @State private balanceOn: boolean = false;
@@ -70,13 +54,16 @@ export struct ProviderCardItem {
     this.load();
   }
 
-  // 自拉（挂载 + 父页 ForEach 键含 cardEpoch 触发整卡重建——坑16 后唯一刷新链）：服务商行（queryProviders 过滤——用户手建小数据集，域内
-  //「查询有界」口径）→ 余额态 + 模型计数一次拉全；失败 toast 不静默（P0-1，用户再点
-  // 刷新键可重试）；行已删 = 父列表 reload 移除本卡，此处静默返回
+  // 自拉（挂载 + 父页 ForEach 键含 cardEpoch 整卡重建——坑16 后唯一刷新链）：queryProviders 过滤本行 →
+  // 余额态 + 模型计数一次拉全（用户手建小数据集，域内「查询有界」）；失败 toast 不静默（P0-1）；
+  // 行已删 = 父列表 reload 移除本卡，此处静默返回
   private load(): void {
     hilog.warn(DOMAIN, TAG, 'load 触发 rowId=%{public}s', this.row.id);
     queryProviders()
       .then(async (rows: ProviderRow[]): Promise<void> => {
+        if (this.departed) {
+          return;
+        }
         const row: ProviderRow | undefined =
           rows.find((item: ProviderRow): boolean => item.id === this.row.id);
         if (row === undefined) {
@@ -87,19 +74,24 @@ export struct ProviderCardItem {
         this.protocol = row.protocol;
         this.balanceOn = row.balanceEnabled;
         const st: BalanceState = await queryBalanceState(row.id);
+        if (this.departed) {
+          return;
+        }
         this.balanceText = st.lastText;
         this.modelCountState = (await queryModels(row.id, '')).length;
         hilog.warn(DOMAIN, TAG, '赋值完成 modelCount=%{public}d balance=%{public}s',
           this.modelCountState, this.balanceText);
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         hilog.error(DOMAIN, TAG, 'load 失败：%{public}s', (e as Error).message);
         this.getUIContext().getPromptAction().showToast({ message: '服务商卡刷新失败：' + (e as Error).message });
       });
   }
 
-  // 小徽章（文字胶囊；badgeBg 半透明灰底，文字 cardDescColor；仅经 ForEach 调用——
-  // 坑16，直调值参快照不重渲）
+  // 小徽章（文字胶囊；badgeBg 半透明灰底，文字 cardDescColor；仅经 ForEach 调用——坑16，直调值参快照不重渲）
   @Builder
   Badge(text: string) {
     Text(text)
@@ -110,10 +102,9 @@ export struct ProviderCardItem {
       .backgroundColor(badgeBg(this.appColorMode))
   }
 
-  // 徽章文本清单（ForEach 数据源；顺序 = 协议/模型计数/明文标记/余额；余额启用且查得时入列）
-  // ★ 「明文」标记（2026-09-24 明文放行治理笔 P0-1）：端点属「公网 + 明文」时常驻——存量
-  // 配置不追溯拦截，可见性由本徽章承担（判据单源 = EndpointPolicy，文案单源 = 其
-  // CLEARTEXT_BADGE_TEXT）；地址取行数据 row.baseUrl（父列表页构造，改地址必伴 reload 重建）
+  // 徽章文本清单（ForEach 数据源；顺序 = 协议/模型计数/明文标记/余额；余额启用且查得时入列）。
+  // ★「明文」标记：端点属「公网 + 明文」时常驻——存量配置不追溯拦截，可见性由本徽章承担（判据单源 =
+  // EndpointPolicy，文案单源 = CLEARTEXT_BADGE_TEXT）；地址取 row.baseUrl（父列表页构造，改地址必伴 reload）
   private badges(): string[] {
     const list: string[] = [protocolLabel(this.protocol), this.modelCountState + ' 模型'];
     if (isPublicCleartextEndpoint(this.row.baseUrl)) {
@@ -126,8 +117,11 @@ export struct ProviderCardItem {
   }
 
   build() {
-    // Button(Normal) 包裹 = 官方原生按压蒙层（2026-09-12 UI 同形异构归一笔 1——与详情页
-    // 各卡/会话卡同反馈；行内 Toggle 与四点键子组件先命中，嵌套点击关系不变）
+    // Button(Normal) 包裹 = 官方原生按压蒙层（与详情页各卡/会话卡同反馈；行内 Toggle 与四点键先命中）。
+    // ★ 拖拽例外：本卡所在列表可拖拽 ⇒ 外壳 Button 关原生按压（stateEffect(false)）——长按起手时按压态
+    // 仍「按下」，而拖拽预览由条目节点实时渲染 ⇒ 蒙层跟着浮起、越过点击阈值才变白（灰→白跳变）；反馈改由
+    // 「浮起」本身承担（坑58 同族：一处反馈已覆盖时另一处要关）。行内 Toggle/四点键不受影响（stateEffect 是
+    // 逐组件属性）；同页其它卡不在拖拽面，保持原按压蒙层——勿据此「统一」全仓
     Button() {
       Row({ space: 10 }) {
         Column({ space: 4 }) {
@@ -138,8 +132,7 @@ export struct ProviderCardItem {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
-          // 徽章行走 ForEach 键变重建（坑16：@Builder 值参直调 = 按值快照——状态更新时
-          // Builder 内 UI 不重渲，徽章冻结在首帧值；ForEach 键 = 文本本身，文本变即重建）
+          // 徽章行走 ForEach 键变重建（坑16：@Builder 值参直调 = 按值快照，徽章冻结在首帧值；键 = 文本本身）
           Row({ space: 6 }) {
             ForEach(this.badges(), (text: string) => {
               this.Badge(text)
@@ -155,8 +148,8 @@ export struct ProviderCardItem {
           .onChange((isOn: boolean): void => {
             this.onToggle(this.row, isOn);
           })
-        // 四点菜单键（dot_grid_2x2——对话页签更多键同符号；TEXTUAL 文字键形制）；挂菜单
-        // 锚点 id（ProviderCardMenu TargetInfo 按此定位，菜单右缘对按钮右缘、按钮下沿弹出）
+        // 四点菜单键（dot_grid_2x2——对话页签更多键同符号；TEXTUAL 文字键形制）；挂菜单锚点 id（菜单右缘对
+        // 按钮右缘、按钮下沿弹出）
         Button() {
           SymbolGlyph($r('sys.symbol.dot_grid_2x2'))
             .fontSize(18)
@@ -172,15 +165,20 @@ export struct ProviderCardItem {
       .alignItems(VerticalAlign.Center)
     }
     .type(ButtonType.Normal)
-    // 卡宽 = 列表内容区 100%（List padding 左右 16 承收窄——总边距 = 屏宽-32vp 与
-    // SessionCardItem 同款；★ 勿同时用 CARD_PANEL_WIDTH：与 List padding 叠加双重收窄
-    // 成屏宽-64；反馈轮 2「卡不居中」由 List padding + 100% 组合修复）
+    // 卡宽 = 列表内容区 100%（List padding 左右 16 承收窄——与 SessionCardItem 同款；勿同时用 CARD_PANEL_WIDTH：
+    // 与 List padding 叠加会双重收窄成屏宽-64）
     .width('100%')
     .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
+    // 关原生按压蒙层（理由见 build 头注释：按压态会跟浮起进拖拽预览；点开的按压反馈由页面转场承担）
+    .stateEffect(false)
     .onClick((): void => {
       this.onOpen(this.row);
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

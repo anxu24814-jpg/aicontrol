@@ -1,41 +1,36 @@
-// 图像编辑工具集（2026-08-21 新增，「编辑图片」功能图像管线）：
-// 解码(限尺寸) → 裁剪(applyCropSync 官方) → 模糊(drawing 库 BlurImageFilter 官方，2026-08-22
-// 由 effectKit 换入——黑边根因见 applyBlur 注释) → 遮罩(像素烧录自写) → 编码(ImagePacker)。
-// 全部官方 API（@kit.ImageKit + @kit.ArkGraphics2D），无 UI 纯工具；
-// 调用方：components/ImageEditPage.ets（裁剪）+ ImageAdjustPage.ets（调整/保存）+ BgCache.ets +
-// PageBackground.ets + BackgroundPanel.ets（沙箱文件管理/解码）。裁剪区域的像素坐标映射在页面层
-// 计算后经 cropPixelMap 执行（官方 applyCropSync，API 26 推荐姿势，旧 crop/cropSync 弃用）。
-// 性能约定：解码限尺寸（等比至 maxW 内）保证全流程单 PixelMap、内存可控（1080 级而非相册原图）；
-// 模糊/遮罩 0% 直接跳过（返回原引用/零操作），保存时一次性执行。
+// 图像编辑工具集（「编辑图片」功能图像管线）：解码(限尺寸) → 裁剪(applyCropSync 官方) →
+// 模糊(drawing 库 BlurImageFilter 官方，黑边根因见 applyBlur 注释) → 遮罩(像素烧录自写) →
+// 编码(ImagePacker)。全部官方 API，无 UI 纯工具；调用方：ImageEditPage / ImageAdjustPage /
+// BgCache / PageBackground / BackgroundPanel（背景链）+ PhotoEditPage / AttachmentPickCtrl
+//（待发图片链：裁剪页解码与裁剪、入列缩略图）。裁剪区域的像素坐标映射在页面层计算后经
+// cropPixelMap 执行（旧 crop/cropSync 弃用）。★ 两条链共用图像管线纯函数，**不共用定框策略**
+//（背景链 = 屏幕比例 previewBoxMetrics / 待发图片链 = 图片比例 photoBoxMetrics）。
+// 性能约定：解码限尺寸（等比至 maxW 内）保证全流程单 PixelMap、内存可控（1080 级而非相册
+// 原图）；模糊/遮罩 0% 直接跳过（返回原引用/零操作），保存时一次性执行。
 import { image } from '@kit.ImageKit';
 import { drawing } from '@kit.ArkGraphics2D';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { display } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { notifyBgChanged } from './BgRefreshBus';
 
-// 背景图沙箱文件管理（2026-08-21 唯一名方案，防「相同 URI 不触发 @StorageProp 刷新」——
-// 坑34：固定文件名覆盖 + file:// URI 每次都相同，第二次换图/编辑保存后已挂载页面的
-// PageBackground 不刷新（@StorageProp 相同字符串不触发），重建页面/重启才正常（真机复现）。
-// 方案：每次换图/编辑保存生成新文件名（时间戳），pageBg URI 必然变化必然刷新；
-// 旧文件经 cleanBgFiles 扫删（保留当前），沙箱确定性有界。
-// ★ 2026-08-22 三文件方案（缩放状态恢复配套）：每次保存产出**三名一基数**（同一次保存共用
-// 时间戳基数，前缀互推）——显示图 page_background_<t>.jpg（pageBg 指向，烧录模糊/遮罩）/
-// 干净底图 page_background_clean_<t>.jpg（未烧模糊/遮罩的裁剪结果，参数可逆）/
-// 可编辑原图 page_background_src_<t>.jpg（本次编辑源原图复制，供下次「编辑当前背景」
-// 解码 + 恢复缩放/裁剪——原实现保存后原图被清，「编辑当前背景」只能对已裁图操作）。
-// 扫删前缀 page_background_ 天然覆盖三类；正常路径背景文件 = 3 个/背景。
-// 三处共用：BackgroundPanel 拷贝目标 / ImageEditPage 解码源与保存目标 / 清旧文件。
+// 背景图沙箱文件管理（坑34：固定文件名覆盖 + file:// URI 相同 → 已挂载页面的
+// PageBackground 不刷新〔@StorageProp 相同字符串不触发〕）：每次换图/编辑保存生成新文件名
+//（时间戳），URI 必然变化必然刷新；旧文件扫删保留当前，沙箱有界。
+// ★ 三文件方案：每次保存产出**三名一基数**（共用时间戳，前缀互推）——显示图
+// page_background_<t>.jpg（烧录模糊/遮罩）/ 干净底图 page_background_clean_<t>.jpg（未烧，
+// 参数可逆，调 0 = 真零模糊）/ 可编辑原图 page_background_src_<t>.jpg（本次编辑源原图复制，
+// 供下次「编辑当前背景」恢复缩放/裁剪）。扫删前缀 page_background_ 天然覆盖三类；
+// 正常路径背景文件 = 3 个/背景。三处共用：BackgroundPanel 拷贝目标 / ImageEditPage 解码源
+// 与保存目标 / 清旧文件。
 
-// ═════════════ 编辑参数记忆键（2026-08-21 新增——决明反馈：调整页保存的模糊/遮罩百分比
-// 未存储，保存退出再进回到 0）═════════════
-// 语义：记录**最后一次保存成功**的模糊/遮罩百分比（不保存的调整视为放弃）；
-// EntryAbility PersistentStorage.persistProp 注册（重启保留），ImageAdjustPage 保存成功时
-// 写入、挂载时读回恢复滑轨/预览（读写姿势同 ServiceConfig 的键）
+// 编辑参数记忆键（决策反馈补）：记录**最后一次保存成功**的模糊/遮罩百分比（不保存的调整
+// 视为放弃）；persistProp 注册重启保留，保存成功时写入、挂载读回恢复滑轨/预览
 export const EDIT_BLUR_PCT_KEY: string = 'editBlurPct';
 export const EDIT_MASK_PCT_KEY: string = 'editMaskPct';
-// 裁剪状态记忆（2026-08-22 新增——决明反馈「重进编辑缩放丢失、模糊遮罩还在」）：
-// number[] = [zoomPct(0~100), tx(vp), ty(vp)]，语义同模糊/遮罩 = 「最后一次保存成功值」；
-// 保存成功时写入（镜像值），编辑页 aboutToAppear 读回并恢复裁剪视图（同设备同源图精确，
-// 跨设备/换图由 clampTranslate 钳位兜底）；选图流程由编辑页判定清零（新图从 0 开始）
+// 裁剪状态记忆：number[] = [zoomPct(0~100), tx(vp), ty(vp)]，语义同上 =「最后一次保存成功值」；
+// 编辑页 aboutToAppear 读回恢复裁剪视图（跨设备/换图由 clampTranslate 钳位兜底）；选图流程
+// 由编辑页判定清零（新图从 0 开始）
 export const EDIT_CROP_STATE_KEY: string = 'editCropState';
 
 // 生成新背景文件名（时间戳毫秒 + 随机 4 位兜底——同毫秒连续换图也不会同名退化回同 URI）
@@ -53,10 +48,8 @@ export function bgFileNameFromUri(uri: string): string {
   return uri.substring(uri.lastIndexOf('/') + 1);
 }
 
-// 干净底图文件名推导（2026-08-21 双文件方案：保存时除烧录显示图外同时写未烧模糊/遮罩的
-// 干净裁剪结果底图，供重新编辑时解码——模糊/遮罩参数因此可逆，调 0 = 真零模糊）：
-// 与显示图一一对应（同一次保存共用 newBgFileName 生成的时间戳基数，前缀插入 clean_）。
-// 入参不以 page_background_ 开头（旧持久化纯路径/异常名）或已是 clean/src 名时返回 ''（调用方跳过）
+// 干净底图名推导（前缀插 clean_，与显示图共享时间戳基数，模糊/遮罩参数因此可逆）；入参非
+// page_background_ 开头（旧纯路径/异常名）或已是 clean/src 名时返回 ''（调用方跳过）
 export function cleanBgFileName(bgFileName: string): string {
   if (!bgFileName.startsWith('page_background_') || bgFileName.startsWith('page_background_clean_') ||
     bgFileName.startsWith('page_background_src_')) {
@@ -65,8 +58,7 @@ export function cleanBgFileName(bgFileName: string): string {
   return bgFileName.replace('page_background_', 'page_background_clean_');
 }
 
-// 可编辑原图文件名推导（2026-08-22 三文件方案）：前缀插入 src_，与显示图/干净底图共享时
-// 间戳基数（清洁管理：扫删保留名单/旧文件清理全部三名单向推导）。入参规则同 cleanBgFileName
+// 可编辑原图名推导（前缀插 src_，与显示图/干净底图共享时间戳基数）。入参规则同 cleanBgFileName
 export function srcBgFileName(bgFileName: string): string {
   if (!bgFileName.startsWith('page_background_') || bgFileName.startsWith('page_background_clean_') ||
     bgFileName.startsWith('page_background_src_')) {
@@ -76,11 +68,10 @@ export function srcBgFileName(bgFileName: string): string {
 }
 
 /**
- * 编辑页解码来源路径（2026-08-22 三文件方案扩容）：**可编辑原图（src_*）存在则解码原图**
- * ——「编辑当前背景」重进时基于未裁剪原图，缩放/平移状态得以精确恢复（用户核心诉求）；
- * 无 src（旧背景/选图首次）退回干净底图（上轮保存的裁剪结果，模糊/遮罩不二次叠加——
- * 调 0 = 真零模糊）；再退显示图。名推导失败（旧纯路径/异常名，返回 ''）或文件不存在
- * 均逐级回退——'' 会拼出目录路径且 accessSync 对目录返回 true，必须判空。仅存在性判断，O(1)。
+ * 编辑页解码来源路径：**可编辑原图（src_*）存在则解码原图**——「编辑当前背景」重进时基于
+ * 未裁剪原图，缩放/平移状态精确恢复（用户核心诉求）；无 src（旧背景/选图首次）退干净底图
+ *（上轮裁剪结果，模糊/遮罩不二次叠加——调 0 = 真零模糊）；再退显示图。名推导失败（返回
+ * ''）或文件不存在均逐级回退——'' 会拼出目录路径且 accessSync 对目录返回 true，必须判空。
  */
 export function resolveEditDecodePath(filesDir: string, uri: string): string {
   const baseName: string = bgFileNameFromUri(uri);
@@ -101,15 +92,14 @@ export function resolveEditDecodePath(filesDir: string, uri: string): string {
   return filesDir + '/' + baseName;
 }
 
-// 清空旧背景文件（换图/编辑保存成功后调用）：扫删指定目录内指定前缀的文件，保留 keepFileNames
-// 名单内的文件（空数组 = 全部清空；2026-08-21 双文件方案改数组——编辑保存需同时保留
-// 烧录显示图 + 干净底图两名）。2026-08-21 扫删自愈：原「精确删旧」在删除失败/换图后被杀
-// （set 新 URI 后、删旧前）会残留孤儿且永不清理——扫删每次全清、删除失败下次自愈，沙箱
-// 确定性有界。clean 底图名（page_background_clean_）以 page_background_ 开头，单前缀
-// 扫描天然覆盖两类文件。前缀为本应用私有（只有背景图写 page_background_*），无误删风险；
-// listFileSync + 循环 unlink 在用户换图动作时执行一次（文件数个位数），非轮询（P1-2）。
-function cleanBgFilesIn(dir: string, keepFileNames: string[], prefix: string): void {
+// 清空旧背景文件（换图/编辑保存成功后调用）：扫删目录内指定前缀的文件、保留 keepFileNames
+// 名单（空数组 = 全清；编辑保存需同时保留三名）。扫删自愈：删除失败/换图被杀残留的孤儿
+// 下次扫删清理（原「精确删旧」会永久残留）。前缀为应用私有（只有背景图写 page_background_*）
+// 无误删风险；listFileSync + 循环 unlink 在换图动作时执行一次（文件数个位数），非轮询。
+// 返回 = **实际删除成功**的文件数（回报数须量已发生的事实——删失败/目录读不到都不得计入）
+function cleanBgFilesIn(dir: string, keepFileNames: string[], prefix: string): number {
   const names: string[] = fs.listFileSync(dir);
+  let removed: number = 0;
   for (const name of names) {
     if (!name.startsWith(prefix)) {
       continue;
@@ -119,48 +109,62 @@ function cleanBgFilesIn(dir: string, keepFileNames: string[], prefix: string): v
     }
     try {
       fs.unlinkSync(dir + '/' + name);
+      removed++;
     } catch (e) {
       // 单文件删除失败仅日志（下次换图扫删自愈；禁止静默失败）
-      console.error('remove old background file failed: ' + name + ', ' + JSON.stringify(e));
+      hilog.error(0xD5A0, 'ImageEditUtil', 'remove old background file failed: %{public}s, %{public}s',
+        name, JSON.stringify(e));
     }
   }
+  return removed;
 }
 
-export function cleanBgFiles(filesDir: string, keepFileNames: string[]): void {
+export function cleanBgFiles(filesDir: string, keepFileNames: string[]): number {
   // 常规清理：filesDir 内正确命名的背景文件（前缀 page_background_，含 clean 底图）
-  cleanBgFilesIn(filesDir, keepFileNames, 'page_background_');
-  // 兼容清理（坑37）：2026-08-21 新名方案初期 filesDir 拼接缺 '/'，文件写在 filesDir 同级、
-  // 文件名成了 filespage_background_*（pageBg URI 曾指向它们）——扫父目录全删；
-  // '..' 路径若不被 fs 解析则 listFileSync 抛异常（catch 日志，功能无碍）
+  let removed: number = cleanBgFilesIn(filesDir, keepFileNames, 'page_background_');
+  // 兼容清理（坑37）：新名方案初期 filesDir 拼接缺 '/'，文件名成了 filespage_background_* 落
+  // 在 filesDir 同级（pageBg URI 曾指向它们）——扫父目录全删；'..' 路径不被解析则 listFileSync
+  // 抛异常（catch 日志，功能无碍）
   try {
-    cleanBgFilesIn(filesDir + '/..', [], 'filespage_background_');
+    removed += cleanBgFilesIn(filesDir + '/..', [], 'filespage_background_');
   } catch (e) {
-    console.error('clean legacy background files failed: ' + JSON.stringify(e));
+    hilog.error(0xD5A0, 'ImageEditUtil', 'clean legacy background files failed: %{public}s', JSON.stringify(e));
   }
+  return removed;
 }
 
-// 解码：URI（file:// 或沙箱路径）或字节（ArrayBuffer,Kimi 媒体用）→ PixelMap，等比限制在 maxW 内。
-// ★ 二四七改等比修正（决明「选图后预览与最终背景都拉伸,一直就有」根因）：desiredSize
-// 官方语义 = 「If the output size is different from the original size, the output is
-// **stretched or scaled** to the specified size」（d.ts 亲核,@ohos.multimedia.image:3283）
-// ——**非等比**,原正方形 (maxW, maxW) 把所有非方图拉变形,预览/保存/壁纸全链路继承
-// （原注释「官方等比缩放语义（只缩小不放大）」与 d.ts 相悖,坑52 家族新例：解码参数
-// 必须查 d.ts 不信注释）。现先 getImageInfo 读原图尺寸等比算目标：宽 ≤ maxW 不传
-// desiredSize（原尺寸解码,小图不再被拉大）;宽 > maxW 传精确等比 (maxW, round(h×maxW/w))
-// ——「scaled」等比无变形,超大图内存可控意图不变。
-// desiredPixelFormat 显式锁 RGBA_8888 保留（坑41 防御：下游 applyMask 字节级处理依赖格式确定）
-// fitLongEdge 可选参（二四七改,Kimi 媒体/缩略图内存场景用）：true = 限**最长边**（产物
-// 内接于 maxW² 正方形——横竖图内存同界,原「1280² 采样解码内存优化」意图的等比修正版）；
-// 缺省 false = 限宽（背景链语义:产物宽 = maxW,清晰度最优假设）。
-// ★ 2026-08-31 修正：本参此前仅有签名、函数体未分支（恒走限宽——与二四七改注释相悖，
-// dshinhm 同源同病）；附件链引入（长截图防爆内存）真实现之。false 路径行为不变（背景链
-// 既有语义零回归）；true 路径产物长边 ≤ maxW。
+// 恢复默认背景（**唯一实现单源**，背景面板恢复默认键与快速清理页两调用点共用同一行为）：
+// 四步＝①扫删全部背景文件（不清则「恢复默认→再换图」每轮 +1，违反数据有界）②清空 pageBg
+//③清零编辑参数记忆三键（参数跟随当前背景图，本处为**唯一显式清零点**——「新图从 0」走读
+// 侧判定不写 AppStorage）④由 pageBg 变化驱动 PageBackground 现读清空解码缓存（页面侧先置空
+// 显示引用再释缓存，安全）。文件删除失败仅日志不抛（显示回官方灰底不受影响，下次换图扫删
+// 自愈），故无失败返回。filesDir 传空串 = 只清指向与三键、不碰文件（调用点取不到上下文时的
+// 降级）。返回 = cleanBgFiles 实际删除成功的文件数（快速清理页回报用；不另起目录预扫计数
+//——预扫量的是「删前有哪些文件」，与「删掉了几个」在失败时不等价）
+export function resetPageBackground(filesDir: string): number {
+  const removed: number = filesDir === '' ? 0 : cleanBgFiles(filesDir, []);
+  AppStorage.setOrCreate<string>('pageBg', '');
+  AppStorage.setOrCreate<number>(EDIT_BLUR_PCT_KEY, 0);
+  AppStorage.setOrCreate<number>(EDIT_MASK_PCT_KEY, 0);
+  AppStorage.setOrCreate<number[]>(EDIT_CROP_STATE_KEY, [0, 0, 0]);
+  // 直达通知：恢复默认即点名全部存活实例重读重判（pageBg 已置空，load 走清空分支同步清缓存）
+  //——未来新调用方免逐点接线；import 零依赖叶子 BgRefreshBus 无环（防环论证见其头注释）
+  notifyBgChanged();
+  return removed;
+}
+
+// 解码：URI（file:// 或沙箱路径）或字节（ArrayBuffer）→ PixelMap，等比限制在 maxW 内。
+// ★ desiredSize 官方语义 = stretched or scaled（**非等比**，d.ts 亲核——坑52 家族新例：
+// 解码参数必须查 d.ts 不信注释）：先 getImageInfo 读原图尺寸等比算目标——宽 ≤ maxW 不传
+// desiredSize（原尺寸解码，小图不再被拉大）；宽 > maxW 传精确等比 (maxW, round(h×maxW/w))。
+// desiredPixelFormat 显式锁 RGBA_8888 保留（坑41 防御：下游 applyMask 字节级处理依赖格式
+// 确定）。fitLongEdge 可选参：true = 限**最长边**（产物内接于 maxW²——Kimi 媒体/长截图防爆
+// 内存场景）；缺省 false = 限宽（背景链语义，产物宽 = maxW 清晰度最优）
 export async function decodeScaled(uri: string | ArrayBuffer, maxW: number,
   fitLongEdge: boolean = false): Promise<image.PixelMap> {
   let source: image.ImageSource | null = null;
   try {
-    // createImageSource 多重载（string/ArrayBuffer/RawFileDescriptor）——union 实参编译器
-    // 无法选重载，typeof 收窄分支直取（两分支同返回类型 ImageSource）
+    // createImageSource 多重载——union 实参编译器无法选重载，typeof 收窄分支直取
     if (typeof uri === 'string') {
       source = image.createImageSource(uri);
     } else {
@@ -201,18 +205,13 @@ export function cropPixelMap(pm: image.PixelMap, region: image.Region): void {
   pm.applyCropSync(region);
 }
 
-// 模糊：百分比 0~100 → 模糊半径 = round(图宽 × pct / 1000)（1080px 宽时 100% ≈ 108px，
-// 视觉已很强）；官方 drawing 库 BlurImageFilter（native 实现，生成新 PixelMap）；0% 返回原引用零开销。
-// ★ 2026-08-22 弃用 effectKit 换 drawing 库（黑边根因）：effectKit blur 的 tileMode 官方仅支持
-// DECAL（越界采样按透明处理），模糊半径大时边缘一圈混入透明变暗、四边与中间观感不一致
-// （真机黑边，决明反馈，本地 SDK d.ts + 官方文档双确认）——drawing.ImageFilter.createBlurImageFilter
-// 完整支持 TileMode.CLAMP（越界用边缘颜色填充，业界标准：Photoshop / OpenCV BORDER_REPLICATE /
-// Android ScriptIntrinsicBlur 同语义），边缘与中心观感统一。链路：Canvas(out) 以新 PixelMap 为
-// 绘制目标 + Brush.setImageFilter + attachBrush → drawImage(pm, 0, 0) 1:1 绘制 → detachBrush，
-// 输出即目标 PixelMap（无像素读回搬运）。
-// sigma 标定（2026-08-22 三轮真机）：高斯视觉半径 ≈ 2σ，radius→sigma 系数 0.5 → 0.75 →
-// 1.0（决明拍板；100% 时 σ=108、视觉半径 ≈216px @1080 宽），全档位同比增强；
-// 如仍偏强/偏弱微调此常量即可（唯一标定点）
+// 模糊：百分比 0~100 → 模糊半径 = round(图宽 × pct / 1000)（1080px 宽时 100% ≈ 108px，视觉
+// 已很强）；0% 返回原引用零开销。★ 弃 effectKit 换 drawing 库（黑边根因）：effectKit blur
+// 仅支持 DECAL（越界采样按透明处理），大半径边缘混入透明变暗 = 真机黑边；drawing.
+// ImageFilter.createBlurImageFilter 完整支持 TileMode.CLAMP（越界用边缘色填充，业界标准），
+// 边缘与中心观感统一。链路：Canvas(out) + Brush.setImageFilter + attachBrush → drawImage
+// 1:1 → detachBrush，输出即目标 PixelMap。sigma 系数 1.0 为三轮真机标定（决明拍板）；如仍
+// 偏强/偏弱微调此常量（唯一标定点）
 export async function applyBlur(pm: image.PixelMap, pct: number): Promise<image.PixelMap> {
   if (pct <= 0) {
     return pm;
@@ -222,18 +221,16 @@ export async function applyBlur(pm: image.PixelMap, pct: number): Promise<image.
   const height: number = info.size.height;
   const radius: number = Math.max(1, Math.round(width * pct / 1000));
   const sigma: number = radius * 1.0; // 视觉标定系数（真机三轮，见函数头注释）
-  // 目标 PixelMap：editable 必须 true（Canvas 以 PixelMap 为绘制目标的要求）+ 显式锁 RGBA_8888
-  // （先例坑：不同解码器输出格式不同——文件名/通道序在此与源无关，输出格式恒定可预期）
+  // 目标 PixelMap：editable 必须 true（Canvas 以 PixelMap 为绘制目标的要求）+ 显式锁
+  // RGBA_8888（不同解码器输出格式不同，锁格式使输出恒定可预期）
   const opts: image.InitializationOptions = {
     editable: true,
     pixelFormat: image.PixelMapFormat.RGBA_8888,
     size: { width: width, height: height }
   };
   const out: image.PixelMap = await image.createPixelMap(new ArrayBuffer(width * height * 4), opts);
-  // ★ 异常兜底释放（2026-08-22 全面检查）：绘制段（Canvas/attachBrush/drawImage）抛异常时
-  // 调用方拿不到 out 引用无法释放（await 赋值未完成，调用方 out 变量保持 null）——此处
-  // try/catch 内释放后 rethrow，成对释放闭环（防 Use-After-Release / 泄漏双风险）；
-  // drawing Canvas/Brush/ImageFilter 官方无 release API（GC 回收），无需释放
+  // 异常兜底释放：绘制段抛异常时调用方拿不到 out 引用无法释放——try/catch 内释放后 rethrow
+  //（成对释放闭环）；drawing Canvas/Brush/ImageFilter 官方无 release API（GC 回收）
   try {
     const canvas: drawing.Canvas = new drawing.Canvas(out);
     const brush: drawing.Brush = new drawing.Brush();
@@ -243,17 +240,16 @@ export async function applyBlur(pm: image.PixelMap, pct: number): Promise<image.
     canvas.detachBrush();
   } catch (e) {
     out.release();
-    // ArkTS 限制 throw 仅接受 Error 类型值（arkts-limited-throw）——断言转换；
-    // 运行时对象不变（BusinessError 实例），调用方 catch 读 code/message 不受影响
+    // arkts-limited-throw：throw 仅接受 Error 类型值——断言转换；运行时对象不变（BusinessError
+    // 实例），调用方 catch 读 code/message 不受影响
     throw e as Error;
   }
   return out;
 }
 
-// 遮罩：像素级暗化——每像素 RGB × (1 − mask/100)，alpha 不变（每像素 4 字节；RGBA/BGRA 均兼容——
-// RGB 三通道等比缩放与通道顺序无关，2026-08-21 克隆物格式跟随源后覆盖两种序）。
-// 官方无现成「遮罩」API（brightness 语义不同），自写像素算法；0% 跳过零开销。
-// 性能：1080×1920 ≈ 200 万像素单次遍历，仅保存时执行一次（预估 <1s）
+// 遮罩：像素级暗化——每像素 RGB × (1 − mask/100)，alpha 不变（RGBA/BGRA 均兼容——RGB 三通道
+// 等比缩放与通道顺序无关）。官方无现成「遮罩」API（brightness 语义不同），自写像素算法；
+// 0% 跳过零开销。性能：1080×1920 ≈ 200 万像素单次遍历，仅保存时执行一次（<1s）
 export async function applyMask(pm: image.PixelMap, pct: number): Promise<void> {
   if (pct <= 0) {
     return;
@@ -271,10 +267,8 @@ export async function applyMask(pm: image.PixelMap, pct: number): Promise<void> 
   await pm.writeBufferToPixels(buf);
 }
 
-// 三名名单推导（2026-08-22 三文件方案配套，P2-4：BackgroundPanel/ImageAdjustPage 三处
-// 拼 keep 名单重复 3 次）：入参 = 背景文件名（display 名，可空/异常）；返回非空项数组
-// [display, clean, src]（各名推导失败返回 '' 时跳过；空名返回空数组——调用方直接塞
-// keep 名单即可，语义 = 该背景的三名全量保文件名）
+// 三名名单推导（P2-4：三处拼 keep 名单重复收口单源）：入参 = 背景显示名（可空/异常）；
+// 返回非空项数组 [display, clean, src]——调用方直接塞 keep 名单
 export function bgTripleNames(fileName: string): string[] {
   const names: string[] = [];
   if (fileName.length === 0) {
@@ -318,12 +312,9 @@ export interface ScreenMetrics {
   aspect: number;
 }
 
-// fd 级文件复制（2026-08-22 提取，P2-4：BackgroundPanel 媒体库拷贝 / ImageAdjustPage
-// srcCopy 两处同款三嵌套）：openSync READ_ONLY / CREATE|READ_WRITE + copyFileSync(fd, fd) +
-// 成对 closeSync；异常向上抛（调用方 catch 收敛）。
-// ★ src 必须走 openSync 取 fd——媒体库 URI 直接传 fs.copy/copyFile 字符串解析不可靠，
-// 真机报「路径或文件不存在」（2026-08-20 实测）；纯沙箱路径同样适用（同 fd 链路）。
-// 入参为路径或媒体库 URI 字符串；dest 须为可写沙箱路径
+// fd 级文件复制（openSync + copyFileSync(fd, fd) + 成对 closeSync；异常向上抛）。★ src 必须
+// 走 openSync 取 fd——媒体库 URI 直接传字符串解析不可靠，真机报「路径或文件不存在」；纯
+// 沙箱路径同链路适用。dest 须为可写沙箱路径
 export function copyFileExact(srcPath: string, destPath: string): void {
   const srcFile: fs.File = fs.openSync(srcPath, fs.OpenMode.READ_ONLY);
   try {
@@ -355,15 +346,10 @@ export interface BoxSize {
   h: number;
 }
 
-// 预览框几何：比例 = 设备宽高比（随设备自适应）；框高 = 屏高 − topPad − 预留——两页统一预留
-// （预留值历史：2026-08-22 由 190 调到 340（框从 ≈屏高 58% 缩到 ≈41%）——190 时预览
-// 放大发虚 + 提示/按钮挤出视口（决明真机反馈）；同日稍后回调至 300：决明反馈 340 框偏小。
-// 300 = 调整页内容池（提示 + 滑轨×2 ≈80 + 按钮 40 + space/间距 + 底部 padding 24 ≈214vp）
-// 留约 86vp 富余，**两页框完全一致**且均不溢出。
-// 2026-08-29 决明再反馈「300 框偏小，略微增大但按钮不得跑出屏幕」→ **预留 272**：
-// 框高 +28vp（≈+9%），调整页内容池富余 86→58vp 仍安全（裁剪页内容池更小富余更大）；
-// **上限 480vp**（防平板/大屏框过高——1280 高屏减两预留仍超 480 时钳位）；下限 200vp
-// 保留；宽 = 高 × aspect；宽屏（aspect>1）反向兜底（按屏宽 −32 反推，原逻辑保留）
+// 预览框几何：比例 = 设备宽高比（随设备自适应）；框高 = 屏高 − topPad − 预留 272（决明两轮
+// 真机反馈定标——190 时放大发虚 + 按钮挤出视口，340 偏小，272 = 调整页内容池留约 58vp 富余，
+// **两页框完全一致**且均不溢出）；上限 480vp（防平板/大屏框过高）、下限 200vp；宽 = 高 ×
+// aspect，宽屏（aspect>1）反向兜底（按屏宽 −32 反推）
 export function previewBoxMetrics(topPad: number): BoxSize {
   const m: ScreenMetrics = screenMetrics();
   let h: number = Math.min(480, Math.max(200, m.heightVp - topPad - 272));
@@ -374,5 +360,67 @@ export function previewBoxMetrics(topPad: number): BoxSize {
     h = w / m.aspect;
   }
   const box: BoxSize = { w: w, h: h };
+  return box;
+}
+
+// ── 待发图片编辑（拍照/相册选图后裁剪）共用几何 ──
+// 与 previewBoxMetrics 的分工：背景链框比例恒 = 屏幕比例（壁纸语义）；待发图片链框比例恒
+// = **图片自身比例**（照片语义，构图不被强制），且宽高各不超过屏幕 2/3。两链共用下面的
+// visibleCropRegion 与解码/裁剪/编码纯函数，不共用定框策略（判据不同，勿合并成一个函数）。
+export const PHOTO_BOX_SCREEN_RATIO: number = 2 / 3;
+// 框高除屏幕 2/3 外另留内容池：标题栏蒙层 topPad + 提示/滑轨/主按钮约 200vp，防平板与
+// 大字号下按钮挤出视口（照背景链 272vp 预留的同族做法，取更宽松值）
+export const PHOTO_BOX_CONTENT_RESERVE_VP: number = 200;
+// 待发图片解码上限（限最长边，保原比例）：与发送链 IMAGE_MAX_EDGE_PX 同值（2048），编辑
+// 产物发送时再编码不再被二次降采样。★ 此处独立取同值而非 import 发送链常量——AttachmentUtil
+// 反向依赖本件（encodeImageBase64 用本件 decodeScaled），import 即成模块环（坑50）；代价 =
+// 两处字面量，改任一侧须同步另一侧（AttachmentUtil.IMAGE_MAX_EDGE_PX）
+export const PHOTO_EDIT_MAX_EDGE_PX: number = 2048;
+
+// 裁剪几何镜像（CropStageView 上报的五个高频值 + 裁剪框尺寸；纯数据，ArkTS 显式接口）
+export interface CropGeometry {
+  imgVpW: number;
+  imgVpH: number;
+  scale: number;
+  tx: number;
+  ty: number;
+  boxW: number;
+  boxH: number;
+}
+
+// 容器可见区域 → PixelMap 像素坐标：图初始居中 + translate 平移后，容器左上角在图坐标系
+// = ((图显示宽×scale − 容器宽)/2 − tx, ...)/scale（vp）；像素 = vp × (图宽px/图显示宽vp)。
+// 背景链与待发图片链共用同一份映射（原为 ImageEditPage.cropVisibleRegion 私有方法，两次
+// 消费时按「重复 2 次以上提取为子程序」下迁本件，方法体逐字未改）。
+export function visibleCropRegion(pm: image.PixelMap, g: CropGeometry): image.Region {
+  const info: image.ImageInfo = pm.getImageInfoSync();
+  const ratio: number = info.size.width / (g.imgVpW * g.scale);
+  const offX: number = Math.max(0, (g.imgVpW * g.scale - g.boxW) / 2 - g.tx) * ratio;
+  const offY: number = Math.max(0, (g.imgVpH * g.scale - g.boxH) / 2 - g.ty) * ratio;
+  return {
+    x: offX,
+    y: offY,
+    size: {
+      width: Math.min(info.size.width - offX, g.boxW * ratio),
+      height: Math.min(info.size.height - offY, g.boxH * ratio)
+    }
+  };
+}
+
+// 待发图片预览框：比例 = 图片宽高比；宽 ≤ 屏宽 2/3、高 ≤ 屏高 2/3 且为内容池让位后仍
+// 放得下。按 maxW 起算再以 maxH 反推，保证两上限同时成立且比例不变。
+export function photoBoxMetrics(topPad: number, imgW: number, imgH: number): BoxSize {
+  const m: ScreenMetrics = screenMetrics();
+  const maxW: number = m.widthVp * PHOTO_BOX_SCREEN_RATIO;
+  const maxH: number = Math.min(m.heightVp * PHOTO_BOX_SCREEN_RATIO,
+    Math.max(120, m.heightVp - topPad - PHOTO_BOX_CONTENT_RESERVE_VP));
+  const aspect: number = imgH > 0 && imgW > 0 ? imgW / imgH : 1;
+  let w: number = maxW;
+  let h: number = maxW / aspect;
+  if (h > maxH) {
+    h = maxH;
+    w = h * aspect;
+  }
+  const box: BoxSize = { w: Math.max(1, w), h: Math.max(1, h) };
   return box;
 }

@@ -1,28 +1,26 @@
-// manage_skills 管理族纯函数域（2026-09-16 技能管理工具笔，任务书-技能管理工具与加载枚举
-// -20260916 §3.1.4；自 SkillText.ets 域级最小拆分——管理族并入使 SkillText 达 1235 行越
-// 1200 硬线，宪法「>1200 硬线：先把本次改动所属的功能域拆到独立文件再动手」条款执行；
-// MemoryText 承载 manage_memory 管理族同款分工）。
-// · 职责一句话：manage_skills 工具的参数校验归位 / 改名判重定位 / list 索引回执 /
-//   update 回执——全部纯逻辑，IO 编排在 ToolSkill。
-// · import 单向：本域 → SkillText（manifestDesc 描述摘要截断与三上限常量与两类型——
-//   工具面与清单面同口径 R-A5，禁第二份截断实现）；SkillText 不反向引用本域，无环
-//  （坑50 模块环求值红线复核过：ToolSkill → {SkillText, SkillManageText} 两叶子，无环）。
-// · 断言通道：本域带 import，不能像 SkillText 那样复制直跑——scripts/assert-app-domain.mjs
-//   108 组照 75 组先例「剥 import + SkillText 源前置拼接」为单文件直跑（线上同一实现）。
-// · 零 delete 语义（缺口盘点 C 档结论维持）：删除不可逆且绕过 UI 确认链，工具面不支持，
-//   desc 与错误路径恒指引 设置 → 技能库 手动删。
+// manage_skills 管理族纯函数域，自 SkillText.ets 域级最小拆分迁出（管理族并入使该件越
+// 1200 硬线，宪法「先把本次改动所属的功能域拆到独立文件再动手」条款执行；MemoryText
+// 承载 manage_memory 管理族同款分工）。
+// · 职责：manage_skills 工具的参数校验归位 / 改名判重定位 / list 索引回执 / update 回执
+//   ——全部纯逻辑，IO 编排在 ToolSkill。
+// · import 单向：本域 → SkillText（manifestDesc 描述摘要截断与三上限常量与两类型——工具
+//   面与清单面同口径，禁第二份截断实现）；SkillText 不反向引用本域，无环（坑50 零环红线
+//   复核过：ToolSkill → {SkillText, SkillManageText} 两叶子）。
+// · 断言通道：本域带 import，不能像 SkillText 那样复制直跑——assert-app-domain.mjs 照
+//   先例「剥 import + SkillText 源前置拼接」为单文件直跑（线上同一实现）。
+// · 零 delete 语义：删除不可逆且绕过 UI 确认链，工具面不支持，desc 与错误路径恒指引
+//   设置 → 技能库 手动删。
 import { SKILL_CONTENT_MAX, SKILL_DESC_MAX, SKILL_NAME_MAX,
   SkillBriefItem, SkillLocateOutcome, manifestDesc } from './SkillText';
 
-// ── list 分页两档（任务书 §3.1.1）——默认 20 / 上限 30。30 的依据（实数推算，防回执被截）：
-// 清单口径单行最坏 = 2 + 64（名）+ 1 + 120（描述摘要）+ 字数后缀 ≈ 190 字，30 行 ≈ 5.7K <
-// clipToolResult 8192 钳位线；50 件全量最坏 ≈ 9.5K 必被截尾，故封顶 30 + 分页兜底
+// ── list 分页两档——默认 20 / 上限 30。30 的依据（实数推算，防回执被截）：清单口径单行
+//    最坏 ≈ 190 字，30 行 ≈ 5.7K < clipToolResult 8192 钳位线；50 件全量最坏 ≈ 9.5K 必被
+//    截尾，故封顶 30 + 分页兜底 ──
 export const SKILL_MANAGE_LIST_DEFAULT_COUNT: number = 20;
 export const SKILL_MANAGE_LIST_MAX_COUNT: number = 30;
-// list 页内总字数软顶（composeManageSkillListReply 双条件姿势的字符侧——照 MemoryText
-// MEMORY_MANAGE_PAGE_SOFT_CHARS 先例：超则自动收窄本页件数至少 1 件，防 clipToolResult
-// 硬顶截尾丢翻页提示；描述摘要截 120 后单行最坏 ≈190 字，MAX_COUNT 内最坏 5.7K 不触发
-// 此线——它是 MAX_COUNT 将来调大时的结构性兜底，双条件姿势与先例一致）
+// list 页内总字数软顶（照 MemoryText MEMORY_MANAGE_PAGE_SOFT_CHARS 先例：超则自动收窄本页
+// 件数至少 1 件，防 clipToolResult 硬顶截尾丢翻页提示；描述摘要截 120 后单行最坏 ≈190 字，
+// MAX_COUNT=30 内最坏 5.7K 不触发此线——它是 MAX_COUNT 将来调大时的结构性兜底）
 export const SKILL_MANAGE_LIST_PAGE_SOFT_CHARS: number = 6000;
 
 // 管理校验结果（纯函数可断言）：ok = true 时 action 与对应参数就绪；offset/limit 为归一后值。
@@ -47,8 +45,7 @@ function rejectManageSkills(error: string): ManageSkillsValidation {
 
 // 参数校验纯函数（照 validateManageMemoryArgs 形制）：坏 JSON / 非法 action / get·update·
 // create 缺 name / update 三个改动字段（new_name、description、content）全空 / 三类上限越界
-//（名称与改名目标超 SKILL_NAME_MAX、描述超 SKILL_DESC_MAX、正文超 SKILL_CONTENT_MAX）全拒，
-// 中文报因；list 的 offset/limit 脏值归默认不报错（模型少一轮纠错）。
+// 全拒，中文报因；list 的 offset/limit 脏值归默认不报错（模型少一轮纠错）。
 // · 不在此查 name 换行——create/update 链下游 validateSkillArgs 会拒（名称侧校验单源不破）；
 //   get 的换行名 trim 逐字匹配必然 0 命中，走定位失败回执即自纠
 // · description 可空（照 validateSkillArgs 口径——空描述 = 清单行只剩名字，合法形态）；
@@ -135,9 +132,9 @@ export function validateManageSkillsArgs(argsJson: string): ManageSkillsValidati
 }
 
 // 技能名判重定位（排除自身 id）：照 locateSkillByName 同形，命中集里剔除 selfId——update
-// 改名判重的专用口（R-A3：排除自身后「改成与自己相同的名字」不再被自己的名字判重命中，
-// 该形态由执行器层「与原文相同」态接住）。多命中形态在本域正常不可达（locateSkillByName
-// 已在改前拒歧义），保留三态完整语义与先例同形
+// 改名判重的专用口（排除自身后「改成与自己相同的名字」不再被自己的名字判重命中，该形态由
+// 执行器层「与原文相同」态接住）。多命中形态在本域正常不可达（locateSkillByName 已在改前
+// 拒歧义），保留三态完整语义与先例同形
 export function locateSkillByNameExcluding(items: SkillBriefItem[], name: string,
   selfId: string): SkillLocateOutcome {
   const needle: string = name.trim();
@@ -176,9 +173,9 @@ export interface SkillManageListItem {
 
 // list 索引回执（编号索引不是全文——[全库序号] 名称：描述摘要（正文 X 字））；分页与软顶
 // 照 composeMemoryManageList 姿势：序号自 offset 起算全库连续（翻页不重编号）、offset 越过
-// 末件收到末件（模型恒见内容不落空页）、软顶双条件（SKILL_MANAGE_LIST_MAX_COUNT 与字符预算
-// 先到者收窄，至少 1 件）；描述摘要复用 manifestDesc 同一份截断（禁第二份实现）。不回显正文
-// 全文（正文可 8000 字，索引回执会被 clipToolResult 切尾）
+// 末件收到末件（模型恒见内容不落空页）、软顶双条件（件数与字符预算先到者收窄，至少 1 件）；
+// 描述摘要复用 manifestDesc 同一份截断（禁第二份实现）。不回显正文全文（正文可 8000 字，
+// 索引回执会被 clipToolResult 切尾）
 export function composeManageSkillListReply(items: SkillManageListItem[], offset: number,
   limit: number): string {
   const total: number = items.length;

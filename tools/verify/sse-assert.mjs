@@ -615,7 +615,7 @@
 //    ②按域归件写入对应 assert-*.mjs（新组不回填本文件）；③组号写进断言名前缀 + 补块标记
 //    「═══ NN 组：主题 ═══」；④回本目录加一行 + 同步所入件计数与 gate 基线。
 
-import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -630,6 +630,41 @@ copyFileSync(composeSrc, path.join(tmpDir, 'RequestCompose.ts'));
 // ⑱ 组配套：注入组装域 2026-08-31 自 RequestCompose 拆出（同零 import 约束）
 const injectSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'RequestInject.ets');
 copyFileSync(injectSrc, path.join(tmpDir, 'RequestInject.ts'));
+// 工具结果截断 2026-11 自 ToolTypes 拆出（第二次开源笔补）：ToolClip.ets 零 import，复制直跑。
+{
+  const toolClipSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'ToolClip.ets');
+  copyFileSync(toolClipSrc, path.join(tmpDir, 'ToolClip.ts'));
+}
+// 工具流累积器 2026-11 自 ToolTypes 拆出（第二次开源笔补）：本件只 import 两个类型，
+// 剥净即零依赖，复制直跑。
+{
+  const toolStreamSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'ToolStream.ets');
+  const toolStreamRaw = readFileSync(toolStreamSrc, 'utf-8')
+    .replace(/^import \{[^}]*\} from '\.\/(AiTypes|SseParser)';$/gm, '');
+  writeFileSync(path.join(tmpDir, 'ToolStream.ts'), toolStreamRaw);
+}
+// Responses 流式载荷解析 2026-11 自 SseParser 拆出（第二次开源笔补，同 Responses 组装笔法）：
+// 该 import 块混了九个类型与三个运行时函数，整块重写为只列运行时符号并补扩展名。
+{
+  const sseRespSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'SseResponsesParse.ets');
+  const sseRespRaw = readFileSync(sseRespSrc, 'utf-8')
+    .replace(/import \{\s*AiReasoningItem[\s\S]*?\} from '\.\/SseParser';/,
+      "import { isJsonObject, serverToolUseOf, usageFrameOf } from './SseParser.ts';");
+  writeFileSync(path.join(tmpDir, 'SseResponsesParse.ts'), sseRespRaw);
+}
+// Responses 协议组装 2026-10 自 RequestCompose 拆出（第二次开源笔补）：只剥类型 import
+// （AiTypes 不在 .tmp），运行时依赖 rewire 到已复制的 RequestCompose.ts——它本身零 import，
+// 这条链因此闭环。原写法从 RequestCompose 取该函数，拆分后取到 undefined 而 TypeError。
+{
+  const respSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'RequestComposeResponses.ets');
+  const respRaw = readFileSync(respSrc, 'utf-8')
+    .replace(/^import \{[^}]*\} from '\.\/AiTypes';$/gm, '')
+    // 该块混了类型（ComposeChatMessage / ComposeImagePart，运行时不存在）与纯函数，故整块
+    // 重写为只列运行时符号并补扩展名；类型注解由 node 类型剥离处理，不需要真身。
+    .replace(/import \{\s*ComposeChatMessage[\s\S]*?\} from '\.\/RequestCompose';/,
+      "import { hasReasoningInHistory, isEmptyAssistantTurn, isRemoteFilePart, parseToolSchema, REASONING_REPLAY_PLACEHOLDER } from './RequestCompose.ts';");
+  writeFileSync(path.join(tmpDir, 'RequestComposeResponses.ts'), respRaw);
+}
 // ㉔ 组配套：工具调用底层 2026-09-02（ToolTypes 依赖 @kit.LocalizationKit/
 // @kit.PerformanceAnalysisKit〔真机 SDK〕——复制后剥 import 行成桩，node 直跑纯逻辑面：
 // 聚合器/清单解析序列化/结果截断；注册表执行器含 SDK 调用不在断言面）
@@ -657,15 +692,17 @@ const appPrefSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'c
 copyFileSync(appPrefSrc, path.join(tmpDir, 'AppPreferences.ts'));
 const {
   SseParser, parseChatDelta, extractApiError, parseAnthropicPayload, parseGeminiDelta,
-  parseResponsesPayload, mergeUsage, usageFrameOf
+  mergeUsage, usageFrameOf
 } = await import('./.tmp/SseParser.ts');
+const { parseResponsesPayload } = await import('./.tmp/SseResponsesParse.ts');
 const {
-  composeOpenAiBody, composeAnthropicBody, composeGeminiBody, composeOpenAiResponsesBody,
+  composeOpenAiBody, composeAnthropicBody, composeGeminiBody,
   geminiThinkingBudget
 } = await import('./.tmp/RequestCompose.ts');
+const { composeOpenAiResponsesBody } = await import('./.tmp/RequestComposeResponses.ts');
 const { composeSendMessages, clipHistoryTail, appendSystemMemory } = await import('./.tmp/RequestInject.ts');
 const { estimateTokens, IMAGE_TOKEN_ESTIMATE, MSG_FRAMING_TOKENS, estimateSegments,
-  estimateSnapshotTotal, mergeSmallSegments, calibrateFactor,
+  estimateSnapshotTotal, calibrateFactor,
   parseContextTokenInput, formatContextTokens, MAX_CONTEXT_INPUT
 } = await import('./.tmp/TokenEstimate.ts');
 const { parseCtxFactors, lookupCtxFactor, serializeCtxFactors, upsertCtxFactor,
@@ -674,7 +711,14 @@ const { parseCtxFactors, lookupCtxFactor, serializeCtxFactors, upsertCtxFactor,
 {
   const { readFileSync, writeFileSync } = await import('node:fs');
   let raw = readFileSync(path.join(tmpDir, 'ToolTypesRaw.ts'), 'utf-8');
-  const hilogStub = 'const hilog = { info() {}, warn() {} };';
+  // 2026-11-26 自动桩基线：剥 import 前先记录全部导入符号，供末尾补差（见 autoStub 生成).
+  // 由来 = 两个月里工具域反复拆分，手写桩逐个失配、每拆一次就崩一次——改为「源码导入什么
+  // 就桩什么」，新增域件不再需要动本脚本。
+  const importedNames = [...raw.matchAll(/import\s*\{([\s\S]*?)\}\s*from/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim()).filter((x) => x !== ''));
+  const hilogStub = 'const hilog = { info() {}, warn() {} };\n' +
+    "const i18n = { System: { getSystemLanguage: () => 'zh', getSystemLocale: () => 'zh-CN', " +
+    'getSystemRegion: () => \'CN\', getSystemLocaleInstance: () => ({ language: \'zh\' }) } };';
   // 各工具域桥桩（tp/tf/tu/tpref/th）：注册块引用各域的 schema/desc/执行器导出——占位只求
   // 求值不崩，实态断言在 set-pref-tool-check.mjs / help-search-check.mjs。2026-09-08 域级
   // 最小拆分后 ToolTypes 只剩注册表 + 基础工具 + 聚合器 + 执行域，AppPreferences/
@@ -796,18 +840,76 @@ const { parseCtxFactors, lookupCtxFactor, serializeCtxFactors, upsertCtxFactor,
     '\'{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}\';\n' +
     "const buildManageKnowledgeDesc = () => '';\n" +
     'class ManageKnowledgeExecutor { execute() { return Promise.resolve(\'{}\'); } }';
-  raw = hilogStub + '\n' + tpBridgeStub + '\n' +
+  // 2026-11-26 注册表容器桩（第二次开源笔）：ToolTypes 自 2026-10 起把注册表拆到
+  // ToolRegistry.ets，并以 `export { ToolRegistry, toolRegistry } from './ToolRegistry';`
+  // 转出——re-export 不是 import，按 import 剥不干净，node 直跑报 ERR_MODULE_NOT_FOUND。
+  // 本桩按 Map 语义实现 get/all/register，ToolTypes 顶层 register 调用因此照常入表，
+  // 比空对象更贴近真实行为（工具清单断言仍读这些项）。
+  const toolRegistryStub = [
+    'const __toolMap = new Map();',
+    'const toolRegistry = {',
+    '  register(entry) { __toolMap.set(entry.name, entry); return entry; },',
+    '  get(name) { return __toolMap.get(name); },',
+    '  all() { return Array.from(__toolMap.values()); }',
+    '};'
+  ].join('\n');
+  // re-export 一并剥除（`from` 指向的模块不在 .tmp，留下即解析失败）；被转出的标识符只作
+  // 类型或由上面的桩提供，运行时不需要真身。
+  // 2026-11-26 工具 id 叶子（第二次开源笔）：工具稳定标识自 ToolTypes 外迁到零 import 的
+  // ToolIds.ets（65 条 id），注册块全部引用它——不接回这条链，registerBuiltinTools 里每个
+  // id 都是 ReferenceError。本件是纯常量叶子，复制后整体 import 回来（名字从源码现取，
+  // 随 id 增减自动跟随，不写死清单）。
+  const toolIdsSrc = path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'ToolIds.ets');
+  const toolIdsRaw = readFileSync(toolIdsSrc, 'utf-8');
+  copyFileSync(toolIdsSrc, path.join(tmpDir, 'ToolIds.ts'));
+  const toolIdNames = [...toolIdsRaw.matchAll(/^export const (\w+)/gm)].map((m) => m[1]);
+  if (toolIdNames.length === 0) {
+    throw new Error('ToolIds.ets 未解析出任何 export const——源码结构已变，先修本抽取逻辑');
+  }
+  const toolIdsImport = `import { ${toolIdNames.join(', ')} } from './ToolIds.ts';`;
+  const toolGroupStub = [
+    "const TOOL_GROUP_CHART = '图表';",
+    "const TOOL_GROUP_MOUNT = '文件夹挂载';",
+    "const TOOL_GROUP_PYTHON = 'Python 运行';",
+    "const TOOL_GROUP_NODE = 'Node 运行';"
+  ].join('\n');
+  const stripped = raw
+    .replace(/import[\s\S]*?;/g, (m) => m.includes('from') ? '' : m)
+    .replace(/^export\s*\{[^}]*\}\s*from\s*'[^']*';\s*$/gm, '');
+  const manualStubs = hilogStub + '\n' + toolIdsImport + '\n' + tpBridgeStub + '\n' +
     tfBridgeStub + '\n' + tuBridgeStub + '\n' + tprefBridgeStub + '\n' + thBridgeStub + '\n' +
     tmBridgeStub + '\n' + tcBridgeStub + '\n' + tgcBridgeStub + '\n' + tmmBridgeStub + '\n' +
     tsBridgeStub + '\n' +
     tscBridgeStub + '\n' + tpcBridgeStub + '\n' + tcsBridgeStub + '\n' +
     tbBridgeStub + '\n' + thttpBridgeStub + '\n' + tkBridgeStub + '\n' +
-    appPrefStub + '\n' +
-    raw.replace(/import[\s\S]*?;/g, (m) => m.includes('from') ? '' : m);
+    appPrefStub + '\n' + toolRegistryStub + '\n' + toolGroupStub;
+  // 自动桩：手写桩没覆盖到的导入符号，按名字形态补一个能求值的占位。分类依据 = 名字后缀
+  // 与首字母大小写（Executor → 带 execute 的类；全大写 → schema/desc 常量；小写 → 函数；
+  // 其余 PascalCase 多为 interface/类型，运行时不需要真身，跳过）。
+  // ★ 只求「模块能加载、导出函数能跑」，实态断言仍由各自专门的检查件负责。
+  const covered = new Set(
+    [...manualStubs.matchAll(/(?:const|class|function)\s+(\w+)/g)].map((m) => m[1]).concat(toolIdNames)
+  );
+  const autoStubs = [];
+  for (const name of new Set(importedNames)) {
+    if (covered.has(name)) {
+      continue;
+    }
+    if (/^[A-Z0-9_]+$/.test(name)) {
+      autoStubs.push(`const ${name} = '{}';`);
+    } else if (/Executor$/.test(name)) {
+      autoStubs.push(`class ${name} { execute() { return Promise.resolve('{}'); } }`);
+    } else if (/^[a-z]/.test(name)) {
+      const falsy = /(?:NeedsConfirm$|^is[A-Z]|^can[A-Z]|^has[A-Z]|^should[A-Z])/.test(name);
+      autoStubs.push(`const ${name} = () => ${falsy ? 'false' : "''"};`);
+    }
+  }
+  raw = manualStubs + '\n' + autoStubs.join('\n') + '\n' + stripped;
   writeFileSync(path.join(tmpDir, 'ToolTypes.ts'), raw);
 }
-const { ToolCallAccumulator, parseEnabledToolIds, serializeEnabledToolIds, clipToolResult } =
-  await import('./.tmp/ToolTypes.ts');
+const { ToolCallAccumulator } = await import('./.tmp/ToolStream.ts');
+const { clipToolResult, clipToolResultForTool } = await import('./.tmp/ToolClip.ts');
+const { parseEnabledToolIds, serializeEnabledToolIds } = await import('./.tmp/ToolTypes.ts');
 const { resolveToolStepLimit } = await import('./.tmp/ToolLimits.ts');
 const {
   lookupModelAbilities, resolveReasoningStrategy, supportsDeepSeekProfile, effectiveCapsOf,
@@ -1740,10 +1842,10 @@ import { check, report } from './assert-lib.mjs';
     ['user', 2]);
 
   // ── 助手清单序列化（ToolTypes 纯逻辑）──
-  check('㉔ 清单-空串默认', parseEnabledToolIds(''), ['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act']);
-  check('㉔ 清单-坏JSON回默认', parseEnabledToolIds('not-json'), ['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act']);
+  check('㉔ 清单-空串默认', parseEnabledToolIds(''), ['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act', 'browse_screenshot']);
+  check('㉔ 清单-坏JSON回默认', parseEnabledToolIds('not-json'), ['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act', 'browse_screenshot']);
   check('㉔ 清单-解析', parseEnabledToolIds('["get_time_info"]'), ['get_time_info']);
-  check('㉔ 清单-默认集序列化为空串', serializeEnabledToolIds(['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act']), '');
+  check('㉔ 清单-默认集序列化为空串', serializeEnabledToolIds(['get_time_info', 'ask_user', 'search_web', 'scrape_web', 'browse_open', 'browse_read', 'browse_act', 'browse_screenshot']), '');
   check('㉔ 清单-子集序列化', serializeEnabledToolIds(['ask_user']), '["ask_user"]');
   check('㉔ 清单-空集显式', serializeEnabledToolIds([]), '[]');
 
@@ -2299,7 +2401,11 @@ import { check, report } from './assert-lib.mjs';
 // 规格）+ 单空格占位（缺键与空串同被拒）+ 序 = reasoning item 先于 message/function_call。
 // 本组 = 直跑行为断言（执行级证据）+ 序红线与常量单源形态钉 + 零回归负向四钉。
 {
-  const rcSource114 = readFileSync(composeSrc, 'utf-8').split('\r\n').join('\n');
+  // 2026-11-26 形态钉改读新家：Responses 组装自 RequestCompose 拆到 RequestComposeResponses，
+  // 沿用 composeSrc 会让三条序红线/常量单源钉扫到空文件而全判 false（假红）。
+  const rcSource114 = readFileSync(
+    path.join(here, '..', '..', 'entry', 'src', 'main', 'ets', 'common', 'providers', 'RequestComposeResponses.ets'),
+    'utf-8').split('\r\n').join('\n');
   const rcTools114 = [{ name: 'f1', description: 'd', parametersJson: '{"type":"object"}' }];
   const rcToolRow114 = { role: 'tool', content: '果', toolCallId: 'c1', toolName: 'f1' };
   const rcCall114 = [{ id: 'c1', name: 'f1', argsJson: '{}' }];
@@ -2394,10 +2500,15 @@ import { check, report } from './assert-lib.mjs';
   check('114 形态-明文项先于message与function_call（序红线）',
     [iReason114 > 0, iMsg114 > 0, iCall114 > 0, iReason114 < iMsg114, iReason114 < iCall114],
     [true, true, true, true, true]);
-  // ⑨ 形态钉：占位常量单源（1 定义 + 2 消费；扩容须同步改钉 = 有意变更）
-  const phDef114 = (rcSource114.match(/REASONING_REPLAY_PLACEHOLDER: string = ' '/g) ?? []).length;
-  const phAll114 = (rcSource114.match(/REASONING_REPLAY_PLACEHOLDER/g) ?? []).length;
-  check('114 形态-占位常量单源（1 定义 + 2 消费）', [phDef114, phAll114], [1, 3]);
+  // ⑨ 形态钉：占位常量单源（定义恰 1 处；chat 与 responses 两条路径各消费 1 次）。
+  // 2026-11-26 改判：Responses 组装拆出后，定义与一处消费留在 RequestCompose、另一处随迁，
+  // 单文件计数必然错位——改为「定义单源 + 两条消费路径各自在场」三值钉，比原总数钉更严。
+  const ccSource114 = readFileSync(composeSrc, 'utf-8').split('\r\n').join('\n');
+  const phDef114 = (ccSource114.match(/REASONING_REPLAY_PLACEHOLDER: string = ' '/g) ?? []).length;
+  const phUseChat114 = (ccSource114.match(/REASONING_REPLAY_PLACEHOLDER/g) ?? []).length - phDef114;
+  const phUseResp114 = (rcSource114.match(/REASONING_REPLAY_PLACEHOLDER/g) ?? []).length - 1; // 减 import 行
+  check('114 形态-占位常量单源（定义 1；chat / responses 各消费 1）',
+    [phDef114, phUseChat114, phUseResp114], [1, 1, 1]);
   // ⑩ 形态钉：Responses 明文兜底分支在场 + chat 旧「非空才挂」单支守卫已拆（防回退成丢键）
   check('114 形态-明文兜底分支在场（sessionThinking 分支）',
     rcSource114.includes('} else if (sessionThinking) {'), true);
@@ -2489,21 +2600,10 @@ import { check, report } from './assert-lib.mjs';
   check('120 遍历-总量随待发附件文本等比增（关系钉，不抄常量值）',
     estimateSnapshotTotal(snapAttach) - totalBase120, estimateTokens('附件正文'));
 
-  // ── ⑤ 小值段合并（§3.4 P8；Claude Code #92881：零碎行淹没主要矛盾）──
-  check('120 合并-占比<1%且<200token并入其余段', mergeSmallSegments(segs120, 8192).map((s) => s.key),
-    ['draft', 'reserved', 'othersSmall']);
-  check('120 合并-其余段汇总值与计数', (() => {
-    const m = mergeSmallSegments(segs120, 8192).find((s) => s.key === 'othersSmall');
-    return [m.label, m.tokens];
-  })(), ['其余 6 段', 19]);
-  check('120 合并-窗口未知原样返回（不显分段条的场景不合并）',
-    mergeSmallSegments(segs120, 0), segs120);
-  const seg200 = [{ key: 'k', label: 'x', tokens: 200 }];
-  const seg199 = [{ key: 'k', label: 'x', tokens: 199 }];
-  check('120 合并-200恰不并（绝对值阈值闭区间外）',
-    mergeSmallSegments(seg200, 100000).some((s) => s.key === 'othersSmall'), false);
-  check('120 合并-199并入（双条件同满足）',
-    mergeSmallSegments(seg199, 100000).some((s) => s.key === 'othersSmall'), true);
+  // ── ⑤ 小值段合并：**已随能力退役撤钉**（2026-11-26 第二次开源笔）──
+  // 原 6 条断言钉 mergeSmallSegments（小值段并入「其余 N 段」）。该方法已自 TokenEstimate.ets
+  // 删除（全仓零引用，分段条不再合并零碎段），断言对象消失——按「源码退役即撤钉」处置，
+  // 不保留指向不存在方法的假钉。
 
   // ── ⑥ 校准钳制（§3.2 红线④⑤；LibreChat #14661 哨兵 495 亿美元的反面）──
   check('120 校准-常态商值', calibrateFactor(1000, 500), 2);
@@ -2524,26 +2624,28 @@ import { check, report } from './assert-lib.mjs';
   check('120 k存-非法条目逐条丢弃（空modelId/非正factor/非数值factor）',
     parseCtxFactors('[{"modelId":"m1","factor":1.5},{"modelId":"","factor":2},' +
       '{"modelId":"m2","factor":0},{"modelId":"m3","factor":"x"}]'),
-    [{ modelId: 'm1', factor: 1.5 }]);
-  check('120 k存-查模型系数缺失回1', lookupCtxFactor(parseCtxFactors(''), 'm1'), 1);
+    // 2026-11-26 随双键改造更新：CtxFactorEntry 增 providerId，缺该键的旧条目降级为 ''（legacy）
+    [{ providerId: '', modelId: 'm1', factor: 1.5 }]);
+  check('120 k存-查模型系数缺失回1', lookupCtxFactor(parseCtxFactors(''), '', 'm1'), 1);
   check('120 k存-序列化往返', serializeCtxFactors(parseCtxFactors('[{"modelId":"m1","factor":1.5}]')),
-    '[{"modelId":"m1","factor":1.5}]');
+    '[{"providerId":"","modelId":"m1","factor":1.5}]');
   check('120 k存-同模型更新并置顶（LRU）', (() => {
     const up = upsertCtxFactor(
-      [{ modelId: 'a', factor: 1 }, { modelId: 'b', factor: 2 }], 'b', 3);
+      [{ providerId: 'p1', modelId: 'a', factor: 1 }, { providerId: 'p1', modelId: 'b', factor: 2 }],
+      'p1', 'b', 3);
     return [up.map((e) => e.modelId), up[0].factor];
   })(), [['b', 'a'], 3]);
   check('120 k存-上限20丢最旧', (() => {
     let entries = [];
     for (let i = 0; i < 22; i++) {
-      entries = upsertCtxFactor(entries, 'm' + i, 1.5);
+      entries = upsertCtxFactor(entries, 'p1', 'm' + i, 1.5);
     }
     return [entries.length, entries.some((e) => e.modelId === 'm0'),
       entries.some((e) => e.modelId === 'm1'), entries.some((e) => e.modelId === 'm2')];
   })(), [20, false, false, true]);
   check('120 k存-非法factor原样返回（带毒锚点不落盘第二道闸）', (() => {
-    const before = [{ modelId: 'a', factor: 1 }];
-    return upsertCtxFactor(before, 'b', 0) === before && CTX_FACTOR_MAX_ENTRIES === 20;
+    const before = [{ providerId: 'p1', modelId: 'a', factor: 1 }];
+    return upsertCtxFactor(before, 'p1', 'b', 0) === before && CTX_FACTOR_MAX_ENTRIES === 20;
   })(), true);
 
   // ── ⑧ 窗口值解析/格式化（2026-09-21 B-11④ 自 ModelContextCard 迁入本域 + B-11② 规范

@@ -1,19 +1,20 @@
 // 用量统计查询工具域（2026-09-08 决明指令「新增控制台助手可用只读工具，读取用量统计页
 // 7/30/全部的统计信息；只读取总览 6 个卡片、token 用量 4 个卡片与模型用量排行 Top10；
 // 数据都是已有记录，只读调取」）。
-// 一个内置工具 get_usage_stats（defaultEnabled=false + console-exclusive 反向拦截——
-// 仅控制台助手可用，同 set_app_preference 族）：
+// 一个内置工具 get_usage_stats（defaultEnabled=false，普通助手工具页「应用管理」卡显式开启；
+// 原 console-exclusive 反向拦截随控制台合并笔退役）：
 // · range 三档（近七天/近三十天/全部，缺省近七天）——时段起点与日轴起点走
 //   UsageStatsCalc.rangeSinceMs/axisStartDayKey，与用量统计页切档同一套口径；
 // · 返回 = 总览六格 + Token 四格 + 模型排行 Top10（页面同 10 格 + 10 行，逐格同文案同格式
 //   ——格值构造走 UsageStatsCalc.buildOverviewCells/buildTokenCells 单源），另附未展示的
 //   模型数与空时段说明；
 // · 只读：零写库零改状态零广播（聚合查询走 UsageStatsDb 既有三函数，ResultSet 由该层
-//   close；本文件不碰 AppStorage）。
+//   close）。
 // 边界：数据聚合与逐日轴在 UsageStatsDb / UsageStatsCalc，本文件只做工具协议层
 //（schema/desc/校验纯函数/执行器）；校验纯函数自包含可断言（searchHelpTopics 同款姿势，
 // 断言脚本剥 TS 求值直跑）。
 import { ToolExecutor } from './ToolContracts';
+import { ToolExecutionContext } from '../chat/MessageContracts';
 import { UsageByDayRow, UsageByModelRow, UsageOverview, usageByDay, usageByModel,
   usageOverview } from '../store/UsageStatsDb';
 import { DayValue, UsageStatCell, axisStartDayKey, buildOverviewCells, buildTokenCells,
@@ -40,7 +41,8 @@ export function buildGetUsageStatsDesc(): string {
     '、' + USAGE_RANGE_MONTH + ' 或 ' + USAGE_RANGE_ALL + '，不传按 ' + USAGE_RANGE_WEEK +
     '。返回所选时段的总览六项、Token 用量四项与按总 token 排序的前十个模型，模型数超过十个' +
     '时附未展示的数量。总览六项有活跃会话、消息总数、每会话消息数、累计生成时长、每日平均 ' +
-    'token 与最长连续活跃，其中每会话消息数是消息总数除以活跃会话数的结果。Token 四项有总 ' +
+    'token 与最长连续活跃，其中每会话消息数是消息总数除以' +
+    '活跃会话数的结果。Token 四项有总 ' +
     'Token、输入、输出、每条平均。数值格式与用量统计页' +
     '一致，最长连续活跃同页面口径，全部时段按近一年窗口计算。用户询问自己的用量、token ' +
     '消耗、生成时长、活跃情况、每会话消息数或哪个模型用得多时调用。回答用量数据前先调用本' +
@@ -115,7 +117,7 @@ interface UsageStatsPayload {
 // 与页面同口径）→ 格值构造走 calc 单源 → 载荷。DB 查询抛错上抛由 executeToolCall 统一
 // 包装 error JSON（不炸轮次）
 export class GetUsageStatsExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     const v: GetUsageStatsValidation = validateGetUsageStatsArgs(argsJson);
     if (!v.ok) {
       return Promise.resolve(JSON.stringify({ error: v.error }));

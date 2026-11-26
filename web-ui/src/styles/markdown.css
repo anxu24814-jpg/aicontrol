@@ -1,0 +1,327 @@
+/* Markdown 与代码高亮样式（2026-10-22 视觉重做版）。
+   字体与底色取 tokens.css；高亮 token 与身份六色同源，不引第三方主题 CSS。
+   代码块外壳（语言标签 + 复制键）由 ui/markdown.ts 的 fence 渲染器产出。 */
+
+.md-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.md {
+  font-size: 14.8px;
+  line-height: 1.68;
+  color: var(--text-1);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0 0 10px;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 18px 0 8px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.md h1 { font-size: 21px; }
+.md h2 { font-size: 18.5px; }
+.md h3 { font-size: 16.5px; }
+.md h4 { font-size: 15px; }
+.md h5,
+.md h6 { font-size: 14px; color: var(--text-2); }
+
+.md ul,
+.md ol {
+  margin: 0 0 10px;
+  padding-left: 1.35em;
+}
+
+.md li {
+  margin: 3px 0;
+}
+
+.md li > p {
+  margin: 0 0 4px;
+}
+
+.md blockquote {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent-soft-2);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-subtle);
+  color: var(--text-2);
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.md a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.md a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md hr {
+  height: 1px;
+  margin: 16px 0;
+  border: 0;
+  background: var(--border-soft);
+}
+
+.md img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  display: block;
+}
+
+.md strong {
+  font-weight: 600;
+}
+
+.md code {
+  font-family: var(--font-code);
+  font-size: 0.88em;
+}
+
+.md :not(pre) > code {
+  padding: 1.5px 5px;
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-soft);
+  color: var(--text-1);
+  word-break: break-word;
+}
+
+/* ── 表格 ── */
+
+.md table {
+  display: block;
+  width: 100%;
+  margin: 0 0 12px;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  line-height: 1.55;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.md thead {
+  background: var(--bg-subtle);
+}
+
+.md th,
+.md td {
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border-soft);
+  border-right: 1px solid var(--border-soft);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.md th:last-child,
+.md td:last-child {
+  border-right: 0;
+}
+
+.md tr:last-child td {
+  border-bottom: 0;
+}
+
+.md th {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* ── 代码块外壳（语言标签 + 复制键） ── */
+
+.codeblock {
+  margin: 0 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+
+.codeblock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  background: var(--code-head);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.codeblock-lang {
+  font: 500 11px var(--font-code);
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.codeblock-copy {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+
+.codeblock:hover .codeblock-copy,
+.codeblock-copy:focus-visible {
+  opacity: 1;
+}
+
+.codeblock-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.codeblock-copy.copied {
+  color: var(--ok);
+  opacity: 1;
+}
+
+.codeblock-copy svg {
+  width: 11px;
+  height: 11px;
+}
+
+.codeblock pre {
+  margin: 0;
+  padding: 11px 13px;
+  overflow-x: auto;
+  background: transparent;
+}
+
+.codeblock pre code {
+  font-family: var(--font-code);
+  background: transparent;
+  padding: 0;
+  border: 0;
+  color: var(--text-1);
+  font-size: 12.8px;
+  line-height: 1.62;
+  white-space: pre;
+}
+
+/* 兜底：未经外壳包装的 pre 也有像样的底 */
+.md pre {
+  margin: 0 0 12px;
+  padding: 12px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+
+.md pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-code);
+  font-size: 12.8px;
+  line-height: 1.62;
+}
+
+/* 高亮 token（hljs 类名 → 项目色板变量） */
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp,
+.hljs-addition {
+  color: var(--hl-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta {
+  color: var(--hl-number);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name {
+  color: var(--hl-title);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--hl-attr);
+}
+
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-params,
+.hljs-type {
+  color: var(--hl-built);
+}
+
+.hljs-deletion {
+  color: var(--danger);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* 手机端复制键常显（无 hover 语义） */
+@media (hover: none) {
+  .codeblock-copy {
+    opacity: 1;
+  }
+}

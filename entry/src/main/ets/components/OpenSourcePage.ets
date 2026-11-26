@@ -1,26 +1,18 @@
-// 「开源项目鸣谢」二级页（2026-09-02 新增；「关于」页卡片进入——决明需求「关于页
-// AI 辅助开发声明下加新卡，开源项目鸣谢，点击进二级页」）。版式随 AiAssistPage 定稿：
-// 说明段（卡外） + 分组块（**分组标题在卡外左上** + 一张大卡，条目两行式 = 项目名 +
-// 一句话说明，条间官方 Divider）。
-// ★ 名单数据 = 下方 OPEN_SOURCE_GROUPS 常量——后续增删项目只动该常量。
-// 条目说明只记「项目名 + 协议 + 一句话说明」，不写实现细节（保持轻量可维护）。
-// ★ 2026-09-24 补「第三方商标」组（开源准备笔 2）：三张服务商 logo（DeepSeek / 月之暗面 /
-// 智谱）随包分发但此前无声明——与仓库根 LICENSE-THIRD-PARTY.md「第三方商标」节同源；
-// 组级说明走下方 OpenSourceGroup.note 字段（不新增卡片、不动页面标题）。
-// ★ 2026-09-23 补第 9 条：PaddleOCR（PP-OCRv6 三模型与识别字典随包于 rawfile/ocr）——
-// 内置识别引擎 2026-09-16 落地时漏登；模型权重 Apache-2.0 已逐仓核实（方案档实查记录）。
-// ★ 2026-09-07 补全并简化：名单扩至 8 条（新增 formula_hybrid 与 rawfile/document-parser
-// 文档解析四库），分组合一（原「参考与移植」/「第三方组件」→「开源项目」），条目一律
-// 「协议 · 一句话用途」；许可文本随包 NOTICE.md + LICENSE-*.txt、项目根
-// LICENSE-THIRD-PARTY.md 全文收录。
+// 「开源项目鸣谢」二级页（「关于」页卡片进入）。版式随 AiAssistPage 定稿：说明段（卡外）
+// + 分组块（**分组标题在卡外左上** + 一张大卡，条目两行式 = 项目名 + 一句话说明，条间官方
+// Divider）；组级说明走 OpenSourceGroup.note 字段。
+// ★ 名单数据 = 下方 OPEN_SOURCE_GROUPS 常量——后续增删项目只动该常量；条目说明只记
+// 「项目名 + 协议 + 一句话说明」，不写实现细节。名单与仓库根 LICENSE-THIRD-PARTY.md 同源
+//（全文收录；许可文本另随包 NOTICE.md + LICENSE-*.txt，「第三方商标」节亦同源）。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import {
   CARD_PANEL_WIDTH,
   cardBg,
-  cardBorderColor
+  cardBorderColor, CARD_RADIUS
 } from '../common/Theme';
 import { SETTING_TITLE_OPEN_SOURCE } from '../common/SettingSearch';
 import { PageShell } from '../common/PageShell';
+import { InfoCard } from './InfoCard';
 
 // 鸣谢条目（项目名主行 + 一句话说明副行）
 interface OpenSourceItem {
@@ -38,6 +30,47 @@ interface OpenSourceGroup {
   items: OpenSourceItem[];
 }
 
+// 许可全文在应用内离线可读；与根LICENSE-THIRD-PARTY及标准数据源码头同文。
+const UNICODE_LICENSE_V3: string = `UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.`;
+
 const OPEN_SOURCE_GROUPS: OpenSourceGroup[] = [
   {
     title: '开源项目',
@@ -45,19 +78,15 @@ const OPEN_SOURCE_GROUPS: OpenSourceGroup[] = [
     items: [
       {
         name: 'Cube Chat（chatcube）',
-        desc: 'MIT · GitHub LongLiveY96/chatcube，流式引擎与渲染组件参考'
-      },
-      {
-        name: '@lidary/markdown',
-        desc: 'MIT · 消息 Markdown 渲染'
-      },
-      {
-        name: '@cangjie-tpc/markdown_hybrid',
-        desc: 'Apache-2.0 · 增量 Markdown 渲染'
+        desc: 'MIT · GitHub LongLiveY96/chatcube，流式传输与文档解析等参考'
       },
       {
         name: '@cangjie-tpc/formula_hybrid',
-        desc: 'MIT · LaTeX 公式渲染'
+        desc: 'MIT、Apache-2.0 · 独立 LaTeX 公式排版'
+      },
+      {
+        name: 'Mermaid 11.16.0 与捆绑依赖',
+        desc: 'MIT、ISC、BSD、Apache-2.0 等 · 离线图表预览，完整许可随应用分发'
       },
       {
         name: 'SheetJS（xlsx）',
@@ -78,8 +107,41 @@ const OPEN_SOURCE_GROUPS: OpenSourceGroup[] = [
       {
         name: 'PaddleOCR（PP-OCRv6）',
         desc: 'Apache-2.0 · 内置识别的模型与字典'
+      },
+      // Node 运行环境两条（2026-11-24 鸿蒙 Node 运行时门 4）：许可声明全文与 npm 文件集逐包清单
+      // 随包收录于 rawfile/node/NOTICE.md 与 LICENSE-Node.js.txt，此处只记项目名、协议与用途
+      {
+        name: 'Node.js 24.22.3',
+        desc: 'MIT · 内嵌运行环境，许可声明全文随应用分发'
+      },
+      {
+        name: 'npm 11.19.1 与捆绑依赖',
+        desc: 'Artistic-2.0、ISC、MIT 等 · 包管理文件集，完整许可随应用分发'
       }
     ]
+  },
+  {
+    title: '内置字体',
+    note: '下列字体随应用分发，用于消息字体的可选项，许可协议均为 SIL Open Font License 1.1，可自由使用与再分发。版权归各字体作者所有，许可全文随应用提供。',
+    items: [
+      {
+        name: 'Noto Serif SC',
+        desc: 'SIL OFL 1.1 · 版权 2017-2024 Adobe · 衬线预设'
+      },
+      {
+        name: '朱雀仿宋',
+        desc: 'SIL OFL 1.1 · 版权 2023 浙江星玺科技（璇玑造字）· 仿宋预设'
+      },
+      {
+        name: 'JetBrains Mono',
+        desc: 'SIL OFL 1.1 · 版权 2020 JetBrains 项目作者 · 代码等宽预设'
+      }
+    ]
+  },
+  {
+    title: 'Unicode 标准数据',
+    note: 'Unicode Character Database 16.0.0，用于 Markdown 引用标签的大小写折叠。原始数据来自 unicode.org。',
+    items: [{ name: 'Unicode License v3', desc: UNICODE_LICENSE_V3 }]
   },
   {
     title: '第三方商标',
@@ -109,12 +171,11 @@ export struct OpenSourcePage {
   // 系统颜色模式（EntryAbility 写入 AppStorage，深浅色切换自动刷新配色；卡片背景/分割线用）
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
 
-  // 分组大卡（自制分组卡：AiAssistPage 先例——cardBg 圆角 16，无轮廓线；条目两行式
-  //（名称 15sp 主色 + 说明 13sp 次要色），条间官方 Divider（左右各缩进 16vp，左沿对齐文字）
+  // 分组大卡（自制分组卡，AiAssistPage 先例：cardBg 圆角无轮廓线、条目两行式、条间官方 Divider）
   @Builder
   GroupCard(group: OpenSourceGroup) {
     Column() {
-      ForEach(group.items, (item: OpenSourceItem) => {
+      ForEach(group.items, (item: OpenSourceItem, index: number) => {
         Column({ space: 4 }) {
           Text(item.name)
             .fontSize(15)
@@ -126,22 +187,23 @@ export struct OpenSourcePage {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
         .padding({ left: 16, right: 16, top: 13, bottom: 13 })
-        Divider()
-          .color(cardBorderColor(this.appColorMode))
-          // 分割线不延伸至卡片两端：左右各缩进 16vp（同 AiAssistPage）
-          .padding({ left: 16, right: 16 })
+        // 末条后不留分割线（「条间线」语义——尾线贴卡底缘可见故收）
+        if (index < group.items.length - 1) {
+          Divider()
+            .color(cardBorderColor(this.appColorMode))
+            .padding({ left: 16, right: 16 })
+        }
       }, (item: OpenSourceItem) => item.name)
     }
     .width(CARD_PANEL_WIDTH)
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .backgroundColor(cardBg(this.appColorMode))
     .clip(true)
     // 组间距 = 卡片块自身 margin（分组块属大区块非卡片间距，组间距 16vp 不进 CARD_SPACING）
     .margin({ bottom: 16 })
   }
 
-  // 分组（卡外左上标题 + 卡片；标题宽度 CARD_PANEL_WIDTH 使左沿与卡片左沿对齐——同
-  // AiAssistPage PermissionPage 先例；标题与卡片间距 8vp）
+  // 分组（卡外左上标题 + 卡片；标题宽度 CARD_PANEL_WIDTH 与卡片左沿对齐）
   @Builder
   GroupBlock(group: OpenSourceGroup) {
     Text(group.title)
@@ -150,13 +212,11 @@ export struct OpenSourcePage {
       .fontWeight(FontWeight.Medium)
       .fontColor($r('sys.color.font_primary'))
       .margin({ bottom: 8 })
-    // 组级说明（有才渲染；与卡片左沿对齐，同说明段宽度口径）
+    // 组级说明（空串不渲染；InfoCard 单源件）。★ 勿传 fullWidth：本页滚动列无水平 padding、
+    // 同组卡片走 CARD_PANEL_WIDTH，fullWidth 会左右各宽出 16vp 与卡片/页首说明卡不齐
+    //（缺省卡宽即对齐）
     if (group.note !== '') {
-      Text(group.note)
-        .fontSize(13)
-        .fontColor($r('sys.color.font_secondary'))
-        .lineHeight(20)
-        .width(CARD_PANEL_WIDTH)
+      InfoCard({ text: group.note })
         .margin({ bottom: 8 })
     }
     this.GroupCard(group)
@@ -169,12 +229,8 @@ export struct OpenSourcePage {
     Column() {
       Scroll() {
         Column() {
-          // 鸣谢说明段（通用措辞；宽度 CARD_PANEL_WIDTH 左对齐——与卡片左沿对齐）
-          Text('本应用在开发过程中参考了以下开源项目，并使用了其中部分组件与实现思路，在此致以谢意。')
-            .fontSize(14)
-            .fontColor($r('sys.color.font_primary'))
-            .lineHeight(21)
-            .width(CARD_PANEL_WIDTH)
+          // 鸣谢说明段（通用措辞，InfoCard 单源件）
+          InfoCard({ text: '本应用在开发过程中参考了以下开源项目，并使用了其中部分组件与实现思路，在此致以谢意。' })
             .margin({ bottom: 16 })
 
           ForEach(OPEN_SOURCE_GROUPS, (group: OpenSourceGroup) => {
@@ -190,8 +246,8 @@ export struct OpenSourcePage {
       .width('100%')
       // 滚动内容不足视口时顶对齐（Scroll align 默认 Center——同 AboutPage）
       .align(Alignment.TopStart)
-      // 官方边缘回弹：滑到边界继续滑一段距离、松手回弹
       .edgeEffect(EdgeEffect.Spring)
+      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')

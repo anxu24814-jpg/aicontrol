@@ -1,26 +1,15 @@
-// 内置识别引擎纯函数层（2026-09-16，方案-内置PaddleOCR-20260916 §3.3/§六 阶段 1，ZCode 侧）。
-// 与 providers/OcrPaddle.ets（推理编排：解码 / 三模型 predict / 出页文本）分开的理由 =
-// 本件**零 import**——断言脚本可复制直跑（scripts/assert-attach-domain.mjs 105 组：
-// entry/.../common/OcrPaddleText.ets → scripts/.tmp/OcrPaddleText.ts，Node 原生剥类型），
-// 先例 = SseParser / SkillText / MemoryText（同「纯函数层 + 零 import」口径）。
-// 覆盖五件：det 几何（letterbox）/ DB 后处理（二值化→连通域→框过滤→unclip→行合并→排序）/
-// CTC 解码 / rec 分块与缩放几何 / 字典解析与类别数校验。
-//
-// ★ 超参真值源 = 模型仓 inference.yml（2026-09-16 阶段 0 实读，**不是**官方文档表格值——
-//   文档该列写 None）：det thresh 0.2 / box_thresh 0.4 / unclip_ratio 1.4 /
-//   max_candidates 3000（方案 §2.1 原引 0.3/0.6/1.5/1000 为旧版口径，阶段 0 已按实读改正）。
-// ★ 类别数关系（阶段 0 设备实测）：C = 字典行数 + 2 —— 字符表 = ['blank'] + 字典 + [' ']
-//   （PaddleOCR CTCLabelDecode：blank 置首、空格字符追加在**末尾**）。实测 C=6906 vs 字典 6904。
-//   方案原写「类别数 − 1 === 字典行数」按实测作废，判据改 dictClassCountOk（唯一放行式），
-//   **不匹配 = 该引擎失败，绝不带错字典硬跑**（方案 §3.2 末条）。
-// ★ 长行分块（阶段 0 新增发现，方案未预见的硬需求）：rec 固定输入 48×320，单段可容纳的长宽比
-//   上限 = 320/48 ≈ 6.67；整行超此比例时被横向挤压——阶段 0 对照实验（同一张德语行图）：
-//   整行挤压解码 =「Viamine.un B2.en asevene mhrn ie」（全糊），按 6.4 比例切 6 段各自解码
-//   再拼接 =「Vitamine C. D und B12. Eine ausgewogenee Ernährunq mit viel」（基本逐字正确）；
-//   中文行同法由 2 处错降为 1 处错。故 rec 路**一律先分块**（recChunkSpans 单源），
-//   切点优先落在低墨迹列（减少切字）。
-// 纯函数（断言直跑面）：parseOcrDict / dictClassCountOk / detLetterboxGeom / dbExtractLines /
-// ctcDecode / ocrClassChar / recChunkSpans / recResizeGeom / joinChunkText。
+// 内置识别引擎纯函数层（det 几何 / DB 后处理 / CTC 解码 / rec 分块与缩放几何 / 字典解析与
+// 类别数校验五件）。与 providers/OcrPaddle.ets（推理编排）分开 = 本件**零 import**——断言脚本
+// 可复制直跑（scripts/assert-attach-domain.mjs → .ts，Node 原生剥类型；先例 = SseParser /
+// SkillText / MemoryText 同「纯函数层 + 零 import」口径）。
+// ★ 超参真值源 = 模型仓 inference.yml（阶段 0 实读，**不是**官方文档表格值——文档该列写
+// None）：det thresh 0.2 / box_thresh 0.4 / unclip_ratio 1.4 / max_candidates 3000。
+// ★ 类别数关系（设备实测）：C = 字典行数 + 2——字符表 = ['blank'] + 字典 + [' ']（blank 置首、
+// 空格追加在**末尾**）；判据单源 dictClassCountOk（唯一放行式），**不匹配 = 该引擎失败，
+// 绝不带错字典硬跑**。
+// ★ 长行分块（硬需求）：rec 固定输入 48×320，单段长宽比上限 = 320/48 ≈ 6.67，整行超此比例
+// 被横向挤压——对照实验：整行解码全糊、按比例分块各自解码再拼接基本逐字正确。故 rec 路
+// **一律先分块**（recChunkSpans 单源），切点优先落在低墨迹列（减少切字）。
 
 // det 输入边长（转换期固定 shape：--inputShape=x:1,3,960,960）
 export const OCRP_DET_SIDE: number = 960;
@@ -39,8 +28,8 @@ export const OCRP_DET_UNCLIP: number = 1.4;
 export const OCRP_DET_MAX_CAND: number = 3000;
 // 单块连通域最小像素数（噪点滤除）与框分数下限（= box_thresh，独立常量便于分档）
 export const OCRP_MIN_COMPONENT_PX: number = 4;
-// det letterbox 几何：长边收到 limit 且两轴对齐 32（原图长边未超 limit 则不放大——照
-// PaddleOCR resize_type0 的 `max(h,w) > limit_side_len` 分支；小图原样，靠黑边补满）
+// det letterbox 几何：长边收到 limit 且两轴对齐 32（原图长边未超 limit 不放大——照
+// PaddleOCR resize_type0 分支；小图原样，靠黑边补满）
 export interface OcrDetGeom {
   ratio: number;
   newW: number;
@@ -82,8 +71,7 @@ export function detLetterboxGeom(w: number, h: number, limit: number): OcrDetGeo
   const ratio: number = limit / longSide;
   let newW: number = alignOcr32(w * ratio);
   let newH: number = alignOcr32(h * ratio);
-  // 对齐可能把长边顶出 limit 一格（例：limit=960，比值后 959.6 → 960 恰好；但短边低位
-  // 进位可能连带长边超界）——钳回 limit，防越界写缓冲
+  // 对齐进位可能把长边顶出 limit 一格——钳回 limit，防越界写缓冲
   if (newW > limit) {
     newW = limit;
   }
@@ -94,10 +82,10 @@ export function detLetterboxGeom(w: number, h: number, limit: number): OcrDetGeo
   return geom;
 }
 
-// DB 后处理：概率图 → 行框列表（字母序 = 阅读序：先上后下、同带先左后右）。
-// 步骤 = 二值化（> thresh）→ 8 邻域连通域 → 面积/分数过滤 → unclip 外扩 → 行合并。
-// unclip 用 DB 距离公式的轴对齐近似：d = 面积 × ratio ÷ 周长（PaddleOCR 走 pyclipper 多边形
-// 偏移，本件只处理轴对齐框，故用同一距离公式的矩形外扩解）。
+// DB 后处理：概率图 → 行框列表（字母序 = 阅读序：先上后下、同带先左后右）。步骤 = 二值化
+//（> thresh）→ 8 邻域连通域 → 面积/分数过滤 → unclip 外扩 → 行合并。unclip 用 DB 距离公式
+// 的轴对齐近似：d = 面积 × ratio ÷ 周长（PaddleOCR 走 pyclipper 多边形偏移，本件只处理轴对
+// 齐框，用同一距离公式的矩形外扩解）
 export function dbExtractLines(probs: Float32Array, w: number, h: number, thresh: number,
   boxThresh: number, unclipRatio: number, maxCandidates: number): OcrCropBox[] {
   const boxes: OcrCropBox[] = [];
@@ -188,8 +176,8 @@ export function dbExtractLines(probs: Float32Array, w: number, h: number, thresh
   return mergeOcrLines(boxes);
 }
 
-// 行合并：竖直投影重叠 ≥ 短边一半 且 水平间隙 ≤ max(短边×0.8, 8px) 的两框归同一行
-//（DB 二值图里同一文本行常被字间空隙切成多段连通域，不合并 = rec 只读到半个句子）
+// 行合并：竖直投影重叠 ≥ 短边一半 且 水平间隙 ≤ max(短边×0.8, 8px) 的两框归同一行（DB 二值
+// 图同一文本行常被字间空隙切成多段连通域，不合并 = rec 只读到半个句子）
 export function mergeOcrLines(boxes: OcrCropBox[]): OcrCropBox[] {
   const sorted: OcrCropBox[] = boxes.slice().sort((a: OcrCropBox, b: OcrCropBox): number => {
     const dy: number = a.y0 - b.y0;
@@ -240,7 +228,7 @@ export function mergeOcrLines(boxes: OcrCropBox[]): OcrCropBox[] {
 
 // rec 分块：整行宽 cw、高 ch，单块宽上限 = floor(ch × maxW/targetH)，切点优先落在低墨迹列
 //（ink = 逐列墨迹量，长度应 ≥ cw；传 null / 长度不足则按等距切——低墨迹搜索窗 = 理想切点
-// 前后各 15% 块宽，取其内 ink 最小列）。返回段按序，x0 含 x1 不含。
+// 前后各 15% 块宽，取其内 ink 最小列）。返回段按序，x0 含 x1 不含
 export function recChunkSpans(cw: number, ch: number, targetH: number, maxW: number,
   ink: Float32Array | null): OcrChunkSpan[] {
   const spans: OcrChunkSpan[] = [];
@@ -267,8 +255,8 @@ export function recChunkSpans(cw: number, ch: number, targetH: number, maxW: num
   return spans;
 }
 
-// 低墨迹切点：在 [ideal−window, ideal+window] 内挑 ink 最小列（并列取最靠左）；无 ink 数据
-// 直接用 ideal。窗宽 = 块宽的 15%（至少 2px）
+// 低墨迹切点：在 [ideal±window] 内挑 ink 最小列（并列取最靠左）；无 ink 数据直接用 ideal。
+// 窗宽 = 块宽的 15%（至少 2px）
 function pickLowInkCut(start: number, ideal: number, cw: number, chunkW: number,
   ink: Float32Array | null): number {
   if (ink === null || ink.length < cw) {
@@ -302,8 +290,8 @@ export function recResizeGeom(cw: number, ch: number, targetH: number, maxW: num
   return geom;
 }
 
-// 字典解析：按行切、去 \r、丢空行（官方 ppocrv6_tiny_dict.txt 一行一字符，含 `'` 这类
-// 容易被误处理的字符——故不做引号剥离，原样收）
+// 字典解析：按行切、去 \r、丢空行（官方 ppocrv6_tiny_dict.txt 一行一字符，含 ' 这类容易被
+// 误处理的字符——故不做引号剥离，原样收）
 export function parseOcrDict(text: string): string[] {
   const raw: string[] = text.split('\n');
   const chars: string[] = [];
@@ -364,12 +352,10 @@ export function ctcDecode(flat: Float32Array, t: number, classCount: number,
   return out;
 }
 
-// 分块结果拼接：逐段去首尾空白后相接。段间不补空格——★ 2026-09-16 v4 真机实测反证：曾按
-// 「切点零墨迹槽宽 ≥ 平均字宽 × 0.25 即补空格」的启发式补词间空格，实测**两边都插错**
-//（中文插出「维生 素」「来源是 日晒」，德语插出「lebenswichti ge」「versorg t」），而该补的
-// 词间空格（sindlebenswichtige）仍未补上——按证据回退，不补空格（丢空格的代价小于插错空格：
-// v3 实测中文 7 行近逐字正确、德语 7 行可读）。真正的解法 = 分块重叠解码 + 重叠文本归并，
-// 属后续项（登记在变更记录，未实现）。全空段忽略
+// 分块结果拼接：逐段去首尾空白后相接。段间不补空格——★ v4 真机实测反证：曾按「切点零墨
+// 迹槽宽 ≥ 平均字宽 × 0.25 即补空格」的启发式补词间空格，实测两边都插错（中文插出「维生
+// 素」、德语插错位），而该补的仍未补上——按证据回退不补（丢空格的代价小于插错空格）。
+// 真正的解法 = 分块重叠解码 + 重叠文本归并（后续项未实现）。全空段忽略
 export function joinChunkText(pieces: string[]): string {
   let out: string = '';
   for (let i = 0; i < pieces.length; i++) {

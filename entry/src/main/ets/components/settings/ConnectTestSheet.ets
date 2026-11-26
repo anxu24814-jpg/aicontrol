@@ -1,54 +1,47 @@
-// 连接能力三项测试半模态面板（2026-09-21 服务商连接能力三项测试笔）：单支 Key「测试连接」
-// 的面板内容件（不含 bindSheet——宿主 = ProviderKeysPanel 根，规范-半模态 §1「最近可达根」
-// 判据三条全过；§8「面板内容件」清单新增件）。形制 = ContextUsageSheet / MessageCopySheet
-// 同款四件套（HdsNavigation MODAL 壳 + sheetTitleBarOptions 主副标题规格 + bindToScrollable
-// 滚动感知 + 底部安全区延伸），滚动容器 clip(false)（规范 §2——渐变模糊要有内容可透）。
-// · 内容 = 三张结果卡（一项能力一卡：非流式 / 流式 / 工具调用——2026-09-21 决明「只拆」定形，
-//   原「一张卡包三行」改为一项一卡，卡体与行体合一由 ForEach 展开）：卡左 = 标签 + 详情（模型
-//   回复原文，最多三行超出省略），卡右 = 状态区（测试中 = LoadingProgress / 通过 = checkmark
-//   主色 / 失败 = xmark 警示色 / 未测试 = 纯文字——★ 零新色零新符号，两符号均已在规范 §6
-//   实锤）；卡距走 CARD_SPACING（与上下文用量、会话统计两面板同源）；
-// · 底部吸底单键「测试」（= 重跑全部三项）：形制照 MessageCopySheet（规范 §2 第三条）——
-//   Stack 底对齐叠〔Scroll 全高 + 底部渐变蒙层 + 键带〕，键不随内容滚动、内容经蒙层渐隐
-//   穿出；Scroll 尾占位 = 蒙层高（含安全区），两处同源单常量；键带条透明（键自身四件套
-//   承担实底/光感两态）+ hitTestBehavior(Transparent)（条面不阻断下层滚动）。「取消」键
-//   不做——关闭走标题栏 xmark，两个关闭语义重复。
-// · 数据 = @Link 三参（model 副标题 / rows 结果行 / testing 重跑门闩）：面板打开后结果陆续
-//   回来、副标题模型名异步回填，故一律 @Link 链（普通值参在 builder 位不随父更新）；行数据
-//   模型与四态字单源在 KeyConnectTester / ConnectTestJudge。
+// 连接能力三项测试半模态面板（内容件，不含 bindSheet——宿主 = ProviderKeysPanel 根，规范-半模态 §1「最近
+// 可达根」三判据全过、§8「面板内容件」清单）。形制同 ContextUsageSheet / MessageCopySheet 四件套
+//（HdsNavigation MODAL 壳 + sheetTitleBarOptions 主副标题 + bindToScrollable + 底部安全区延伸），滚动容器
+// clip(false)（规范 §2：渐变模糊要有内容可透）。
+// · 内容 = 三张结果卡（一项能力一卡，卡体与行体合一由 ForEach 展开）：卡左 = 标签 + 详情（最多三行省略），
+//   卡右 = 状态区（测试中 LoadingProgress / 通过 checkmark 主色 / 失败 xmark 警示色 / 未测试纯文字——零新色
+//   零新符号）。
+// · 底部吸底单键「测试」（重跑全部三项）：形制照 MessageCopySheet（规范 §2 第三条）——Stack 底对齐叠〔Scroll
+//   全高 + 蒙层 + 键带〕，键不随内容滚动、内容经蒙层渐隐穿出；Scroll 尾占位 = 蒙层高（含安全区），两处同源
+//   单常量；键带透明 + hitTestBehavior(Transparent)。「取消」键不做——关闭走标题栏 xmark。
+// · 数据 = @Link 三参（model 副标题 / rows 结果行 / testing 重跑门闩）：结果陆续回来、副标题异步回填，故
+//   一律 @Link（普通值参在 builder 位不随父更新）；行数据模型与四态字单源在 KeyConnectTester /
+//   ConnectTestJudge。
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import {
   CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont,
   fallbackButtonMaterial, fallbackButtonStateEffect
 } from '../../common/ImmersiveLevel';
-import { cardBg, cardDescColor, cardTitleColor, CARD_PANEL_WIDTH, CARD_SPACING, pageBgFade } from '../../common/Theme';
+import { cardBg, cardDescColor, cardTitleColor, CARD_PANEL_WIDTH, CARD_SPACING, pageBgFade, CARD_RADIUS } from '../../common/Theme';
 import {
   PROBE_FAIL, PROBE_IDLE, PROBE_OK, PROBE_RUNNING
 } from '../../common/providers/ConnectTestJudge';
 import { ConnectTestRow } from './KeyConnectTester';
 import { sheetTitleBarOptions } from '../chat/KimiSheetCommon';
 
-// 底部渐变蒙层高（vp，★ 单源：蒙层与 Scroll 尾占位同用「本值 + 安全区」——MessageCopySheet
-// 同款；键带基高 64〔上 12 + 键 40 + 下 12〕+ 26vp 渐隐余量 = 90 同值沉淀）。
-// 底部安全区兜底（vp）：本面板宿在服务商详情页深处，拿不到页面侧 bottomPad（ChatPage 那套
-// 下发链不经过此处），故按项目同域先例取 24（ModelFetchSheet / ProviderModelsPanel 尾部
-// 安全区让位同值），键带底 padding 与蒙层高两处同源本值
+// 底部渐变蒙层高（vp，单源：蒙层与 Scroll 尾占位同用「本值 + 安全区」；键带基高 64 + 26vp 渐隐余量）。
+// 底部安全区兜底（vp）：宿在服务商详情页深处，拿不到页面侧 bottomPad，按同域先例取 24（ModelFetchSheet /
+// ProviderModelsPanel 同值），键带底 padding 与蒙层高同源本值
 const TEST_BOTTOM_FADE_HEIGHT: number = 90;
 const TEST_BOTTOM_SAFE_PAD: number = 24;
 
 @Component
 export struct ConnectTestSheet {
-  // 副标题（模型名；打开面板时不知道，探针解析完模型后经宿主回填）
+  // 副标题（模型名；打开面板时未知，探针解析完模型后经宿主回填）
   @Link model: string;
   // 三行结果（宿主整组替换驱动重建——键含 state/detail）
   @Link rows: ConnectTestRow[];
   // 重跑门闩（true = 进行中，键禁用——防连点叠加）
   @Link testing: boolean;
-  // 关闭上行（xmark——宿主置 sheetShow = false；手势关闭路径走 bindSheet onWillDismiss）
+  // 关闭上行（xmark——宿主置 sheetShow = false；手势关闭走 bindSheet onWillDismiss）
   onClose: () => void = () => {
   };
-  // 重跑上行（键「测试」——宿主整组重置为「测试中」后重发三项）
+  // 重跑上行（宿主整组重置为「测试中」后重发三项）
   onRetest: () => void = () => {
   };
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
@@ -56,12 +49,11 @@ export struct ConnectTestSheet {
   @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
   private scroller: Scroller = new Scroller();
 
-  // 蒙层与 Scroll 尾占位高度（含底部安全区——键带底 padding 让位同源同值）
   private bottomFadeHeight(): number {
     return TEST_BOTTOM_FADE_HEIGHT + TEST_BOTTOM_SAFE_PAD;
   }
 
-  // 四态字 → 面板展示字（四态值域单源在 ConnectTestJudge；未知值原样显示不吞）
+  // 四态字 → 展示字（值域单源在 ConnectTestJudge；未知值原样显示不吞）
   private stateText(state: string): string {
     if (state === PROBE_IDLE) {
       return '未测试';
@@ -83,8 +75,7 @@ export struct ConnectTestSheet {
     return state === PROBE_FAIL ? $r('sys.color.ohos_id_color_warning') : cardDescColor();
   }
 
-  // 单行结果卡（一项能力一卡——卡体与行体合一：本构建器每次调用即一张卡，卡数由 ForEach
-  // 展开；卡左 = 标签 + 详情在左、状态区在右；状态区三形态：加载指示 / 两符号 / 纯文字）
+  // 单行结果卡（每次调用即一张卡，卡数由 ForEach 展开）
   @Builder
   ResultRow(row: ConnectTestRow) {
     Row({ space: 12 }) {
@@ -124,31 +115,27 @@ export struct ConnectTestSheet {
       }
       .alignItems(VerticalAlign.Center)
     }
-    // 卡体（自绘卡：宽走 CARD_PANEL_WIDTH，圆角 16 与卡内边距 16 同各面板先例）
+    // 卡体（自绘卡：宽走 CARD_PANEL_WIDTH，圆角 CARD_RADIUS 与卡内边距 16 同各面板先例）
     .width(CARD_PANEL_WIDTH)
     .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .alignItems(VerticalAlign.Top)
   }
 
   build() {
     HdsNavigation() {
-      // 吸底键条层：Stack 底对齐叠〔Scroll 全高 + 底部渐变蒙层 + 键带〕——键不随滚动、
-      // 内容滚出到键后（规范 §2 第三条形制）
+      // 吸底键条层：Stack 底对齐叠〔Scroll 全高 + 蒙层 + 键带〕——键不随滚动、内容滚出到键后（规范 §2 第三条）
       Stack({ alignContent: Alignment.Bottom }) {
         Scroll(this.scroller) {
           Column({ space: CARD_SPACING }) {
-            // 结果卡 ×3（一项能力一卡——2026-09-21 决明「只拆」：卡体在 ResultRow 构建器内，
-            // 随 ForEach 展开成三张；卡距单源 CARD_SPACING。键含 state/detail ⇒ 结果陆续
-            // 落地即逐卡重建）。★ 禁改裸 row.key：键不变则 ForEach 复用旧节点、卡面定格
-            //（官方 FAQ faqs-arkui-41「数据源变化靠 key 变化触发重建」；项目红线 = 规范-列表
-            //  卡片「键变重建」坑57 家族）——守钉 = assert-ui-shape 146 组键三载荷 + 真值表两钉
+            // 结果卡 ×3（卡体在 ResultRow，随 ForEach 展开）。★ 禁改裸 row.key：键不变则 ForEach 复用旧节点、
+            // 卡面定格（官方 FAQ faqs-arkui-41；规范-列表卡片坑57 家族）——守钉 = assert-ui-shape 146 组键三载荷
             ForEach(this.rows, (row: ConnectTestRow) => {
               this.ResultRow(row)
             }, (row: ConnectTestRow): string => row.key + '|' + row.state + '|' + row.detail)
-            // 尾部占位 = 蒙层高（含安全区，★ 与蒙层同源 bottomFadeHeight）：滚到底末卡停在
-            // 蒙层上方完整可见；Row 空占位——Blank 在部分容器下编译 10905201，规范 §2 先例用 Row
+            // 尾部占位 = 蒙层高（★ 与蒙层同源 bottomFadeHeight）；Row 空占位——
+            // Blank 在部分容器下编译 10905201，规范 §2 先例用 Row
             Row()
               .height(this.bottomFadeHeight())
           }
@@ -177,7 +164,7 @@ export struct ConnectTestSheet {
         // 底部吸底键带（条透明 + Transparent 不阻断下层滚动；键自身四件套承担两态）
         Column() {
           Row() {
-            // 「测试」= 主操作（官方强调蓝 + 恒白字；内容区回退双态 = fallbackButton* 四件套）
+            // 「测试」= 主操作（官方强调蓝 + 恒白字；fallbackButton* 四件套）
             Button('测试')
               .width('100%')
               .fontColor(fallbackButtonFont(this.contentFallback, true))

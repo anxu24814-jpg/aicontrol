@@ -1,21 +1,17 @@
-// 用量统计页纯函数计算模块（2026-09-06 任务书-用量统计页改版新增；职责缝 = 「时段轴 /
-// 热力周列与日历网格 / 趋势聚合 / 数值格式化」的公式层——零 import 零 UI 依赖，专为
-// scripts/usage-stats-calc-check.mjs 机械求值断言而设：剥注释/类型标注后 new Function
-// 即跑，故本文件★禁加 import★、类型标注只用该脚本 TYPE_RE 白名单内形态。
-// ★2026-09-07「满日历」方案新增 splitIntoCalendarRows（近三十天日历行网格，与周列对偶）——
-//   usage-stats-calc-check.mjs TYPE_RE 已同步 `(DayValue | null)[][]` 形态与断言组。
-// 时段口径（任务书拍板为法）：近 N 天 = 含今天的最近 N 个本地自然日（dayStartMs 零点 +
-// setDate 回退，禁 86400000 固定减——跨月跨年交给 Date 进位）；全部 = 不过滤（sinceMs=0）
-// （★2026-09-07 全部档热力图轴改近一年窗口 = dayStartMs(Date.now(),364)，见页面侧注释）。
-// 日键 = 'YYYY-MM-DD' 本地时区，与 UsageStatsDb 逐日聚合的
-// date(createdAt/1000,'unixepoch','localtime') 同口径——两侧可逐键对账。
-// ★ 2026-09-08 用量统计工具笔：时段起点（rangeSinceMs）/日轴起点（axisStartDayKey）/总览与
-//   Token 卡构造（buildOverviewCells/buildTokenCells）上收本文件——用量统计页与
-//   get_usage_stats 工具共用同一套口径与文案，两处读数逐格一致（工具域实现在
-//   common/providers/ToolUsageStats.ets）。
-// ★ 2026-09-13 工具补齐三件笔：费用总览四格构造（buildCostCells）与金额格式化
-//   （formatCostValue）落本文件——费用估计页与 get_cost_stats 工具同源（同族先例；金额
-//   格式化与 CostStatsCalc.fmtCost 双写，两处一致性由 assert-app-domain 84 组对拍钉）。
+// 用量统计页纯函数计算模块。职责缝 = 「时段轴 / 热力周列与日历网格 / 趋势聚合 / 数值
+// 格式化」的公式层——零 import 零 UI 依赖，专为 scripts/usage-stats-calc-check.mjs 机械
+// 求值断言而设：剥注释/类型标注后 new Function 即跑，故本文件★禁加 import★、类型标注
+// 只用该脚本 TYPE_RE 白名单内形态。
+// 时段口径（拍板为法）：近 N 天 = 含今天的最近 N 个本地自然日（dayStartMs 零点 +
+// setDate 回退，禁 86400000 固定减——跨月跨年交给 Date 进位）；全部 = 不过滤（sinceMs=0；
+// 热力图轴 = 近一年窗口，见 axisStartDayKey）。日键 = 'YYYY-MM-DD' 本地时区，与
+// UsageStatsDb 逐日聚合同口径——两侧可逐键对账。
+// 时段起点（rangeSinceMs）/日轴起点（axisStartDayKey）/上期比较（comparisonSinceMs 与
+// 变动文案族）/统计卡构造（buildOverviewCells / buildTokenCells / buildCostCells）与金额
+// 格式化（formatCostValue）收口本文件——页面与 get_usage_stats / get_cost_stats 工具共用
+// 同一套口径与文案，两处读数逐格一致（工具域实现在 common/providers/ToolUsageStats.ets）。
+// 金额格式化与 CostStatsCalc.fmtCost 双写
+//（两件都是零 import 纯函数文件无共享通道），一致性由 assert-app-domain 84 组对拍钉死。
 
 // 逐日数据点（day = 'YYYY-MM-DD' 本地时区；totalTokens = 当日总 token，无记录日补 0）
 export interface DayValue {
@@ -36,8 +32,7 @@ export interface WeekColumn {
   cells: (DayValue | null)[];
 }
 
-// 统计卡单元格（2026-09-08 用量统计工具笔新增：页面 StatGrid 与 get_usage_stats 工具
-// 共用——格文案/单位/数值格式单源，工具读数与页面显示逐格一致）
+// 统计卡单元格（页面 StatGrid 与 get_usage_stats 工具共用——格文案/单位/数值格式单源）
 export interface UsageStatCell {
   key: string; // 格身份（标签名，卡内唯一）
   label: string;
@@ -135,10 +130,10 @@ export function splitIntoWeekColumns(days: DayValue[]): WeekColumn[] {
   return columns;
 }
 
-// 完整日轴 → 热力图日历行网格（2026-09-07 近三十天「满日历」形态新增；与
-// splitIntoWeekColumns 对偶——同款偏移/封行/补 null 逻辑，仅「每 7 格封一行」而非封一
-// 列）：行 = 周（首行前导 null 数 = 首日星期偏移，周一列顶对齐）、列 = 周一~周日；尾行
-// 不足 7 格补 null 保对位；输出行表供月网格组件按行渲染（列少时格子放大铺满卡宽）。
+// 完整日轴 → 热力图日历行网格（近三十天「满日历」形态；与 splitIntoWeekColumns 对偶——
+// 同款偏移/封行/补 null 逻辑，仅「每 7 格封一行」而非封一列）：行 = 周（首行前导 null 数 =
+// 首日星期偏移，周一列顶对齐）、列 = 周一~周日；尾行不足 7 格补 null 保对位；输出行表供
+// 月网格组件按行渲染（列少时格子放大铺满卡宽）。
 export function splitIntoCalendarRows(days: DayValue[]): (DayValue | null)[][] {
   const rows: (DayValue | null)[][] = [];
   if (days.length === 0) {
@@ -218,9 +213,9 @@ export function avgPerRound(totalTokens: number, rounds: number): number {
 
 // 平均每会话消息数 = 时段消息数 ÷ 活跃会话数（两个入参都是总览卡既有口径——消息数走
 // messages 表 user+assistant 时段 COUNT、活跃会话走 events 时段 DISTINCT，本函数零新查询）；
-// 会话 ≤ 0 → 0（除零守卫）；一位小数——小值（如 0.3 / 2.5）保留小数不塌成 0 或整数，
-// 千级以上由调用点 fmtCompact 走紧凑档。口径边界：全部档下升级前存量消息计入分子而其
-// 所在会话（无用量记录）不在分母——存量回填缺失所致，见变更记录 2026-09-09 一百八十六节
+// 会话 ≤ 0 → 0（除零守卫）；一位小数——小值保留小数不塌成 0 或整数，千级以上由调用点
+// fmtCompact 走紧凑档。口径边界：全部档下升级前存量消息计入分子而其所在会话（无用量记录）
+// 不在分母——存量回填缺失所致，见变更记录一百八十六节
 export function avgMessagesPerConversation(messageCount: number, conversations: number): number {
   if (conversations <= 0) {
     return 0;
@@ -228,8 +223,8 @@ export function avgMessagesPerConversation(messageCount: number, conversations: 
   return Math.round(messageCount / conversations * 10) / 10;
 }
 
-// ── 时段口径与统计卡构造（2026-09-08 用量统计工具笔：页面与 get_usage_stats 工具共用——
-//    时段起点/日轴起点/格文案与公式三处单源，两处读数不可能漂移）──
+// ── 时段口径与统计卡构造（页面与 get_usage_stats 工具共用——时段起点/日轴起点/格文案
+//    与公式三处单源，两处读数不可能漂移）──
 
 // 时段起点毫秒（rangeIndex 0 近七天 / 1 近三十天 / 2 全部不过滤；nowMs 注入便于断言）
 export function rangeSinceMs(rangeIndex: number, nowMs: number): number {
@@ -248,14 +243,57 @@ export function axisStartDayKey(rangeIndex: number, sinceMs: number, nowMs: numb
   return rangeIndex === 2 ? toLocalDayKey(dayStartMs(nowMs, 364)) : toLocalDayKey(sinceMs);
 }
 
-// 平均首字耗时数值串（2026-09-23 首字耗时笔）：入参 = 时段/会话内 SUM(firstTokenMs) 与**非 0
-// 行计数**（会话级聚合 sessionUsageTotals 的 fs/fn——分母必须走非 0 计数：升级前的存量行与
-// 无产出正文的轮次恒 0，混进分母会把均值拉成假数据）。records ≤ 0 → '0'（除零守卫，与每日
-// 平均同款）；否则取均值折秒一位小数（百位四舍五入 ÷10，与累计生成时长的小时段同款取整
-// 姿势）。★ 单位恒定「秒」不切档——与时长格的小时/分钟双档刻意不同：那两个跨三个数量级，
-// 首字量级恒在 0.x~十几秒。★ 消费方（同日**两度**改判）= **会话统计面板** Token 用量卡末行
-// 「平均首字耗时」；设置页总览第七格与其全局聚合、以及中途试落过的上下文用量面板一行，均随
-// 该改判撤除（决明「不要设置页的，首字平均放上下文半模态」→「移入会话统计吧」）
+// ── 上期比较口径（用量统计页首卡「比前 N 天」变动行；决明 2026-11-08 拍板：标题不带
+//    「我们」、变动文案统一「比前 7 天 / 比前 30 天」、全部档不显示变动行）──
+
+// 上一周期起点：入参刻意取**当前时段起点**而非系统时间——同一次查询里两次读 Date.now()
+// 跨零点会错开一天；从该起点回退一整个等长窗口（近七天回退 7 天 / 近三十天回退 30 天），
+// 与 rangeSinceMs 同帧同基准。全部档回 -1 = 无可比周期（调用方不查询、不渲染变动行）。
+export function comparisonSinceMs(rangeIndex: number, sinceMs: number): number {
+  if (rangeIndex === 0) {
+    return dayStartMs(sinceMs, 7);
+  }
+  if (rangeIndex === 1) {
+    return dayStartMs(sinceMs, 30);
+  }
+  return -1;
+}
+
+// 变动行时段名（文案单源；全部档空串 = 调用方按无可比周期隐藏）
+export function comparisonPeriodLabel(rangeIndex: number): string {
+  if (rangeIndex === 0) {
+    return '前 7 天';
+  }
+  if (rangeIndex === 1) {
+    return '前 30 天';
+  }
+  return '';
+}
+
+// 变动方向：1 增加 / -1 减少 / 0 持平（箭头由调用方按本值取官方 SymbolGlyph，持平不显）
+export function tokenDeltaDirection(current: number, previous: number): number {
+  const diff: number = current - previous;
+  return diff > 0 ? 1 : (diff < 0 ? -1 : 0);
+}
+
+// 变动文案：复刻参考图「比上周减少 9 小时 11 分钟」的**绝对量**口径——差值走 fmtCompact
+// 加 Token 单位，不写百分比；持平改「与…持平」。箭头不进本串（官方 SymbolGlyph 在调用
+// 侧出），本函数零 UI 依赖可被纯函数断言直跑。
+export function tokenDeltaText(current: number, previous: number, periodLabel: string): string {
+  const diff: number = current - previous;
+  if (diff === 0) {
+    return '与' + periodLabel + '持平';
+  }
+  return '比' + periodLabel + (diff > 0 ? '增加 ' : '减少 ') +
+    fmtCompact(Math.abs(diff)) + ' Token';
+}
+
+// 平均首字耗时数值串：入参 = 时段/会话内 SUM(firstTokenMs) 与**非 0 行计数**（会话级聚合
+// sessionUsageTotals 的 fs/fn——分母必须走非 0 计数：存量行与无产出正文的轮次恒 0，混进
+// 分母即假数据）。records ≤ 0 → '0'（除零守卫）；否则取均值折秒一位小数。★ 单位恒定「秒」
+// 不切档——与时长格的小时/分钟双档刻意不同（首字量级恒在 0.x~十几秒）。消费方 = 会话统计
+// 面板 Token 用量卡末行「平均首字耗时」（设置页/上下文面板落点曾两度改判后撤除，决明拍板
+//「移入会话统计」）
 export function fmtFirstTokenMs(sumMs: number, records: number): string {
   if (records <= 0) {
     return '0';
@@ -265,10 +303,9 @@ export function fmtFirstTokenMs(sumMs: number, records: number): string {
 
 // 总览六格（活跃会话/消息总数/每会话消息数/累计生成时长/每日平均 token/最长连续活跃）：
 // 入参顺序 = 格序，调用点按名传值；时长 ≥1 小时走小时一位小数、否则分钟整数，每日平均 =
-// 时段总量 ÷ 活跃天数（活跃天数 0 → '0'，除零守卫）。★2026-09-09 决明指令：原「活跃模型」
-// 格（usedModels 计数）换为「每会话消息数」——活跃模型仍由 DB 层聚合供排行卡尾行消费，
-// 只是不再单独成格。★2026-09-23 首字耗时笔同日两度改判：曾加过的第七格「平均首字耗时」撤除，
-// 首字均值最终落「会话统计」面板 Token 用量卡（fmtFirstTokenMs 保留，消费方换了两轮）
+// 时段总量 ÷ 活跃天数（活跃天数 0 → '0'，除零守卫）。★ 格面沿革（防回游）：原「活跃模型」
+// 格换为「每会话消息数」（决明指令——活跃模型仍由 DB 层聚合供排行卡尾行消费）；曾加过的
+// 启动统计两格与「平均首字耗时」第七格均随拍板退役（后者见 fmtFirstTokenMs）——保持六格。
 export function buildOverviewCells(activeConversations: number, messageCount: number,
   totalDurationMs: number, activeDays: number, totalTokens: number,
   longestStreakDays: number): UsageStatCell[] {
@@ -303,8 +340,8 @@ export function buildTokenCells(totalTokens: number, promptTokens: number,
 
 // 金额格式化（元；≥1 元两位小数、0~1 元四位小数保精度、0 回 '0'）。★ 与 CostStatsCalc.fmtCost
 // 同逻辑且必须同逻辑——两个计算模块都是「禁加 import」的零依赖纯函数文件（各自被断言脚本
-// copyFileSync 剥类型直跑），没有共享通道，故实现双写；两处一致性由 assert-app-domain.mjs
-// 84 组对拍断言钉死（同一组边界值逐值相等），任一处改公式即红
+// 剥类型直跑），没有共享通道，故实现双写；两处一致性由 assert-app-domain 84 组对拍断言钉死
+//（同一组边界值逐值相等），任一处改公式即红
 export function formatCostValue(v: number): string {
   if (v >= 1) {
     return v.toFixed(2);
@@ -315,10 +352,10 @@ export function formatCostValue(v: number): string {
   return '0';
 }
 
-// 费用总览四格（总费用/输入费用/缓存输入费用/输出费用；金额前缀 ¥ + formatCostValue 分档小数。
-// ★ 2026-09-13 工具补齐三件：自 CostStatsPage 页内私有方法外迁——费用估计页与 get_cost_stats
-// 工具引同一函数，四格文案与金额格式单源，两处读数逐格一致（buildOverviewCells 同族先例；
-// 值由调用方从 CostTotals 取数传入——本文件零 import 契约不引外部类型）
+// 费用总览四格（总费用/输入费用/缓存输入费用/输出费用；金额前缀 ¥ + formatCostValue 分档
+// 小数）——费用估计页与 get_cost_stats 工具引同一函数，四格文案与金额格式单源，两处读数
+// 逐格一致（buildOverviewCells 同族先例；值由调用方从 CostTotals 取数传入——本文件零
+// import 契约不引外部类型）
 export function buildCostCells(total: number, inputCost: number, cachedCost: number,
   outputCost: number): UsageStatCell[] {
   return [

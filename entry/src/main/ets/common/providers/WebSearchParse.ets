@@ -1,22 +1,16 @@
-// 联网搜索·解析纯函数层（2026-09-03 Cube 吸收第三批①；零 import 可 node 直跑——
-// SseParser/ModelRegistry 同款先例，断言脚本 scripts/sse-assert.mjs ㉖/㊿ 组直跑消费）。
-// 源自 cubeagent-stream-test（chatcube MIT 快照）services/WebSearchService.ets:1977-2261
-// 逐行裁剪移植：Bing 结果页 HTML 双策略解析（b_algo 块正则 → h2 标题链接兜底）+ URL 去重
-// + Bing 内部链接过滤 + 本地网页正文抽取（剥 script/style/nav/footer/header 后取 p/h/li/
-// td/th/span 块）。传输层在 WebSearch.ets（本文件不含任何网络/API 依赖）。
-// ★ 2026-09-21 八百三十八节线性化：块扫描与剥体一律走「线性标签扫描助手」（indexOf 逐段
-// 推进，惰性量词零残留）——原惰性正则在未闭合标签连排的脏页上二次方（实测见该节注释）。
-// ★ 2026-09-21 八百三十九节自检轮收口：838 的线性化只覆盖「短 head」形态——「同名开标签连排
-// 且长距离无 `>`」（每个候选重建整段头）与「长段 `<` 之间无 `>`」（剥标签正则 `/<[^>]+>/g`，
-// 838 撤除的 64 KB 窗口原是该路径唯一屏障）仍有二次方；本件剥标签与标题提取一并改逐段推进、
-// class 判据回旧口径（详见该节 F1~F4）。**本件解析面全部扫描路径实测曲线线性**（含 5 MB 同形）。
-// ★ 2026-09-10 多引擎一期扩面：博查/秘塔/Serper 三家 JSON 响应解析 + 秘塔内嵌错误提取
-//（§ 多引擎 JSON 解析节）——传输侧在 common/search/ApiSearchEngines.ets，本文件仍是纯函数。
-// ★ 2026-09-21 任务书-联网三件错误语义-20260921 笔 A：本件兼载网络层错误文案（HTTP 请求
-// 与联网抓取共用一张 http kit 错误码表——见「网络层错误文案」节）。
+// 联网搜索·解析纯函数层（零 import 可 node 直跑——SseParser/ModelRegistry 同款先例，
+// 断言脚本 scripts/sse-assert.mjs ㉖/㊿ 组直跑消费）。源自 cubeagent-stream-test（chatcube
+// MIT 快照）逐行裁剪移植：Bing 结果页 HTML 双策略解析（b_algo 块正则 → h2 标题链接兜底）
+// + URL 去重 + Bing 内部链接过滤 + 本地网页正文抽取（剥 script/style/nav/footer/header
+// 后取 p/h/li/td/th/span 块）。传输层在 WebSearch.ets（本文件不含任何网络/API 依赖）。
+// ★ 性能契约（变更记录八百三十八/八百三十九节线性化）：本件全部扫描路径一律走「线性标签
+// 扫描助手」（indexOf 逐段推进），对未闭合标签连排的脏页 / 敌意页保持线性（原惰性正则
+// 家族实测二次方，输入来自远端站点无界可达 5 MB ⇒ 分钟级冻结）；实测曲线全部线性（含
+// 5 MB 同形）。另兼载多引擎 JSON 解析（博查/秘塔/Serper/DeepSeek/智谱）与网络层错误
+// 文案（HTTP 请求与联网抓取共用一张 http kit 错误码表）。
 
 // 单条搜索结果（index 从 1 起供引文卡编号与模型引用对齐——Cube SearchResultItem 同构；
-// id = ref_ 前缀 + 时间戳由执行器生成，解析层不管 id）
+// id 由执行器生成，解析层不管）
 export interface BingResultItem {
   index: number;
   id: string;
@@ -25,17 +19,14 @@ export interface BingResultItem {
   snippet: string;
 }
 
-// ── 线性标签扫描助手（2026-09-21 八百三十八节线性化）──
-// 动机：本件原解析正则一律「惰性量词 + 未闭合起头」找闭合标签，脏页/敌意页（未闭合 <style/
-// <p（真实脏页常见形态）/<h2/<li 连排）下按每个起点回溯到串尾 ⇒ 实测二次方：改前剥体
-// 400 KB → 2.5 s、正文块 400 KB → 0.9 s、`<li class="b_algo">` 928 KB → 2.5 s、`<h2>`
-// 586 KB → 6.1 s、块内 <h2> 600 KB → 16.6 s。输入来自远端站点（http kit 默认 maxLimit
-// 5 MB）而本件跑在工具链主线程 ⇒ 无界时最坏分钟级冻结。改用 indexOf 逐段推进：每个候选
-// 要么命中（游标跳过整段）要么**终局**（同名更晚候选的闭合标签必然更靠后 ⇒ 同样没有）⇒
-// 全串线性。口径与旧正则对齐：开标签取首个 `>`（同旧 `[^>]*` 边界）、闭合标签须 `>` 紧邻、
-// `href`/`class` 取开标签内最后一个合法值（同旧正则贪婪回溯结果）。唯一偏离 = **引号值内含
-// `>` 的 href**（旧 `([^"']+)` 可跨过该 `>` 取全值，新按首个 `>` 切断 ⇒ 读不到该 href、跳过
-// 该候选）；差分对拍 5528 例仅此一类不同，真实页面零差异——见变更记录八百三十八节。
+// ── 线性标签扫描助手 ──
+// 动机：惰性正则「未闭合起头找闭合标签」在脏页/敌意页（未闭合 <style/<p/<h2/<li 连排）下
+// 按每个起点回溯到串尾 ⇒ 二次方（实测最差 600 KB → 16.6 s），输入来自远端站点（http kit
+// 默认 maxLimit 5 MB）而本件跑在工具链主线程 ⇒ 无界时最坏分钟级冻结。改用 indexOf 逐段
+// 推进：每个候选要么命中（游标跳过整段）要么**终局**（同名更晚候选的闭合标签必然更靠后 ⇒
+// 同样没有）⇒ 全串线性。口径与旧正则对齐：开标签取首个 `>`、闭合标签须 `>` 紧邻、`href`/
+// `class` 取开标签内最后一个合法值。唯一已知偏离 = **引号值内含 `>` 的 href**（新法按首个
+// `>` 切断读不到该 href、跳过该候选；差分对拍 5528 例仅此一类不同，真实页面零差异）。
 
 const CHAR_CODE_LT: number = 60;
 const CHAR_CODE_GT: number = 62;
@@ -47,8 +38,8 @@ function foldAsciiLower(code: number): number {
   return code >= 65 && code <= 90 ? code + 32 : code;
 }
 
-// 大小写不敏感 indexOf（needle 须已小写）。首字符 `<` 走原生 indexOf 跳跃——本件全部标签
-// 查找都是 `<…` 形；逐位折半比较只用于短开标签内的 `href=`/`class=`（长度有界）。
+// 大小写不敏感 indexOf（needle 须已小写）。首字符 `<` 走原生 indexOf 跳跃（本件全部标签
+// 查找都是 `<…` 形）；逐位折半比较只用于短开标签内的 `href=`/`class=`（长度有界）
 function indexOfIgnoreCase(text: string, lowerNeedle: string, from: number): number {
   const n: number = text.length;
   const m: number = lowerNeedle.length;
@@ -93,8 +84,7 @@ function findCloseTagEnd(text: string, lowerClosePrefix: string, from: number): 
   return -1;
 }
 
-// 标签块命中：开标签文本 / 块体（等价旧正则 group 1）/ 闭合标签 `>`（下次扫描从 tagEnd + 1
-// 起，同旧正则 lastIndex 口径）
+// 标签块命中：开标签文本 / 块体（等价旧正则 group 1）/ 闭合标签 `>`（下次扫描从 tagEnd+1 起）
 interface TagBlock {
   start: number;
   head: string;
@@ -102,9 +92,9 @@ interface TagBlock {
   tagEnd: number;
 }
 
-// 下一处 `<name …>…</name>` 块（headOk 非空时开标签须使其为真，假则只跳该候选）。返回 null
-// = 终局：其后没有该开标签、开标签无收尾 `>`、或其后无该闭合标签——三者任一都意味着更晚的
-// 同名候选同样不成 match，调用方据此结束循环即可（这是线性的根据）。
+// 下一处 `<name …>…</name>` 块（headOk 非空时开标签须使其为真，假则只跳该候选）。返回
+// null = 终局：其后没有该开标签、开标签无收尾 `>`、或其后无该闭合标签——三者任一都意味
+// 更晚的同名候选同样不成 match，调用方据此结束循环即可（这是线性的根据）。
 function nextTagBlock(text: string, lowerName: string, from: number,
   headOk: ((head: string) => boolean) | null): TagBlock | null {
   const open: string = '<' + lowerName;
@@ -121,12 +111,10 @@ function nextTagBlock(text: string, lowerName: string, from: number,
     }
     const head: string = text.substring(start, headEnd + 1);
     if (headOk !== null && !headOk(head)) {
-      // 跳过头区间内的同名候选（★ 八百三十九节自检轮补：原为 `start + open.length` 逐个重扫，
-      // 该头区间内每个候选都要重建整段头并重跑 headOk ⇒ 「同名开标签连排且长距离无 `>`」时
-      // 二次方，实测 `<li class="x"` 连排 508 KB → 26 s）。可跳的根据 = 这些候选的开标签头与
-      // 本头**共用一个收尾 `>`**（区间内无 `>`）⇒ 其头是本头的后缀子串；而 class 判据是
-      // 「存在含 token 的合法值」，随头收缩单调不增 ⇒ 本头判假则它们必假。跳过点取
-      // `headEnd - open.length + 1`（第一个可能越过该 `>` 的起点，不越界者一个不漏）。
+      // 跳过头区间内的同名候选（头区间连排时逐个重扫是二次方）。可跳的根据 = 这些候选的
+      // 开标签头与本体共用一个收尾 `>` ⇒ 其头是本头的后缀子串，而 class 判据随头收缩单调
+      // 不增 ⇒ 本头判假则它们必假。跳过点取 `headEnd - open.length + 1`（第一个可能越过
+      // 该 `>` 的起点，不越界者一个不漏）
       cursor = headEnd - open.length + 1;
       continue;
     }
@@ -164,8 +152,8 @@ function stripTagPairs(text: string, lowerName: string): string {
   return cursor === 0 ? text : kept + text.substring(cursor);
 }
 
-// 正文块标签名（旧正则 `<(p|h[1-6]|li|td|th|span)` 的捕获名集合；彼此无前缀冲突，顺序不影响
-// 结果）。`<` 后无词边界——`<piano>` 按 `p` 收，与旧正则同。
+// 正文块标签名（旧正则捕获名集合；彼此无前缀冲突，顺序不影响结果）。`<` 后无词边界——
+// `<piano>` 按 `p` 收，与旧正则同
 const CONTENT_TAG_NAMES: string[] = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th', 'span'];
 
 // `lt` 处（`<`）之后的名单标签名（'' = 非名单标签）
@@ -189,16 +177,15 @@ function contentTagNameAt(html: string, lt: number): string {
   return '';
 }
 
-// 正文块整段收集（含首尾标签——下游 stripHtmlTags 同源，等价旧正则全量 match）。逐 `<` 候选：
-// 名单名命中 → 找同名闭合标签；某名字已确认「此后无闭合」（noCloseFrom 标记）时跳过后续同名
-// 前缀候选 ⇒ 每个名字最多一次全串失败扫描，整体线性。
+// 正文块整段收集（含首尾标签——下游 stripHtmlTags 同源，等价旧正则全量 match）。逐 `<`
+// 候选：名单名命中 → 找同名闭合标签；某名字已确认「此后无闭合」（noCloseFrom 标记）时跳过
+// 后续同名前缀候选 ⇒ 每个名字最多一次全串失败扫描，整体线性。
 function collectContentSegments(html: string): string[] {
   const segments: string[] = [];
   const noCloseFrom: Map<string, number> = new Map();
-  // ★ 八百三十九节自检轮补：`>` 位置缓存——同一「无 `>` 区间」内的后续候选直接复用该位置，
-  // 免去每个候选再扫一遍到远处的那个 `>`（原为逐候选 `indexOf('>', …)`：「同名开标签连排且
-  // 长距离无 `>`」时二次方，实测 `<p` 连排 78 KB → 24 ms，同形外推 5 MB 已到百秒级）。
-  // 可复用条件 = 本次查询起点不早于上次查询起点、且不越过上次结果（⇒ 该区间内无 `>`）。
+  // `>` 位置缓存：同一「无 `>` 区间」内的后续候选直接复用该位置（逐候选重扫到远处的 `>`
+  // 在开标签连排时二次方）。可复用条件 = 本次查询起点不早于上次起点、且不越过上次结果
+  //（⇒ 该区间内无 `>`）
   let gtAt: number = -1;
   let gtFrom: number = 0;
   let cursor: number = 0;
@@ -252,9 +239,9 @@ function findQuoteEnd(text: string, from: number): number {
   return -1;
 }
 
-// 开标签内 `href=` 的最后一个合法引号值（'' = 无）。等价旧正则 `<a[^>]*href=["']([^"']+)["']`
-// ——贪婪 `[^>]*` 回溯 = 取最右一个可成立的 `href=`（浏览器口径是取第一个，此处沿用 Cube 原样，
-// 不为线性化顺手改语义）；值取到其后的首个引号且不可为空（`[^"']+` 口径）。
+// 开标签内 `href=` 的最后一个合法引号值（'' = 无）。等价旧正则贪婪回溯 = 取最右一个可成立
+// 的 `href=`（浏览器口径是取第一个，此处沿用 Cube 原样，不为线性化顺手改语义）；值取到其后
+// 的首个引号且不可为空。
 function readHrefValue(head: string): string {
   let value: string = '';
   let at: number = indexOfIgnoreCase(head, 'href=', 0);
@@ -277,11 +264,9 @@ function headHasHref(head: string): boolean {
   return readHrefValue(head) !== '';
 }
 
-// 开标签 class 属性值含 token（大小写不敏感——旧模式 `[^"']*token[^"']*` 的「值内包含」口径）。
-// ★ 八百三十九节自检轮修正：命中判据 = **任一**合法 class= 的值内含 token（旧正则 `[^>]*class=…`
-// 的贪婪回溯是「存在」语义——先试最右一个、不成立再回溯到更早的）。原实现每轮覆盖 `hit`，
-// 变成「只看最后一个」：末位 class= 不含 token 而更早的含时（如 `class="b_algo" class="other"`）
-// 旧真新假，与「逐段对齐」声明分歧（差分对拍 12 例实锤，见该节 F2）。
+// 开标签 class 属性值含 token（大小写不敏感）。★ 命中判据 = **任一**合法 class= 的值内含
+// token（旧正则贪婪回溯的「存在」语义——先试最右一个、不成立再回溯到更早的），不能只看
+// 最后一个 class=（末位不含 token 而更早的含时会误判假）
 function headHasClassToken(head: string, lowerToken: string): boolean {
   let hit: boolean = false;
   let at: number = indexOfIgnoreCase(head, 'class=', 0);
@@ -308,8 +293,7 @@ function headHasBCaptionClass(head: string): boolean {
   return headHasClassToken(head, 'b_caption');
 }
 
-// Bing 结果页解析（多策略：b_algo 块优先，不足 maxCount 用 h2 链接兜底补齐；
-// 全程 URL 去重。Cube parseBingSearchResults:1978-1988 同构）
+// Bing 结果页解析（多策略：b_algo 块优先，不足 maxCount 用 h2 链接兜底补齐；全程 URL 去重）
 export function parseBingSearchResults(html: string, maxCount: number): BingResultItem[] {
   const results: BingResultItem[] = [];
   const seenUrls: Map<string, boolean> = new Map();
@@ -320,8 +304,8 @@ export function parseBingSearchResults(html: string, maxCount: number): BingResu
   return results;
 }
 
-// 策略一：b_algo 结果块（Cube collectResultsFromBAlgoBlocks:1990-2011 逐行移植；
-// ★ 八百三十八节线性化：原惰性正则逐块扫描，未闭合 b_algo 开标签连排时二次方）
+// 策略一：b_algo 结果块（Cube 逐行移植；线性化——原惰性正则逐块扫描，未闭合 b_algo
+// 开标签连排时二次方）
 function collectResultsFromBAlgoBlocks(html: string, maxCount: number,
   output: BingResultItem[], seenUrls: Map<string, boolean>): void {
   let cursor: number = 0;
@@ -339,10 +323,9 @@ function collectResultsFromBAlgoBlocks(html: string, maxCount: number,
   }
 }
 
-// 策略二：h2 标题链接兜底（Cube collectResultsFromHeadingLinks:2013-2037；摘要取命中
-// 位置附近 1000 字符内首个 p 块）。★ 八百三十八节线性化：原惰性正则遇未闭合 <h2 连排
-// 二次方。口径按旧正则逐段对齐（链接不受 h2 边界约束、闭合 `</h2>` 取链接之后首个；两处
-// 取不到都是终局——更晚候选的链接与其闭合必然更靠后，同旧正则同样不成 match）。
+// 策略二：h2 标题链接兜底（摘要取命中位置附近 1000 字符内首个 p 块）。口径按旧正则逐段
+// 对齐（链接不受 h2 边界约束、闭合 `</h2>` 取链接之后首个；两处取不到都是终局——更晚
+// 候选的链接与其闭合必然更靠后，同旧正则同样不成 match）
 function collectResultsFromHeadingLinks(html: string, maxCount: number,
   output: BingResultItem[], seenUrls: Map<string, boolean>): void {
   const h2OpenLen: number = 3;
@@ -377,9 +360,8 @@ function collectResultsFromHeadingLinks(html: string, maxCount: number,
   }
 }
 
-// 单块解析：h2 内 a 链接 = 标题 + URL，b_caption p / 任意 p = 摘要
-//（Cube parseResultFromBlock:2039-2064 同构；★ 八百三十八节线性化，摘要段口径注 =
-// 「b_caption 之后的 p」须在该 div 内，旧正则可取到 div 外的 p，真实结果页两口径一致）
+// 单块解析：h2 内 a 链接 = 标题 + URL，b_caption p / 任意 p = 摘要（口径注 =「b_caption
+// 之后的 p」须在该 div 内，旧正则可取到 div 外的 p，真实结果页两口径一致）
 function parseResultFromBlock(block: string, index: number): BingResultItem | null {
   const heading: TagBlock | null = nextTagBlock(block, 'h2', 0, null);
   if (heading === null) {
@@ -417,22 +399,20 @@ function extractSnippetNearMatch(html: string, startIndex: number): string {
   return normalizeSnippet(stripHtmlTags(snippetP.body).trim());
 }
 
-// 摘要归一（压空白）；URL 拼接类残留 snipp 无害由展示层截断——保持 Cube 原样仅压缩
+// 摘要归一（压空白）；URL 拼接类残留 snipp 无害由展示层截断（保持 Cube 原样仅压缩）
 function normalizeSnippet(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-// Bing 内部链接过滤（搜索页自身的跳转/设置链接不进结果——Cube :2077-2080）
+// Bing 内部链接过滤（搜索页自身的跳转/设置链接不进结果）
 function isBingInternalUrl(url: string): boolean {
   const lower: string = url.toLowerCase();
   return lower.includes('bing.com') || lower.startsWith('/search') || lower.startsWith('/?');
 }
 
-// `<…>` 段整体删除（等价旧 `/<[^>]+>/g`，改逐段推进：`<` 之后到首个 `>` 之间**至少 1 字符**
-// 才删，空体 `<>` 原样保留——旧 `[^>]+` 要求至少 1 字符）。★ 八百三十九节自检轮补：原正则在
-// 「长段 `<` 而其间无 `>`」的输入上按每个起点回溯到串尾 ⇒ 二次方（实测 195 KB → 7.8 s、
-// 586 KB → 24 s；该形态经错误页片段链在八百三十八节撤除 64 KB 窗口后**无界**可达 5 MB ⇒
-// 分钟级冻结——窗口原是把这条链挡在 64 KB 内的唯一屏障，见该节 F1）。
+// `<…>` 段整体删除（等价旧 `/<[^>]+>/g`，改逐段推进保线性：原正则在「长段 `<` 而其间无
+// `>`」的输入上按每个起点回溯到串尾 ⇒ 二次方）。口径 = `<` 之后到首个 `>` 之间**至少
+// 1 字符**才删，空体 `<>` 原样保留（同旧 `[^>]+`）
 function stripAngleBracketChunks(text: string): string {
   let kept: string = '';
   let cursor: number = 0;
@@ -451,11 +431,9 @@ function stripAngleBracketChunks(text: string): string {
   return cursor === 0 ? text : kept + text.substring(cursor);
 }
 
-// HTML 标签剥除 + 实体反转义（Cube stripHtmlTags:2083-2094 移植；★ 2026-09-03 技能
-// 实测轮修复：&amp; 挪到最后一次替换——原序（&amp; 在前）会把双重转义串链式解两层
-//（&amp;lt; → &lt; → <，实测实锤）；&amp; 收尾 = 双重转义只解一层，单转义行为不变
-//〔&amp; 单独出现仍解为 &、&lt; 仍解为 <〕，与 Cube 此处系同源瑕疵的有意偏离。
-// ★ 八百三十九节自检轮：标签剥除改走 `stripAngleBracketChunks`（线性；口径逐字对齐旧正则））
+// HTML 标签剥除 + 实体反转义（标签剥除走 stripAngleBracketChunks 线性助手，口径逐字对齐
+// 旧正则）。★ &amp; 必须挪到最后一次替换——在前会把双重转义串链式解两层（&amp;lt; → &lt;
+// → <）；收尾 = 双重转义只解一层，单转义行为不变（与 Cube 同源瑕疵的有意偏离）
 export function stripHtmlTags(text: string): string {
   return stripAngleBracketChunks(text)
     .replace(/&nbsp;/g, ' ')
@@ -476,17 +454,14 @@ export interface HtmlContent {
 }
 
 // 剥 script/style/nav/footer/header 后取 p/h1-6/li/td/th/span 块文本，>10 字符或含
-// 数值/单位特征才收（Cube 同过滤）；全量 8000 字符截断（有界红线）。
-// ★ 八百三十八节线性化：剥体与正文块收集改走本件线性扫描助手（原 6 条惰性正则在未闭合
-// <style/<p 连排的脏页上二次方）；截尾代价沿用原样（本函数产物本就是「头部正文」）。
+// 数值/单位特征才收；全量 8000 字符截断（有界红线）。剥体与正文块收集走本件线性扫描
+// 助手（原惰性正则在未闭合 <style/<p 连排的脏页上二次方）
 const STRIP_PAIR_TAGS: string[] = ['script', 'style', 'nav', 'footer', 'header'];
 
-// 页面标题（等价旧 `/<title[^>]*>([^<]+)<\/title>/i`，改逐段推进）。口径逐条对齐：取首个能配成
-// 「`<title…>` + 文本 + `</title>`」的候选（开标签取首个 `>`，同旧 `[^>]*` 边界；文本非空且不含
-// `<`，闭合标签须紧邻该 `<` 且 `>` 收尾，同旧 `([^<]+)` 与 `<\/title>`）。null = 未命中，由调用方
-// 回落「未知标题」（旧 `([^<]+)` 允许全空白文本 ⇒ 空白标题原样返回空串，故空串与未命中不并档）。
-// ★ 八百三十九节自检轮：原正则在「大量 `<title` 连排且长距离无 `>`」时按每个起点回溯到串尾
-// ⇒ 二次方（实测 234 KB → 2.6 s），本件输入来自远端站点无界，同法改线性。
+// 页面标题（等价旧 `/<title[^>]*>([^<]+)<\/title>/i`，改逐段推进保线性）。口径逐条对齐：
+// 取首个能配成「`<title…>` + 文本 + `</title>`」的候选（开标签取首个 `>`；文本非空且不含
+// `<`，闭合标签须紧邻该 `<` 且 `>` 收尾）。null = 未命中由调用方回落「未知标题」（旧
+// `([^<]+)` 允许全空白文本 ⇒ 空串与未命中不并档）
 function readHtmlTitle(html: string): string | null {
   let at: number = indexOfIgnoreCase(html, '<title', 0);
   while (at >= 0) {
@@ -508,7 +483,9 @@ function readHtmlTitle(html: string): string | null {
   return null;
 }
 
-export function parseHtmlContent(html: string): HtmlContent {
+// maxChars 形参（2026-11-01 分页续读笔）：正文截断上限，默认 8000 保持既有调用方零回归；
+// 本地抓取链 fetchUrlContent 传 SCRAPE_TOTAL_MAX_CHARS（32768）让长文由执行器分页承接
+export function parseHtmlContent(html: string, maxChars: number = 8000): HtmlContent {
   const rawTitle: string | null = readHtmlTitle(html);
   const title: string = rawTitle !== null ? rawTitle : '未知标题';
 
@@ -528,26 +505,77 @@ export function parseHtmlContent(html: string): HtmlContent {
     }
   }
   let content: string = parts.join('\n');
-  if (content.length > 8000) {
-    content = content.substring(0, 8000) + '...';
+  if (content.length > maxChars) {
+    content = content.substring(0, maxChars) + '...';
   }
   return { title: title, content: content };
 }
 
-// URL 格式校验（Cube isValidUrl:2239-2242 原样；★ 2026-09-21 笔 A：path/query 起放行 `%`
-// 与非 ASCII——原字符类无 `%` 也无 `\u0080-\uFFFF`，已编码串（/a%20b）与含中文路径·查询串
-// 的地址一律被判无效；host 段（[\w\-.]+）仍限 ASCII（IDN 中文域名仍拒——encodeURI 不
-// punycode 主机名，放行只会把失败推到更深处）。非 ASCII 编码在请求前做，见 WebSearch）
+// ── scrape_web 分页切片（2026-11-01 工具结果分页续读笔；Kelivo fetch_url 同思路）──
+// 动机：抓取正文整体进载荷，JSON 转义膨胀后常贴溢出线触发「落临时区 + 信封回执」，而读回
+// 工具 exec_output_read 默认关（脚本工作台卡）= 多数助手拿到信封读不回。改「首段直返 +
+// nextOffset 续读」：模型用同一工具带 offset 翻页，token 只花在读到的部分，恒不落盘。
+// 本组零 import 纯函数，ScrapeWebExecutor（ToolWebSearch.ets）消费，直跑断言可钉。
+
+// 抓取正文总量上限（对齐 RikkaHub 32K 工具输出线；Kelivo fetch_url 100K 偏大，手机端取
+// 保守值）。单一来源：执行器层总量截断与本地抓取链 parseHtmlContent 形参同吃此常量——
+// 引擎通路（DeepSeek fetch 返回 Markdown 全文无截断）由执行器层统一承接
+export const SCRAPE_TOTAL_MAX_CHARS: number = 32768;
+
+// 总量截断：超上限取前段 + 尾标如实声明（截后长度才是 totalLength 基准——超出部分本次
+// 抓取不可达，续读到头即「已读完」，不虚报未读量）。切点防劈代理对：切点处恰落低位码元
+// 时退一位
+export function capScrapeContent(content: string, maxChars: number): string {
+  if (content.length <= maxChars) {
+    return content;
+  }
+  let cut: number = maxChars;
+  if (content.charCodeAt(cut) >= 0xDC00 && content.charCodeAt(cut) <= 0xDFFF) {
+    cut -= 1;
+  }
+  return content.substring(0, cut) + '\n…[正文过长，超出部分已截断]';
+}
+
+// 分页切片结果：text = 本段正文；nextOffset = 下一段起点（-1 = 已读尽，回执不再带该字段）
+export interface ScrapePageSlice {
+  text: string;
+  nextOffset: number;
+}
+
+// 切 [offset, offset + maxPageChars) 段：offset 脏值（非有限/负）归 0，越界（≥ 长度）返回
+// 空段读尽态；切点防劈代理对（end 前一码元是高位且 end 处是低位时退一位）
+export function scrapePageSlice(content: string, offset: number,
+  maxPageChars: number): ScrapePageSlice {
+  const safeOffset: number = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  if (safeOffset >= content.length) {
+    return { text: '', nextOffset: -1 };
+  }
+  let end: number = Math.min(safeOffset + maxPageChars, content.length);
+  if (end > safeOffset && end < content.length) {
+    const prev: number = content.charCodeAt(end - 1);
+    const at: number = content.charCodeAt(end);
+    if (prev >= 0xD800 && prev <= 0xDBFF && at >= 0xDC00 && at <= 0xDFFF) {
+      end -= 1;
+    }
+  }
+  return { text: content.substring(safeOffset, end),
+    nextOffset: end < content.length ? end : -1 };
+}
+
+// URL 格式校验（★ path/query 起放行 `%` 与非 ASCII——原字符类两者皆无，已编码串
+//（/a%20b）与含中文路径的地址一律被误判无效；host 段仍限 ASCII——IDN 中文域名仍拒，
+// encodeURI 不 punycode 主机名，放行只会把失败推到更深处。非 ASCII 编码在请求前做，
+// 见 WebSearch）
 export function isValidUrl(text: string): boolean {
   const urlPattern: RegExp =
     /^https?:\/\/[\w\-.]+(:\d+)?(\/[\w\-._~:/?#[\]@!$&'()*+,;=%\u0080-\uFFFF]*)?$|^[\w\-.]+(:\d+)?(\/[\w\-._~:/?#[\]@!$&'()*+,;=%\u0080-\uFFFF]*)?$/;
   return urlPattern.test(text.trim());
 }
 
-// ── 网络层错误文案（2026-09-21 任务书-联网三件错误语义-20260921 笔 A）──
-// 本件原 = 联网搜索解析纯函数（零 import 叶子）。本笔起兼载「http kit 错误码 → 中文原因」：
-// 消费方 = providers/ToolHttp（HTTP 请求域）与 providers/WebSearch（联网抓取）——两域共用
-// 一张表，禁各写一份（单一来源）；引本件零环风险（本件零 import，坑50）。
+// ── 网络层错误文案 ──
+// 本件兼载「http kit 错误码 → 中文原因」：消费方 = providers/ToolHttp（HTTP 请求域）与
+// providers/WebSearch（联网抓取）——两域共用一张表，禁各写一份；引本件零环风险（零
+// import 叶子，坑50）。
 
 // http kit 错误码 → 中文原因（纯函数；未列码返 ''，由 httpKitErrorText 兜底）。
 // 码源 = 本地 SDK d.ts `@ohos.net.http.d.ts` 各 request 重载的 @throws 清单。
@@ -575,6 +603,17 @@ export function httpKitErrorMessage(code: number, timeoutSeconds: number = 30): 
   if (code === 2300047) {
     return '重定向次数超过上限，已停止跟随跳转';
   }
+  // 证书 / 加密三条（码与措辞依据 = 本地 SDK @throws 清单与官方错误码表；三句都写「重试
+  // 无用」的语义指向——确定性失败，与 httpNetworkRetriable 对这三码的不可重试判定对齐）
+  if (code === 2300058) {
+    return '本机证书校验出错，无法建立加密连接。请稍后重试或检查系统时间与证书设置';
+  }
+  if (code === 2300059) {
+    return '与服务器无法协商出可用的加密套件，连接被中断';
+  }
+  if (code === 2300060) {
+    return '服务器证书无效或不受信任，已阻止连接';
+  }
   if (code === 2300063) {
     return '响应超过接收上限，未取回正文。可缩小范围后重试';
   }
@@ -587,21 +626,30 @@ export function httpKitErrorMessage(code: number, timeoutSeconds: number = 30): 
   return '';
 }
 
-// 网络层异常 → 中文句（纯函数；四级取句 + 已成型句直返（前置）——①码表命中走表句 ②有码未列
-// 有 message 拼码与原因 ③有码未列无 message 只报码 ④无码有 message 拼原因、无 message 只报
-// 「网络请求失败」；另见下方「已成型句直返」分支）。
-// ★ 本函数的存在理由 = 真机实证缺陷：BusinessError 在 SDK 里是 `interface BusinessError
-// extends Error`（@ohos.base.d.ts:129，接口非类），运行时非真 Error 实例 ⇒ 旧实现
-// `String(e)` 产出 '[object Object]'、回执成 {"error":"[object Object]"}。此后一律经本函数取句。
-export function httpKitErrorText(e: Object, timeoutSeconds: number = 30): string {
-  let code: number = -1;
-  let msg: string = '';
+// 网络层异常 → kit 码（纯函数；无码返 -1）。retriable 分类与取句两处共用本函数保单一
+// 来源。BusinessError 在 SDK 里是 interface 非类（@ohos.base.d.ts），码只能按属性读
+export function httpKitErrorCode(e: Object): number {
   if (typeof e === 'object' && e !== null) {
     const rec = e as Record<string, Object>;
     const codeRaw: Object = rec['code'];
     if (typeof codeRaw === 'number') {
-      code = codeRaw as number;
+      return codeRaw as number;
     }
+  }
+  return -1;
+}
+
+// 网络层异常 → 中文句（纯函数；四级取句 + 已成型句直返——①码表命中走表句 ②有码未列有
+// message 拼码与原因 ③有码未列无 message 只报码 ④无码有 message 拼原因、无 message 只报
+//「网络请求失败」）。
+// ★ 存在理由 = 真机实证缺陷：BusinessError 在 SDK 里是 interface 非类，运行时非真 Error
+// 实例 ⇒ 旧实现 `String(e)` 产出 '[object Object]'、回执成 {"error":"[object Object]"}。
+// 此后一律经本函数取句。
+export function httpKitErrorText(e: Object, timeoutSeconds: number = 30): string {
+  const code: number = httpKitErrorCode(e);
+  let msg: string = '';
+  if (typeof e === 'object' && e !== null) {
+    const rec = e as Record<string, Object>;
     const msgRaw: Object = rec['message'];
     if (typeof msgRaw === 'string' && msgRaw !== '') {
       msg = msgRaw as string;
@@ -609,9 +657,9 @@ export function httpKitErrorText(e: Object, timeoutSeconds: number = 30): string
   } else if (typeof e === 'string') {
     msg = e as string;
   }
-  // 非 2xx 句已成型（由本件 httpStatusFailureText 产出，格式首段见 HTTP_STATUS_SENTENCE_PREFIX）
-  //——它描述的是「站点已响应但拒绝」，不是网络层异常：套码表或套「网络请求失败：」前缀都错，
-  // 故原样返回。识别依据是本件自有常量而非字符串字面量（单源）。
+  // 非 2xx 句已成型（由本件 httpStatusFailureText 产出）——它描述的是「站点已响应但拒绝」，
+  // 不是网络层异常：套码表或套「网络请求失败：」前缀都错，故原样返回。识别依据是本件自有
+  // 常量而非字符串字面量（单源）
   if (msg.startsWith(HTTP_STATUS_SENTENCE_PREFIX)) {
     return msg;
   }
@@ -625,22 +673,20 @@ export function httpKitErrorText(e: Object, timeoutSeconds: number = 30): string
   return msg !== '' ? '网络请求失败：' + msg : '网络请求失败';
 }
 
-// 非 2xx 失败句（纯函数）：状态码 + 去标签正文片段（空白归一、截 HTTP_FAILURE_EXCERPT_MAX）。
-// 原实现只抛 'HTTP 403'，错误页正文里的原因（拦截/限流/需登录）被丢掉；
-// ★ 2026-09-21 C 类清账笔：片段先剥 script/style 正文再剥标签（见下方 stripScriptStyleBodies）。
+// 非 2xx 失败句（纯函数）：状态码 + 去标签正文片段（空白归一、截 HTTP_FAILURE_EXCERPT_MAX；
+// 原实现只抛 'HTTP 403'，错误页正文里的原因被丢掉。片段先剥 script/style 正文再剥标签，
+// 见下方 stripScriptStyleBodies）
 export const HTTP_FAILURE_EXCERPT_MAX: number = 200;
 
-// 非 2xx 句前缀（单源：本常量既用于组装（httpStatusFailureText），也用于取句侧识别
-//（httpKitErrorText 的「已成型句直返」分支）——两处必须是同一个常量，禁各自字面量）
+// 非 2xx 句前缀（单源：既用于组装〔httpStatusFailureText〕，也用于取句侧识别
+//〔httpKitErrorText 的「已成型句直返」分支〕——两处必须同常量，禁各自字面量）
 export const HTTP_STATUS_SENTENCE_PREFIX: string = '站点返回 HTTP ';
 
-// 剥 script/style 正文（与上方 parseHtmlContent 的剥体同源，走本件线性助手）：错误页的 CSS 与
-// 页面脚本正文通常位于真因**之前**（`<style>` 在 head、脚本常在正文前部），不剥则片段被它们从
-// 头部吃掉预算——真因被挤到中段或直接挤出（实测 403 页曾输出「…：p{color:red}Forbiddenvar a=1;」）。
-// ★ 只服务错误页片段抽取，**不改 stripHtmlTags 本体**——其标题与摘要五个消费者要保留原语义。
-// ★ 八百三十八节：改用线性剥体助手，原 64 KB 扫描窗口随之撤除——那窗口只是「惰性量词遇大量
-// 未闭合起头会二次方」的权宜（实测该形态 200 KB→0.54 s / 800 KB→9.0 s），代价是「真因深藏
-// 64 KB 之后取不到」；线性化后无窗口也线性（5 MB 同形输入实测 ~30 ms），语义回到「全串找真因」。
+// 剥 script/style 正文（与 parseHtmlContent 的剥体同源，走本件线性助手）：错误页的 CSS 与
+// 页面脚本正文通常位于真因**之前**，不剥则片段被它们从头吃掉预算——真因被挤到中段或直接
+// 挤出（实测 403 页曾输出「…：p{color:red}Forbiddenvar a=1;」）。★ 只服务错误页片段抽取，
+// **不改 stripHtmlTags 本体**——其标题与摘要五个消费者要保留原语义。线性化后无扫描窗口
+// 也线性，语义 = 「全串找真因」
 function stripScriptStyleBodies(text: string): string {
   return stripTagPairs(stripTagPairs(text, 'script'), 'style');
 }
@@ -652,13 +698,11 @@ export function httpStatusFailureText(status: number, body: string): string {
   return HTTP_STATUS_SENTENCE_PREFIX + status + (excerpt !== '' ? '：' + excerpt : '');
 }
 
-// ── 多引擎 JSON 解析（2026-09-10 多引擎一期；传输侧在 common/search/ApiSearchEngines，
-//   本节只做纯解析——样本即规格，断言在 scripts/sse-assert.mjs ㊿ 组）──
-// 三家响应结构来源：①调研档 04 卷 §3.6~3.8（官方文档 + 教程交叉）；②2026-09-10 端点
-// 实测（无 key 探针拿到的错误形态）；③秘塔 webpages[] 字段名 = Cube 快照
-// WebSearchService.parseMetasoSearchResults:777-800 逐字对照（MIT）。
+// ── 多引擎 JSON 解析（传输侧在 common/search/ApiSearchEngines，本节只做纯解析——
+//   样本即规格，断言在 scripts/sse-assert.mjs ㊿ 组）──
+// 三家响应结构来源：调研档 04 卷（官方文档 + 端点实测交叉）与 Cube 快照逐字对照（MIT）。
 
-// 从任意 JSON 对象安全读字符串（引擎字段缺省/类型漂移回 ''——多引擎一期统一防御）
+// 从任意 JSON 对象安全读字符串（引擎字段缺省/类型漂移回 ''——多引擎统一防御）
 function readString(rec: Record<string, Object>, key: string): string {
   const raw: Object | undefined = rec[key];
   return typeof raw === 'string' ? (raw as string).trim() : '';
@@ -694,7 +738,7 @@ function collectJsonResults(list: object[], maxCount: number,
 }
 
 // 博查响应解析（Bing 兼容形态：data.webPages.value[]，标题键 name、摘要 snippet 优先
-// summary 兜底——官方 AI Search 文档与 LazyLLM 官方 cookbook 请求体对照，调研档 04 §3.8）
+// summary 兜底——官方 AI Search 文档对照，调研档 04 §3.8）
 export function parseBochaResults(json: string, maxCount: number): BingResultItem[] {
   if (json === '') {
     return [];
@@ -719,9 +763,9 @@ export function parseBochaResults(json: string, maxCount: number): BingResultIte
   }
 }
 
-// 秘塔响应错误提取：★ 秘塔无 key/配额错返回 HTTP 200 + 内嵌 {errCode, errMsg}（2026-09-10
-// 端点实测：无 key → 200 + errCode 2005「API密钥无效」）——传输层按非 2xx 抛错抓不到，
-// 必须在 200 响应体里先验错误再解析（「HTTP 200 + 内嵌错误」坑，调研档 04 §4.2-6 同族）
+// 秘塔响应错误提取：★ 秘塔无 key/配额错返回 HTTP 200 + 内嵌 {errCode, errMsg}（端点实测：
+// 无 key → 200 + errCode 2005「API密钥无效」）——传输层按非 2xx 抛错抓不到，必须在 200
+// 响应体里先验错误再解析（「HTTP 200 + 内嵌错误」坑）
 export function metasoErrorMessage(json: string): string {
   if (json === '') {
     return '';
@@ -776,5 +820,69 @@ export function parseSerperResults(json: string, maxCount: number): BingResultIt
   }
 }
 
-// URL 提取与旧 web_search 兼容工具强绑定（Cube extractUrl 仅被 LegacyWebSearchExecutor
-// 消费）——aicontrol 无历史包袱不移植旧工具，本函数随旧工具一并裁除（死代码清查结论）。
+// ── DeepSeek / 智谱 JSON 解析（响应结构 = 官方文档逐字段核对，来源见
+//   api-docs.deepseek.com 与 docs.bigmodel.cn；传输侧在 common/search/ApiSearchEngines.ets，
+//   本节仍是零 import 纯函数）──
+
+// DeepSeek 搜索响应解析（results[]：标题 title、链接 url、摘要 summary 优先——summary 是
+// 面向模型的长摘要〔600~800 字〕，snippet 是前端短摘要，长摘要缺失回退短摘要；模型侧引文
+// 串仍按 buildSearchContentForAI 的 SNIPPET_MAX 截断，与博查 summary 同待遇）
+export function parseDeepseekResults(json: string, maxCount: number): BingResultItem[] {
+  if (json === '') {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(json) as Record<string, Object>;
+    const results: Object | undefined = parsed['results'];
+    if (!Array.isArray(results)) {
+      return [];
+    }
+    return collectJsonResults(results as object[], maxCount, 'title', 'url', ['summary', 'snippet']);
+  } catch (e) {
+    return [];
+  }
+}
+
+// 智谱 Web Search 响应解析（search_result[]：标题 title、链接 link、摘要 content——
+// media/publish_date/refer 不进引文卡，官方响应示例逐字段核对）
+export function parseZhipuResults(json: string, maxCount: number): BingResultItem[] {
+  if (json === '') {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(json) as Record<string, Object>;
+    const results: Object | undefined = parsed['search_result'];
+    if (!Array.isArray(results)) {
+      return [];
+    }
+    return collectJsonResults(results as object[], maxCount, 'title', 'link', ['content']);
+  } catch (e) {
+    return [];
+  }
+}
+
+// DeepSeek Fetch 响应解析（{title, content}——content 为 Markdown 正文）。正文经
+// capScrapeContent 同界 SCRAPE_TOTAL_MAX_CHARS 截断（★ 2026-11-01 自检修复笔：旧 8000
+// 截断是分页续读笔的盘点遗漏——执行器总量上限 32768 对引擎通路形同虚设、翻页永远单页，
+// 且与 ToolWebSearch 头注释「引擎通路无截断」承诺失实；同件内取 capScrapeContent 尾标与
+// 防劈同源，缓存面天然有界 ≤32768+尾标）。坏 JSON/空串回空态，由调用方转「未提取到网页正文」
+export function parseDeepseekFetch(json: string): HtmlContent {
+  if (json === '') {
+    return { title: '', content: '' };
+  }
+  try {
+    const parsed = JSON.parse(json) as Record<string, Object>;
+    const title: string = readString(parsed, 'title');
+    const content: string = capScrapeContent(readString(parsed, 'content'),
+      SCRAPE_TOTAL_MAX_CHARS);
+    return { title: title, content: content };
+  } catch (e) {
+    return { title: '', content: '' };
+  }
+}
+
+// URL 提取与旧 web_search 兼容工具强绑定（仅被 LegacyWebSearchExecutor 消费）——
+// aicontrol 不移植旧工具，本函数随旧工具一并裁除（死代码清查结论）。
+// HTTP kit 网络层超时码（长任务 timed_out 判据取码单源；落本叶子 = 错误码字面量单源
+// 守卫，消费件禁自写字面量）
+export const HTTP_KIT_CODE_TIMEOUT: number = 2300028;

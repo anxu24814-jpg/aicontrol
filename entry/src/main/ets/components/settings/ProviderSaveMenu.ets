@@ -1,8 +1,7 @@
-// 服务商编辑页标题栏「保存」菜单工厂（2026-08-31 自 ProviderDetailPage 域拆——统一保存
-// 语义改动需在宿主页加启停草稿链，原 400 行贴线，按防屎山规则拆本域腾位；checkmark 符号
-// 两项目内真机验证过）。HDS 数组 / 回退 menus 数组双形态——chatTitleMenu 工厂同款姿势。
+// 服务商编辑页标题栏「保存」菜单工厂（checkmark 符号两项目内真机验证过）。
+// 仅 HDS 数组单形态——回退 menus 数组版 providerSaveMenuNav 已随 HDS 唯一路径化整笔退役
+//（2026-10-31 撤除 PageShell menuNav 传参时全仓零消费，按退役令删除不保留）。
 // ModelEditPage 存在同构函数，其下次实质改动时收敛至此（技术债登记变更记录）。
-import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsNavigationMenuContentOptions } from '@kit.UIDesignKit';
 
 export function providerSaveMenuHds(onSave: () => void): HdsNavigationMenuContentOptions {
@@ -14,12 +13,4 @@ export function providerSaveMenuHds(onSave: () => void): HdsNavigationMenuConten
       }
     }]
   } as HdsNavigationMenuContentOptions;
-}
-
-export function providerSaveMenuNav(onSave: () => void): NavigationMenuItem[] {
-  return [{
-    value: '保存',
-    symbolIcon: new SymbolGlyphModifier($r('sys.symbol.checkmark')),
-    action: onSave
-  } as NavigationMenuItem];
 }

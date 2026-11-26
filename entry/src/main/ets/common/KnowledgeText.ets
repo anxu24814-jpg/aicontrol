@@ -1,63 +1,86 @@
-// 知识库文本纯函数域（2026-09-21 世界书知识库首版，任务书-世界书知识库-20260921 §4.3）：
-// 知识库层的全部纯逻辑——启用清单解析/序列化 / 检索切词 / 打分 / 相关度排序 / 检索结果
-// 拼装 / 清单拼装 / 列表副行摘要 / **管理面（重名判定与工具回执，2026-09-21 知识库第二笔
-// 下本加）** / **条目附件件的校验与读回回执（2026-09-23 知识库文件笔加）**。**零 import
-// 纯函数约束**（照 SkillText.ets / MemoryText.ets
-// ——断言脚本复制本文件为 .ts 直跑，是本域可测性的根基；IO 编排〔DB 读写〕在 KnowledgeDb /
-// ToolKnowledge / 各页面，不在本域）。
+// 知识库文本纯函数域：知识库层的纯逻辑——启用清单解析/序列化 / 检索切词 / 打分 / 相关度
+// 排序 / 检索与清单拼装 / 列表副行摘要 / 管理面（重名判定与工具回执）/ 条目附件件的校验与
+// 读回回执。**零 import 纯函数约束**（照 SkillText.ets / MemoryText.ets——断言脚本复制本
+// 文件为 .ts 直跑，是本域可测性的根基；IO 编排在 KnowledgeDb / ToolKnowledge / 各页面）。
+//
+// ★ 文件导入导出域与审阅弹窗文案域已外迁 common/KnowledgeImportText.ets（新件单向 import
+// 本件——本件零 import 约束不破，依赖方向恒「新件 → 本件」，断言直跑面照旧；导入导出域
+// 的语义与沿革以新件头注释为源）。
 //
 // ★ 与相邻两列的语义分界（本域最易被后人按错口径改坏的一点）：assistants.knowledge 的 ''
 // = **空集合**（默认不启用任何知识库），与 assistants.skills 同义、与 assistants.tools 的
 // 「'' = 默认集合」**相反**。故 parseEnabledKnowledgeIds 与 parseEnabledSkillIds 形态相同但
-// **域不同，禁跨域合并复用**（各留一份 = 有意为之的两处，不是重复代码——技能域已立此纪律）；
-// 与 parseEnabledToolIds 更是语义相反。
+// **域不同，禁跨域合并复用**（各留一份是有意为之，不是重复代码）。
 //
 // ★ 首版姿态 = 工具化检索（条目不自动注入，模型经 search_knowledge 按需查阅）：keywords
-// 字段**只参与检索加权与展示，不接触发逻辑**——这不是遗漏，是本笔的姿态边界（关键词自动
-// 注入属另一姿态，见 docs/方案-世界书关键词触发-20260921.md）；字段先备好，将来换姿态免
-// 二次迁移。
+// 字段**只参与检索加权与展示，不接触发逻辑**——姿态边界非遗漏（关键词自动注入属另一姿态）。
 
-// ── 上限常量族（任务书 §4.3 拍板值）──
-// 条目名称上限（编辑页 TextInput maxLength 与本域同源）。★ 2026-09-22 自检轮起**两处同用**：
-// 条目名称 + **知识库名称**（库页命名对话框 maxLength 亦取本常量；manage_knowledge 的
-// create_book 校验同源）——改本值即三处同动，禁在工具面另写数字
+// ── 上限常量族 ──
+// 条目名称上限（编辑页 maxLength 与本域同源）。★ **两处同用**：条目名称 + 知识库名称
+//（库页命名对话框与 create_book 校验同源）——改本值即多处同动，禁在工具面另写数字
 export const KNOWLEDGE_TITLE_MAX: number = 50;
 // 关键词上限（纯检索加权与展示字段，不进任何触发判定）
 export const KNOWLEDGE_KEYWORDS_MAX: number = 100;
 // 条目正文上限（纯文本；< clipToolResult 8192 保证单条不被下游截断）
 export const KNOWLEDGE_CONTENT_MAX: number = 6000;
-// 工具返回双封顶（宪法「数据有界」：5 条 / 12000 字覆盖典型问询，超出由尾行引导收窄关键词）。
-// ★ 2026-09-21 知识库第二笔下本把总档 4000 → 12000（与正文上限同为 6000 量级：一次能回两条
-// 满条）：依据 = 工程估算口径 CJK 1.0 token/字（TokenEstimate.ets），12000 字 ≈ 12000 token，
-// 是联网检索结果档 BROWSE_RESULT_MAX_CHARS 8192 的 1.5 倍，且工具结果留历史逐轮重发——
-// 取 12000 而非更高的档是决明「可适当减少」授权下的收窄取舍。
-// ★ **实际生效上限 8192**（言行一致，勿误解本档）：工具结果出管线前一律过
-// clipToolResult(raw)（默认 maxChars 8192，ChatToolRoundCtrl 两处调用点）⇒ 合计超 8K 的多条
-// 结果仍会被管线尾部截断并带「…[结果过长已截断]」尾标。本档是**检索侧预算**（决定哪几条进
-// 结果），不是模型面硬顶；单条 6000 字 + 头行恒在管线线内 ⇒ 单条恒完整送达（本笔核心诉求）
+// 工具返回双封顶（宪法「数据有界」：5 条 / 12000 字覆盖典型问询，超出由尾行引导收窄）。
+// ★ **实际生效上限 8192**（言行一致，勿误解本档）：工具结果出管线前一律过 clipToolResult
+//（8192，ChatToolRoundCtrl 调用点）⇒ 合计超 8K 的多条结果仍会被管线尾部截断。本档是**检索
+// 侧预算**（决定哪几条进结果），不是模型面硬顶；单条 6000 字 + 头行恒在线内 ⇒ 单条恒完整送达
 export const KNOWLEDGE_TOOL_RESULT_MAX_COUNT: number = 5;
 export const KNOWLEDGE_TOOL_RESULT_MAX_CHARS: number = 12000;
-// 单条正文字符上限（工具结果里单条正文的截断档）。★ 2026-09-21 知识库第二笔下本 1200 →
-// 6000（**与正文上限 KNOWLEDGE_CONTENT_MAX 同值** ⇒ 单条恒完整送达——原「用户写 2000 字、
-// 模型只读到 1200 字」的静默缩水由此消除；旧注释的「5 × 1200 = 6000 > 4000 总预算」推理
-// 随之作废）。保留本档的理由 = 将来再调正文上限时，仍有一道「一条不得独占整份结果」的闸
+// 单条正文字符上限（工具结果里单条正文的截断档），**与 KNOWLEDGE_CONTENT_MAX 同值** ⇒
+// 单条恒完整送达（「用户写 2000 字、模型只读到 1200 字」的静默缩水由此消除）。保留本档 =
+// 将来再调正文上限时仍有一道「一条不得独占整份结果」的闸
 export const KNOWLEDGE_ENTRY_CLIP: number = 6000;
-// 列表副行摘要的截断档（知识库页 / 助手启用页的行副行，单行显示）
+// 列表副行摘要的截断档（行副行单行显示）
 const KNOWLEDGE_SUMMARY_MAX: number = 20;
 
-// ── list 回执分页两档 + 页内字数软顶（2026-09-22 O1 笔；决明「可补 o1」拍板）──
-// 本族存在的理由：本域两处 list 回执原为**一次性全量输出**——条目行最坏 = 2 + 50（书名）+
-// 2 + 50（标题）+ 2 + 100（关键词）≈ 208 字，单库满 100 条 ≈ 20.8K、检索侧多库合计更大，
-// 双双越过工具结果管线 clipToolResult 8192 钳位线 ⇒ 大库回执被尾部截断，模型看不到末段且
-// **无翻页手段**（与技能域立 SKILL_MANAGE_LIST_* 时同一类缺陷，故形制照两先例：位次分页 +
-// 页内软顶收窄 + 尾行翻页指引）。
-// 30 的依据（本域实数推算）：30 行 × 208 字 ≈ 6.2K < 8192，留头尾行与余量；全量 100 条
-// ≈ 20.8K 必被截尾，故封顶 30 + 分页兜底
+// ── 触发精度常量族与归一 ──
+// ★ 常量归属：四常量与两归一函数全落本件——KnowledgeMatch.ets **不持任何默认值常量**，只做
+//   下界防御，不存在第二份上限；UI 保存链 / DB 写入 / 导入落库三处共用（禁页面自写第二套钳位）
+// 优先级上限（0~9999，数值大的先注入，全局跨书）；默认 100 = 「常规」，同值回落原四键
+//（存量顺序零变化）；0 留给「最后注入」的显式意图
+export const KNOWLEDGE_PRIORITY_MAX: number = 9999;
+export const KNOWLEDGE_PRIORITY_DEFAULT: number = 100;
+// 扫描窗口条数上下限与默认（1~20；默认 8 与旧常量同值。上限 20 = 匹配是主线程全量扫描，
+// 窗口长度直接乘进比较成本；与注入面 KNOWLEDGE_INJECT_MAX_COUNT 不是一回事）
+export const KNOWLEDGE_SCAN_MIN: number = 1;
+export const KNOWLEDGE_SCAN_MAX: number = 20;
+export const KNOWLEDGE_SCAN_DEFAULT: number = 8;
+
+// 优先级归一：非有限数 / 负数 → 默认 100；超上限钳 9999（空输入由调用方 parseInt 产 NaN，
+// 同落默认）。纯函数供 UI / DB 写入 / 导入三处共用
+export function clampKnowledgePriority(raw: number): number {
+  if (!Number.isFinite(raw)) {
+    return KNOWLEDGE_PRIORITY_DEFAULT;
+  }
+  if (raw < 0) {
+    return 0;
+  }
+  return raw > KNOWLEDGE_PRIORITY_MAX ? KNOWLEDGE_PRIORITY_MAX : raw;
+}
+
+// 扫描条数归一：非有限数 → 默认 8；<1 钳 1；>20 钳 20（scanDepth=0 会造出空窗口恒不命中，
+// 下界 1 是行为红线）
+export function clampKnowledgeScan(raw: number): number {
+  if (!Number.isFinite(raw)) {
+    return KNOWLEDGE_SCAN_DEFAULT;
+  }
+  if (raw < KNOWLEDGE_SCAN_MIN) {
+    return KNOWLEDGE_SCAN_MIN;
+  }
+  return raw > KNOWLEDGE_SCAN_MAX ? KNOWLEDGE_SCAN_MAX : raw;
+}
+
+// ── list 回执分页两档 + 页内字数软顶 ──
+// 本族存在的理由：list 回执原为一次性全量输出——条目行最坏 ≈ 208 字，单库满 100 条 ≈ 20.8K，
+// 越过工具结果管线 8192 钳位线 ⇒ 大库回执被尾部截断且无翻页手段（形制照技能/记忆域先例：
+// 位次分页 + 页内软顶收窄 + 尾行翻页指引）。30 的依据：30 行 × 208 字 ≈ 6.2K < 8192
 export const KNOWLEDGE_LIST_DEFAULT_COUNT: number = 20;
 export const KNOWLEDGE_LIST_MAX_COUNT: number = 30;
-// 页内总字数软顶（超则自动收窄本页条数至少 1 条，防 clipToolResult 硬顶截尾丢翻页提示；
-// MAX_COUNT 内最坏 6.2K 不触发此线——它是 MAX_COUNT 将来调大时的结构性兜底，双条件姿势
-// 与两先例一致）
+// 页内总字数软顶（超则自动收窄本页条数至少 1 条，防硬顶截尾丢翻页提示；MAX_COUNT 内最坏
+// 6.2K 不触发此线——它是 MAX_COUNT 调大时的结构性兜底）
 export const KNOWLEDGE_LIST_PAGE_SOFT_CHARS: number = 6000;
 
 // 命中权重（标题 3 / 关键词 2 / 正文 1——同一 token 在多个字段命中**取最高权重不累加**，
@@ -68,8 +91,7 @@ const KNOWLEDGE_WEIGHT_CONTENT: number = 1;
 
 // 触上限尾行（照 CHAT_SEARCH_CAP_NOTE 同族形态）
 const KNOWLEDGE_SEARCH_CAP_NOTE: string = '已达返回上限，可用更具体的关键词再检索。';
-// 书名缺失兜底（某命中的 bookId 在书名单表里查不到 = 删库与查询之间的竞态）——**禁让
-// undefined / null 字面量上屏**，模型看到它只会困惑
+// 书名缺失兜底（bookId 在书名单表查不到 = 删库与查询间竞态）——**禁让 undefined/null 上屏**
 const KNOWLEDGE_UNKNOWN_BOOK: string = '（未知知识库）';
 
 // 零 import 域不引 DB 类型（SkillText.SkillBriefItem / MemoryManageItem 同款取舍）：
@@ -82,6 +104,18 @@ export interface KnowledgeEntryItem {
   content: string;
   createdAt: number;
   sortOrder: number;
+  // v51 注入三配置与启用开关——本域打分/拼装不消费，透传给清单页角标与条目卡开关；
+  // source 仍刻意不带（边界不变）
+  injectRole: string;
+  injectPosition: string;
+  injectDepth: number;
+  enabled: number;
+  // 触发精度四字段——检索打分不消费，透传给导出链与导入落库；漏这一层会表现成
+  // 「编辑页配好了，导出文件里没有」
+  matchCase: number;
+  matchWhole: number;
+  priority: number;
+  scanDepth: number;
 }
 
 export interface KnowledgeBookItem {
@@ -89,9 +123,8 @@ export interface KnowledgeBookItem {
   name: string;
 }
 
-// 启用集解析（assistants.knowledge 列 JSON 串 → id 数组）：
-// '' / 坏 JSON / 非数组 → **空数组**（= 不启用任何知识库，与 skills 列同义、与 tools 列相反）；
-// 只收非空字符串项；去重（重复 id 会让「已启用 N 个」与第 11 个拒绝的门槛失真）
+// 启用集解析（assistants.knowledge 列 JSON 串 → id 数组）：'' / 坏 JSON / 非数组 → **空数组**
+//（与 skills 列同义、与 tools 列相反）；只收非空字符串项；去重（重复 id 会让启用计数失真）
 export function parseEnabledKnowledgeIds(json: string): string[] {
   if (json === '') {
     return [];
@@ -115,8 +148,7 @@ export function parseEnabledKnowledgeIds(json: string): string[] {
   return ids;
 }
 
-// id 数组 → assistants.knowledge 列 JSON 串：空集合落 ''（库列默认形态 = 不启用，新装/新建
-// 助手零配置零写入——与 skills 列的落库形态相同，与 tools 列含义相反）
+// id 数组 → JSON 串：空集合落 ''（库列默认形态 = 不启用，新装/新建助手零配置零写入）
 export function serializeEnabledKnowledgeIds(ids: string[]): string {
   if (ids.length === 0) {
     return '';
@@ -630,578 +662,4 @@ export function locateKnowledgeFileByName(names: string[],
 export function composeKnowledgeManageReadFileReply(book: string, title: string, name: string,
   content: string): string {
   return '知识库「' + book + '」的条目「' + title + '」的文件「' + name + '」\n' + content;
-}
-
-// ══ 文件导入导出纯函数（2026-09-22 知识库导入导出笔，方案-知识库导入导出-20260922 §3）══
-// 自家书级交换格式（三步路线第一步）：三层信封 version / type / data 与竞品同形（RikkaHub
-// ExportData 同构）——第二步通用格式兼容时信封解析可直接复用，只多一个 type 分派分支。
-// **零 import 约束不变**：盘面 I/O（选择器 / fd 拷贝 / 沙箱件 / 分享）在 KnowledgePack，
-// 本域只有格式构造 / 解析 / 逐条分派 / 预览拼装——断言脚本复制本件为 .ts 直跑的根基不许破。
-
-// ── 文件格式常量（§3.2）──
-// 信封 type（第二步按 type 分派格式；本串只认自家，负向钉守全仓零第二处字面量）
-export const KNOWLEDGE_FILE_TYPE: string = 'aicontrol_knowledge_book';
-// 信封 version（留升级位）。★ 写侧恒写本值、**解析侧恒不校验**（自家链只认 type，版本号写什么
-// 都照读——「只认存在、不比大小」的旧注释与实现不符，2026-09-22 自检轮订正）；格式语义变化时
-// 才递增本值，届时如需拒读新版再在 parseOwnKnowledgeBook 补一道显式闸
-export const KNOWLEDGE_FILE_VERSION: number = 1;
-// 自家格式的扩展名（小写归一，照 SkillText.skillFileExt 口径；页面扩展名分派用）
-export const KNOWLEDGE_FILE_EXT: string = 'json';
-
-// ── 通用格式常量（2026-09-22 第二步/第三步，方案-知识库导入导出-20260922 §10.1 / §12.1）──
-// 竞品信封 type：RikkaHub 与 Kelivo 的世界书格式（Kelivo 的导出函数名即 _toRikkaHubExportJson
-// ——两家同形同字段，故对外只需写**一种**格式）。写侧恒用此值；读侧按「有无 entries」分派
-// （见 parseWorldBookFile）。**字面量单源**：消费一律走常量，全仓禁第二处手写
-export const KNOWLEDGE_COMPAT_TYPE: string = 'lorebook';
-// 通用格式里关键词的切分符：**只按顿号与逗号**——条目编辑页明写的分隔约定（用户看得见），
-// 不猜空格（空格可能是关键词本身的一部分，如 machine learning，切了就破坏原意）。
-// ★ 与 splitKnowledgeQuery 的宽分隔符族是两回事：那个切的是**检索输入**（用户随手打字，宁宽），
-//   这个切的是**已保存的关键词字段**（用户按 UI 约定写下，宁准）——两处取向相反，勿互抄
-const KNOWLEDGE_KEYWORD_SEP = /[、,，]+/;
-
-// 文件里的单条条目：恰四字段。id 与 createdAt / updatedAt **不进文件**——导入恒生成新 id 与
-// 新时间戳（与两家竞品「导入必重生 ID」同口径，也避免与库内既有 id 相撞）；条目序 = 数组序。
-// keywords 存**原串**不拆数组（本域检索语义是整串子串匹配，拆开拼回会漂——自家往返保真
-// 是本格式存在的第一理由）；source 白名单两值（解析侧归一，非 'assistant' 一律落 'user'，
-// 防手改文件造出非法值脏数据）
-export interface KnowledgeFileEntry {
-  title: string;
-  keywords: string;
-  content: string;
-  source: string;
-}
-
-// 解析结果（ok = false 时 error 为整份级中文原因；entries 为原始条目，逐条分派在
-// screenKnowledgeEntries——「整份拒」与「逐条说明」两级校验的分界）。
-// notice = 外部世界书导入时的附注（已停用条数 / 注入设置未导入），自家格式恒 ''；
-// 由 parseKnowledgeBook 组装、审阅弹窗原样呈现（**不在这里做取舍判断**——本域只描述事实）
-export interface KnowledgeFileRead {
-  ok: boolean;
-  name: string;
-  entries: KnowledgeFileEntry[];
-  error: string;
-  notice: string;
-}
-
-// 逐条分派结果：importable = 可导入条目（关键词已截到上限）；skipped = 未导入逐条中文原因；
-// clippedKeywords = 因超长被截断关键词的条数（不拒收——关键词只是辅助索引，正文不丢）
-export interface KnowledgeScreenResult {
-  importable: KnowledgeFileEntry[];
-  skipped: string[];
-  clippedKeywords: number;
-}
-
-// 信封与数据层形态（序列化构造用；解析侧同一形态做非受检视图 + 逐字段 typeof 守卫）
-interface KnowledgeFileEnvelope {
-  version: number;
-  type: string;
-  data: KnowledgeFileBookData;
-}
-
-interface KnowledgeFileBookData {
-  name: string;
-  entries: KnowledgeFileEntry[];
-}
-
-function rejectKnowledgeFile(error: string): KnowledgeFileRead {
-  return { ok: false, name: '', entries: [], error: error, notice: '' };
-}
-
-// 书名字长收口（2026-09-22 自检轮补）。★ 为什么必须有这道闸：书名的 50 字上限原本由**三个建书
-// 面**各自把关——库页命名对话框 `maxLength: KNOWLEDGE_TITLE_MAX`、工具 create_book 显式长度
-// 校验（869 笔补，理由正是「工具面能造出 UI 造不出的超限数据」）。**导入是第四个建书面**，
-// 而外部件的 `data.name` 与文件名兜底都不受我方 UI 约束 ⇒ 唯一无闸的入口（自检轮实测：3000
-// 字书名原样落库，且预览弹窗首行被撑到 3097 字——弹窗 message 是无上限 Text，两键会被顶出屏）。
-// · 截断而不拒收：书名只是容器标签，且**审阅弹窗展示的就是最终落库名**（用户可见即非静默）；
-//   拒收会让「文件名偏长的世界书」整本导不进来，而库里本就有重命名键兜底
-// · 与导出侧文件名同款收口姿势（knowledgeFileName 截 40 + safeKnowledgeCut 代理对防护）
-function capBookName(name: string): string {
-  if (name.length <= KNOWLEDGE_TITLE_MAX) {
-    return name;
-  }
-  return name.substring(0, safeKnowledgeCut(name, KNOWLEDGE_TITLE_MAX)).trim();
-}
-
-// 导出序列化（§3.1 逐字）：name + 条目四字段。source 如实导出（DB 侧只产 'user' /
-// 'assistant' 两值，白名单外归 'user' 是防御——导出件不携带非法值，与导入侧同款两端口径）
-export function serializeKnowledgeBook(name: string, entries: KnowledgeEntryItem[],
-  sources: string[]): string {
-  // sources 与 entries 同序（源标签不走 KnowledgeEntryItem——该形态刻意不带 source，
-  // 见 KnowledgeDb 的 KnowledgeEntryRow.source 注释）
-  const list: KnowledgeFileEntry[] = [];
-  for (let i: number = 0; i < entries.length; i++) {
-    list.push({
-      title: entries[i].title,
-      keywords: entries[i].keywords,
-      content: entries[i].content,
-      source: sources[i] === 'assistant' ? 'assistant' : 'user'
-    });
-  }
-  const file: KnowledgeFileEnvelope = {
-    version: KNOWLEDGE_FILE_VERSION,
-    type: KNOWLEDGE_FILE_TYPE,
-    data: { name: name, entries: list }
-  };
-  return JSON.stringify(file);
-}
-
-// ── 通用格式导出（2026-09-22 第三步，方案 §12.1）──
-// 写 **RikkaHub 信封 + 最小写入**：RikkaHub 读它是自家格式（LorebookSerializer.tryImportNative）；
-// Kelivo 读它走「只认 data 键、连 type 都不校验」的宽容解析。只写有对应物的三个字段（条目名 /
-// 正文 / 关键词），其余（id / position / role / priority / injectDepth / scanDepth / useRegex /
-// caseSensitive / constantActive / enabled）**一律省略**——两家模型每个字段都带默认值（RikkaHub
-// 的 Kotlin 默认、Kelivo 的 `?? 默认`），省略即由对方补**它自己的**默认：零编造、零语义债，且
-// 顺带绕开两家在 position 枚举大小写上的人为不一致（Kelivo 写大写、RikkaHub 声明小写且全仓无
-// 宽容开关——那是**竞品互读**的坑，我们省略字段即完全不经那条路）。条目层不写 `type`：对方
-// entries 的声明类型是**具体子类**而非 sealed 父类，不需要判别符
-interface KnowledgeCompatEntry {
-  name: string;
-  content: string;
-  keywords: string[];
-}
-
-interface KnowledgeCompatBookData {
-  name: string;
-  entries: KnowledgeCompatEntry[];
-}
-
-interface KnowledgeCompatEnvelope {
-  version: number;
-  type: string;
-  data: KnowledgeCompatBookData;
-}
-
-export interface KnowledgeCompatExport {
-  json: string;
-  exported: number; // 写进文件的条数
-  dropped: number;  // 无关键词被排除的条数
-}
-
-// 关键词整串 → 数组（**只按顿号与逗号**切——见 KNOWLEDGE_KEYWORD_SEP 注释；去空段与首尾空白）。
-// 与导入侧 joinKeywordField 是同一份 UI 约定的两个方向（那边按顿号合、这边按顿号逗号切）
-export function splitKnowledgeKeywords(keywords: string): string[] {
-  const parts: string[] = [];
-  for (const raw of keywords.split(KNOWLEDGE_KEYWORD_SEP)) {
-    const part: string = raw.trim();
-    if (part !== '') {
-      parts.push(part);
-    }
-  }
-  return parts;
-}
-
-// 通用格式序列化。★ **无关键词的条目不出**（方案 §14-5 口径 C）：对方的生效机制是关键词命中
-// （`constantActive` 默认 false），无关键词的条目在那边**永不生效**——与其产出一个死条目，不如
-// 不写并在结果里明示原因（合「不静默丢件」口径）。本应用里关键词留空是**合法常态**（条目编辑页
-// 明写「留空则只按名称与正文检索」），故这条不是边角情形，必须在 UI 面讲清不可静默略过
-export function serializeKnowledgeBookCompat(name: string,
-  entries: KnowledgeEntryItem[]): KnowledgeCompatExport {
-  const list: KnowledgeCompatEntry[] = [];
-  let dropped: number = 0;
-  for (const entry of entries) {
-    const keywords: string[] = splitKnowledgeKeywords(entry.keywords);
-    if (keywords.length === 0) {
-      dropped++;
-      continue;
-    }
-    list.push({ name: entry.title, content: entry.content, keywords: keywords });
-  }
-  const file: KnowledgeCompatEnvelope = {
-    version: KNOWLEDGE_FILE_VERSION,
-    type: KNOWLEDGE_COMPAT_TYPE,
-    data: { name: name, entries: list }
-  };
-  return { json: JSON.stringify(file), exported: list.length, dropped: dropped };
-}
-
-// 导出结果提示（**仅在有条目被排除时非空**——没有要交代的事就不打扰，页面据此决定 toast 与否）。
-// 入参取两个计数而不取整个 KnowledgeCompatExport：盘面域带回的正是这两个数，页面不必为凑参数
-// 造一个假的 json 字段
-export function composeKnowledgeCompatExportTip(exported: number, dropped: number): string {
-  if (dropped === 0) {
-    return '';
-  }
-  return '已导出 ' + exported + ' 条，' + dropped +
-    ' 条没有关键词的条目未导出。通用格式按关键词触发，没有关键词的条目在别的应用里不会生效。';
-}
-
-// 导入整份级校验（§4.2 结构拒，文案逐字定死——页面 toast 与断言的契约面）；逐条内容校验在
-// screenKnowledgeEntries。解析侧对未知字段**容忍**（只读白名单四字段，多余字段不拒收——
-// 格式长期包袱的缓解口径）；条目数超 KNOWLEDGE_ENTRY_MAX 的闸在页面链（常量单源在
-// KnowledgeDb，本域零 import 拿不到，不为它破零 import 纪律）。
-// ★ 2026-09-22 第二步起本函数只做**分派**：自家 type → 原链（抽出为 parseOwnKnowledgeBook，
-// 判据与文案一字未动）；其余一律交 parseWorldBookFile（RikkaHub/Kelivo 信封 / SillyTavern
-// World Info / Kelivo 裸形态）。fallbackName = 选择器取到的**文件名**（去扩展名）——外部世界书
-// 常无书名字段（ST 格式压根没有 name 概念），照 RikkaHub「导入时用文件名当书名」先例兜底；
-// 自家格式恒不看它（自家书名必填、缺失即拒，那份严格性是自家往返保真的契约面，不外溢到外部件）
-export function parseKnowledgeBook(text: string, fallbackName: string = ''): KnowledgeFileRead {
-  let parsed: object | null = null;
-  try {
-    parsed = JSON.parse(text) as object | null;
-  } catch (e) {
-    return rejectKnowledgeFile('文件不是有效 JSON，未导入。');
-  }
-  // ★ 顶层 null 必须先过闸：`null` 是合法 JSON 值（`JSON.parse('null')` 返 null），而
-  // `env.type` 读 null 属性会抛 TypeError——抛出去会被盘面域兜成「文件读取失败：Cannot read
-  // properties of null…」英文原文，与「整份拒给中文原因」的契约不符（自检轮直跑实锤）。
-  // 其余原始值（数字 / 字符串 / 布尔 / 数组）不在此拦：它们走世界书链后同落「不是知识库文件」
-  const env: KnowledgeFileEnvelope | null = parsed as KnowledgeFileEnvelope | null;
-  if (env === null) {
-    return rejectKnowledgeFile('这个文件不是知识库文件，未导入。');
-  }
-  if (env.type === KNOWLEDGE_FILE_TYPE) {
-    return parseOwnKnowledgeBook(env);
-  }
-  return parseWorldBookFile(env, fallbackName);
-}
-
-// 自家格式链：§4.2 四拒逐字（坏 JSON 一拒在分派层）+ 四字段白名单 + source 两值归一。
-// 第二步重构时整体抽出，行为与文案与第一步逐字一致
-function parseOwnKnowledgeBook(env: KnowledgeFileEnvelope): KnowledgeFileRead {
-  const data: KnowledgeFileBookData | null = env.data ?? null;
-  if (data === null || typeof data !== 'object') {
-    // data 缺失或非对象 ⇒ 名称必缺，落名称拒
-    return rejectKnowledgeFile('文件里没有知识库名称，未导入。');
-  }
-  const ownName: string = (typeof data.name === 'string' ? data.name : '').trim();
-  if (ownName === '') {
-    return rejectKnowledgeFile('文件里没有知识库名称，未导入。');
-  }
-  const name: string = capBookName(ownName);
-  if (!Array.isArray(data.entries)) {
-    return rejectKnowledgeFile('文件里没有条目清单，未导入。');
-  }
-  const entries: KnowledgeFileEntry[] = [];
-  const rawItems: object[] = data.entries as object[];
-  for (let i: number = 0; i < rawItems.length; i++) {
-    const rec: KnowledgeFileEntry | null = rawItems[i] as KnowledgeFileEntry | null;
-    // 数组里塞了 null（手改件）⇒ 落空条目交逐条分派按「无标题」说明；★ 禁在解析层抛
-    //（`null.title` 会抛 TypeError，被盘面域兜成「文件读取失败：…」英文原文——与「条目级
-    // 问题逐条说明、不升级成整份拒」的口径相反）
-    if (rec === null) {
-      entries.push({ title: '', keywords: '', content: '', source: 'user' });
-      continue;
-    }
-    // 逐字段 typeof 守卫：非对象项 / 缺字段的条目落默认值，交逐条分派按「无标题」说明
-    // （条目级问题逐条说明，不在解析层升级成整份拒）
-    entries.push({
-      title: typeof rec.title === 'string' ? rec.title : '',
-      keywords: typeof rec.keywords === 'string' ? rec.keywords : '',
-      content: typeof rec.content === 'string' ? rec.content : '',
-      source: rec.source === 'assistant' ? 'assistant' : 'user'
-    });
-  }
-  return { ok: true, name: name, entries: entries, error: '', notice: '' };
-}
-
-// ── 外部世界书链（2026-09-22 第二步）──
-// 收件面 = 三种：① RikkaHub / Kelivo 信封（`{version, type:'lorebook', data:{name, entries[]}}`）
-// ② SillyTavern World Info v2（无信封，顶层 entries 是**以 uid 字符串为键的 Map**）
-// ③ Kelivo 裸形态（无信封，顶层 entries 为数组——Kelivo 的解析只看 data 键或 entries 键、连
-//    type 都不校验，故它写出的边角形态也要吃）。**不读的字段一律不读**：注入位置 / 深度 /
-//    角色 / 优先级 / 正则 / 大小写 / 常驻 / 扫描深度在本应用全无对应物（本应用按模型检索，
-//    不自动注入），原样忽略并在弹窗附注里明说（方案 §10 映射表）
-interface KnowledgeWorldHolder {
-  name?: string;
-  entries?: object;
-}
-
-interface KnowledgeWorldEntry {
-  name?: string;
-  comment?: string;
-  key?: string[] | string;
-  keywords?: string[] | string;
-  content?: string;
-  enabled?: boolean;
-  disable?: boolean;
-}
-
-// 关键词字段归一（三形态容错）：数组 → 逐项 trim 去空后 join('、')（**方向与我们导出侧相反**：
-// 那边按顿号逗号切、这边按顿号合，两边同一份 UI 约定）；字符串 → 原样（ST 的 key 单串形态与
-// 手写件容错）；缺字段 → ''。★ 数组元素仍逐项过 typeof（手改件里塞数字/布尔不罕见）——
-// 入参声明为联合类型而非 object，故 typeof 收窄落在 string 上而非 never
-//（ArkTS 下 object 与 string 不相交，按 object 收窄会编译报 `trim does not exist on never`）
-function joinKeywordField(value: string[] | string | undefined): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value === undefined) {
-    return '';
-  }
-  // 运行期兜底：字段塞了对象等不可迭代值（手改件）⇒ 视为缺失返空串。类型面本支恒假（联合类型
-  // 已收窄到 string[]），留着是因为 JSON 不守类型——真喂进来时 `for…of` 会抛 TypeError，抛出去
-  // 被盘面域兜成「文件读取失败：…」英文原文，与「逐条说明」口径不符（自检轮直跑实锤）
-  if (!Array.isArray(value)) {
-    return '';
-  }
-  const parts: string[] = [];
-  for (const item of value) {
-    if (typeof item === 'string' && item.trim() !== '') {
-      parts.push(item.trim());
-    }
-  }
-  return parts.join('、');
-}
-
-// 首个关键词（ST 条目标题在 comment 为空时取它——RikkaHub ST 导入同口径）
-function firstWorldKeyword(value: string[] | string | undefined): string {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-  if (value === undefined) {
-    return '';
-  }
-  // 运行期兜底（同 joinKeywordField）：不可迭代值视为缺失（ST 件里 key 塞对象时不留英文抛错面）
-  if (!Array.isArray(value)) {
-    return '';
-  }
-  for (const item of value) {
-    if (typeof item === 'string' && item.trim() !== '') {
-      return item.trim();
-    }
-  }
-  return '';
-}
-
-// ST Map 键的排序位次（键是条目 uid 的数字串；非数字键排在所有数字键之后，同段按原序保持稳定
-// ——确定性优先，禁依赖对象键的枚举序，同一文件在不同引擎上序会漂）
-function worldEntryRank(key: string): number {
-  const n: number = Number.parseInt(key, 10);
-  return Number.isNaN(n) ? 2147483647 : n;
-}
-
-// 外部世界书附注（弹窗原文呈现，方案 §10 表两行）：已停用条数 + 注入设置未导入。恒含第二句
-// （它解释的是「为什么导入后行为与源应用不同」，是用户看到条目变少之外最需要知道的一件事）；
-// 停用句按实际计数出现。★ 措辞守「面向用户文案写作规约」：分句用句号、无括号连环
-function composeWorldNotice(disabled: number): string {
-  const parts: string[] = [];
-  if (disabled > 0) {
-    parts.push('源文件里已停用的 ' + disabled + ' 条未导入');
-  }
-  parts.push('源文件的注入位置、触发深度与常驻等设置未导入，本应用由助手按需检索，不自动注入');
-  return parts.join('。') + '。';
-}
-
-function parseWorldBookFile(env: KnowledgeFileEnvelope, fallbackName: string): KnowledgeFileRead {
-  const raw: object | null = env.data ?? null;
-  const holder: KnowledgeWorldHolder =
-    (raw !== null && typeof raw === 'object' ? raw : env as object) as KnowledgeWorldHolder;
-  const entries: object | null = holder.entries ?? null;
-  if (entries === null || typeof entries !== 'object') {
-    // 拿不出条目清单 ⇒ 不是世界书件。★ 本拒**取代**第一步的「错 type 拒」：原判据只认自家
-    // type，第二步要收外部件（它们常无 type 或 type 各异），判据由「type 是否为我方」推广为
-    // 「能否拿出条目清单」——同信封不同实体的件（RikkaHub 的 mode_injection 导出等）在此照拒，
-    // 「不是知识库文件」的语义不弱化，只是不再拿 type 当唯一凭据
-    return rejectKnowledgeFile('这个文件不是知识库文件，未导入。');
-  }
-  const own: string = (typeof holder.name === 'string' ? holder.name : '').trim();
-  const picked: string = own !== '' ? own : fallbackName.trim();
-  if (picked === '') {
-    return rejectKnowledgeFile('文件里没有知识库名称，未导入。');
-  }
-  // 书名字长收口（见 capBookName）：外部件的 name 字段与文件名兜底都可能超长，两者同过一闸
-  const name: string = capBookName(picked);
-  if (Array.isArray(entries)) {
-    return readWorldArray(name, entries as object[]);
-  }
-  return readWorldMap(name, entries as object);
-}
-
-// 数组形态（RikkaHub / Kelivo）：条目序 = 数组序；`enabled === false` 的条目不导入（如实计数
-// ——源应用里它本就不生效，搬过来反而会让用户以为它一直可用）
-function readWorldArray(name: string, items: object[]): KnowledgeFileRead {
-  const entries: KnowledgeFileEntry[] = [];
-  let disabled: number = 0;
-  for (const item of items) {
-    const rec: KnowledgeWorldEntry | null = item as KnowledgeWorldEntry | null;
-    // 数组里塞了 null（手改件）⇒ 落空条目交逐条分派按「无标题」说明；★ 禁在解析层抛
-    //（`null.enabled` 会抛 TypeError，被盘面域兜成「文件读取失败：…」英文原文）
-    if (rec === null) {
-      entries.push({ title: '', keywords: '', content: '', source: 'user' });
-      continue;
-    }
-    if (rec.enabled === false) {
-      disabled++;
-      continue;
-    }
-    entries.push({
-      title: typeof rec.name === 'string' ? rec.name : '',
-      keywords: joinKeywordField(rec.keywords),
-      content: typeof rec.content === 'string' ? rec.content : '',
-      source: 'user'
-    });
-  }
-  return { ok: true, name: name, entries: entries, error: '',
-    notice: composeWorldNotice(disabled) };
-}
-
-// Map 形态（SillyTavern World Info v2）：标题 = comment，空则取首个关键词；停用标是 `disable`
-// （与竞品 `enabled` 相反极——两家各一极，此处是 ST 侧）；键序按 worldEntryRank
-function readWorldMap(name: string, map: object): KnowledgeFileRead {
-  const rec: Record<string, object> = map as Record<string, object>;
-  const keys: string[] = Object.keys(rec);
-  const order: number[] = [];
-  for (let i: number = 0; i < keys.length; i++) {
-    order.push(i);
-  }
-  order.sort((a: number, b: number): number => {
-    const ra: number = worldEntryRank(keys[a]);
-    const rb: number = worldEntryRank(keys[b]);
-    return ra !== rb ? ra - rb : a - b;
-  });
-  const entries: KnowledgeFileEntry[] = [];
-  let disabled: number = 0;
-  for (const idx of order) {
-    // 退化项（Map 里塞了 null / 非对象）不特判字段：落空条目 ⇒ 走逐条分派的「无标题」说明。
-    // 这与自家格式「条目级问题不在解析层升级成整份拒」同一口径，也避开了对接口类型做 typeof
-    // 收窄（ArkTS 下会落 never）。★ 但 **null 必须先过闸**：「字段读为 undefined」只对非 null
-    // 的值成立，`null.disable` 会抛 TypeError（被盘面域兜成英文原文）。强转先例 = 上方自家链
-    const item: KnowledgeWorldEntry | null = rec[keys[idx]] as KnowledgeWorldEntry | null;
-    if (item === null) {
-      entries.push({ title: '', keywords: '', content: '', source: 'user' });
-      continue;
-    }
-    if (item.disable === true) {
-      disabled++;
-      continue;
-    }
-    const comment: string = typeof item.comment === 'string' ? item.comment.trim() : '';
-    entries.push({
-      title: comment !== '' ? comment : firstWorldKeyword(item.key),
-      keywords: joinKeywordField(item.key),
-      content: typeof item.content === 'string' ? item.content : '',
-      source: 'user'
-    });
-  }
-  return { ok: true, name: name, entries: entries, error: '',
-    notice: composeWorldNotice(disabled) };
-}
-
-// 定长截断的安全切点（代理对防护——emoji 等增补平面字符占两码元，硬切会留孤立代理字符，
-// 它进文件名是非法名、进请求体是非法 Unicode；照 SkillText.safeCutIndex 口径本地一份——
-// 本域零 import 拿不到对方，同 parseEnabledKnowledgeIds 两域同形不同源的既有纪律）
-function safeKnowledgeCut(text: string, max: number): number {
-  if (text.length <= max) {
-    return text.length;
-  }
-  const last: number = text.charCodeAt(max - 1);
-  return (last >= 0xD800 && last <= 0xDBFF) ? max - 1 : max;
-}
-
-function clipImportText(text: string, max: number): string {
-  return text.length > max ? text.substring(0, safeKnowledgeCut(text, max)) : text;
-}
-
-// 逐条分派（§4.3 真值表）：三类「跳过」与一类「截断」的分野——跳过 = 原样保不住的，宁可不导
-// （标题是检索权重最高字段、正文是原文，截断即悄悄改命中行为与内容）；截断 = 辅助字段且已明示。
-// 重名判定复用 knowledgeTitleTaken（导入目标恒为新库 ⇒ 只需文件内自查：与已收条目撞名即跳过）
-export function screenKnowledgeEntries(raw: KnowledgeFileEntry[]): KnowledgeScreenResult {
-  const importable: KnowledgeFileEntry[] = [];
-  const skipped: string[] = [];
-  const accepted: KnowledgeEntryItem[] = []; // 文件内前序已收集（合成 id 防自撞语义误用）
-  let clippedKeywords: number = 0;
-  for (let i: number = 0; i < raw.length; i++) {
-    const title: string = raw[i].title.trim();
-    if (title === '') {
-      skipped.push('第 ' + (i + 1) + ' 条（无标题）：条目名为空');
-      continue;
-    }
-    if (title.length > KNOWLEDGE_TITLE_MAX) {
-      skipped.push('『' + clipImportText(title, KNOWLEDGE_IMPORT_NAME_MAX) +
-        '…』：条目名超过 ' + KNOWLEDGE_TITLE_MAX + ' 字');
-      continue;
-    }
-    if (raw[i].content.length > KNOWLEDGE_CONTENT_MAX) {
-      skipped.push('『' + title + '』：正文 ' + raw[i].content.length + ' 字，超过 ' +
-        KNOWLEDGE_CONTENT_MAX + ' 字上限');
-      continue;
-    }
-    if (knowledgeTitleTaken(accepted, title, '')) {
-      skipped.push('『' + title + '』：文件里有重名条目');
-      continue;
-    }
-    let keywords: string = raw[i].keywords;
-    if (keywords.length > KNOWLEDGE_KEYWORDS_MAX) {
-      keywords = keywords.substring(0, safeKnowledgeCut(keywords, KNOWLEDGE_KEYWORDS_MAX));
-      clippedKeywords++;
-    }
-    importable.push({ title: title, keywords: keywords, content: raw[i].content,
-      source: raw[i].source === 'assistant' ? 'assistant' : 'user' });
-    accepted.push({ id: 'f' + i, bookId: '', title: title, keywords: keywords,
-      content: raw[i].content, createdAt: 0, sortOrder: 0 });
-  }
-  return { importable: importable, skipped: skipped, clippedKeywords: clippedKeywords };
-}
-
-// 导出文件名清洗（非法字符 → _、截 40、去首尾点与空格、空名与纯点段兜底「知识库」；照
-// SkillText.skillPackDirName 形制加首尾点剥离）。★ 单源：导出侧文件名与导入侧失败提示共用，
-// 禁两处各写一套
-export function knowledgeFileName(bookName: string): string {
-  const safe: string = bookName.replace(/[\\/:*?"<>|]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '');
-  const cut: string = safe.substring(0, safeKnowledgeCut(safe, 40));
-  return cut === '' ? '知识库' : cut;
-}
-
-// ── 审阅弹窗文案（§3.3）──
-// ★ 结构上界是硬要求（照 SkillText.composeBatchImportPreview——弹窗 message 是无上限 Text，
-// 长清单会把「导入 / 取消」两键顶出屏，技能笔真机预演实锤过一次）：条目名封顶 8 项（余下
-// 「等 N 条」）、未导入封顶 3 条（余下计数）、每项截断。封顶档与技能域同值但**各域自持**
-// （零 import 域拿不到对方常量，同款纪律同款理由）
-const KNOWLEDGE_IMPORT_LIST_MAX: number = 8;
-const KNOWLEDGE_IMPORT_SKIP_LIST_MAX: number = 3;
-const KNOWLEDGE_IMPORT_NAME_MAX: number = 20;
-const KNOWLEDGE_IMPORT_WARN_MAX: number = 40;
-const KNOWLEDGE_IMPORT_WARN_NAME_MAX: number = 20;
-// 安全提示句（导入弹窗恒末句——条目会进检索结果发给模型，导入前用户该过目）
-const KNOWLEDGE_IMPORT_SAFETY_LINE: string =
-  '条目内容会在助手检索知识库时发给模型，请确认内容可信后再导入。';
-
-// 导入说明单条裁剪（名段压窄、原因保留——照 SkillText.clipImportWarning 同款两段式）
-function clipKnowledgeWarn(warning: string): string {
-  const sep: number = warning.indexOf('：');
-  if (sep < 0) {
-    return clipImportText(warning, KNOWLEDGE_IMPORT_WARN_MAX);
-  }
-  const name: string = warning.substring(0, sep);
-  const reason: string = warning.substring(sep + 1);
-  const shown: string = name.length > KNOWLEDGE_IMPORT_WARN_NAME_MAX ?
-    clipImportText(name, KNOWLEDGE_IMPORT_WARN_NAME_MAX) : name;
-  return clipImportText(shown + '：' + reason, KNOWLEDGE_IMPORT_WARN_MAX);
-}
-
-// 审阅弹窗文案：书名 + 条数 / 条目名清单 / 未导入逐条 / 截断计数 / **外部件附注** / 安全行恒末。
-// notice 来自 parseKnowledgeBook（外部世界书链恒非空、自家格式恒空），**原样呈现**——本函数不做
-// 取舍判断，只负责把它排在「截断计数」之后、安全行之前（安全行恒末是结构契约，钉在断言里）
-export function composeKnowledgeImportPreview(name: string,
-  screen: KnowledgeScreenResult, notice: string = ''): string {
-  const parts: string[] = [];
-  const total: number = screen.importable.length;
-  const limit: number = Math.min(KNOWLEDGE_IMPORT_LIST_MAX, total);
-  const lines: string[] = [];
-  for (let i: number = 0; i < limit; i++) {
-    lines.push((i + 1).toString() + '. ' + clipImportText(screen.importable[i].title,
-      KNOWLEDGE_IMPORT_NAME_MAX));
-  }
-  if (total > limit) {
-    lines[limit - 1] = lines[limit - 1] + ' 等 ' + total + ' 条';
-  }
-  parts.push('将新建知识库「' + name + '」，导入 ' + total + ' 条条目\n' + lines.join('\n'));
-  if (screen.skipped.length > 0) {
-    const shown: string[] = [];
-    const keep: number = Math.min(KNOWLEDGE_IMPORT_SKIP_LIST_MAX, screen.skipped.length);
-    for (let i: number = 0; i < keep; i++) {
-      shown.push(clipKnowledgeWarn(screen.skipped[i]));
-    }
-    const more: string = screen.skipped.length > keep ?
-      ' 等 ' + screen.skipped.length + ' 项' : '';
-    parts.push(screen.skipped.length + ' 条未导入：\n- ' + shown.join('\n- ') + more);
-  }
-  if (screen.clippedKeywords > 0) {
-    parts.push(screen.clippedKeywords + ' 条的关键词过长已截断');
-  }
-  if (notice !== '') {
-    parts.push(notice);
-  }
-  parts.push(KNOWLEDGE_IMPORT_SAFETY_LINE);
-  return parts.join('\n\n');
 }

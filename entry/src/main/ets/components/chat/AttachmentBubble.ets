@@ -9,9 +9,10 @@
 // + 点击预览 + 竖排换行」不同型，硬合会把两套语义与两套几何挤进一个组件；③本件可被
 // 后置的「附件管理列表」笔直接复用（书 §5）。
 // 取源红线（官方 FAQ faqs-arkui-154 实锤）：Image 组件不能直接传入应用沙箱路径——必经
-// fileUri.getUriFromPath 转沙箱 URI；恒挂 sourceSize 让解码下沉到目标尺寸（官方下采样
-// 姿势，禁原图整幅入内存）；不生成磁盘缩略图（零新增文件产物）。解码失败降级：该件改走
-// 文件行形态（同输入栏「解码失败降级图标卡」先例）。
+// fileUri.getUriFromPath 转沙箱 URI；解码下采样（禁原图整幅入内存）——★ 2026-10-09 图片
+// 原比例笔改判：由 `.autoResize(true)` 承接（按显示区尺寸、保原比例）；原方形 `sourceSize`
+// 目标对非方形原图同样触发解码拉伸（缩略图变形），随本笔退役。不生成磁盘缩略图（零新增文件
+// 产物）。解码失败降级：该件改走文件行形态（同输入栏「解码失败降级图标卡」先例）。
 // 大小/扩展名段与输入栏附件条同口径 = AttachmentUtil.formatFileSize/extLabel 单源（本笔
 // 自 ChatAttachmentStrip 上收，断言钉同源，禁第二实现）。
 // ★ 2026-09-15 预览升级笔：图片缩略图挂共享元素转场 out 侧（geometryTransition + follow
@@ -20,9 +21,11 @@
 // 仅共享激活期挂 OPACITY 动画（常挂会让 LazyForEach 滚动重建的缩略图逐个淡入），时长曲线
 // 与查看器开关动画同值（ATTACH_PREVIEW_ANIM 单源）。
 import { fileUri } from '@kit.CoreFileKit';
+import { ConfigurationConstant } from '@kit.AbilityKit';
 import { AttachmentBrief, extLabel, formatFileSize, ATTACH_SHARED_ID_KEY, sharedGeomId,
   ATTACH_PREVIEW_ANIM } from '../../common/AttachmentUtil';
-import { BUBBLE_PAD_FAR, BUBBLE_PAD_NEAR, BUBBLE_RADIUS } from '../../common/Theme';
+import { BUBBLE_PAD_FAR, BUBBLE_PAD_NEAR, BUBBLE_RADIUS, chatBubbleUserBg } from '../../common/Theme';
+import { PREF_CARD_ALPHA_LEVEL_KEY, CARD_ALPHA_DEFAULT } from '../../common/AppPreferences';
 import { ChatMessage } from './ChatMessageCompose';
 
 // 几何常量（观感参数集中在常量区，调观感只改这里）
@@ -49,6 +52,11 @@ export struct AttachmentBubble {
   @State private failedIds: Set<string> = new Set<string>();
   // 共享元素广播键订阅（三处判据同源 sharedGeomId——本件 / 输入栏条 / 查看器图片页）
   @StorageProp(ATTACH_SHARED_ID_KEY) sharedId: string = '';
+  // 卡底透明度两订阅（2026-10-25 卡底透明度笔路径乙配套）：本件原是全工程唯一无
+  // appColorMode 订阅的气泡件（泡底走资源限定词深浅自适应）——泡底改 Theme 函数后两键齐补
+  //（深浅 + 档位），与消息泡同帧同档（@StorageProp 本地拷贝、组件创建时取值）
+  @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
+  @StorageProp(PREF_CARD_ALPHA_LEVEL_KEY) cardAlphaLevel: number = CARD_ALPHA_DEFAULT;
 
   // 图片区行分组（每行最多 IMG_PER_ROW 个；解码失败件不进图片区——降级进文件区）
   private imageRows(): AttachmentBrief[][] {
@@ -97,7 +105,7 @@ export struct AttachmentBubble {
     // 第三个缩略图；两泡同为右对齐、左缘不齐属正常（各自随内容收缩）
     Row() {
       Blank()
-      // 泡体：同底色同圆角（chat_bubble_user / 16）、内距 12、宽度上限 100%；泡内不叠第二
+      // 泡体：同底色同圆角（chatBubbleUserBg / 16）、内距 12、宽度上限 100%；泡内不叠第二
       // 层卡底（图片裸缩略图 / 文件裸行直接排在同底色上——「泡中卡」双层底观感差，书 §6-10；
       // 对比太弱一行即改回卡底）
       Column({ space: AREA_GAP }) {
@@ -112,7 +120,11 @@ export struct AttachmentBubble {
                 .borderRadius(THUMB_RADIUS)
                 .clip(true)
                 .objectFit(ImageFit.Cover)
-                .sourceSize({ width: THUMB_SIZE, height: THUMB_SIZE })
+                // ★ 2026-10-09 图片原比例笔（查看器同缺陷族现场一并收口）：原方形 sourceSize
+                // 对非方形原图触发解码拉伸（Cover 裁的是变形位图 = 缩略图变形）；autoResize(true)
+                // 解码按显示区（THUMB_SIZE 方块）下采样且保原比例，Cover 照常裁方——缩略图既定
+                // 形态不变，「禁原图整幅入内存」由显示区上界承接（详见本件头注释）
+                .autoResize(true)
                 // 共享元素 out 侧（官方口径：列表侧带 follow: true；id 单源判据 sharedGeomId）
                 .geometryTransition(sharedGeomId(brief.id, this.sharedId), { follow: true })
                 // 离场防析构（官方约束）——仅共享激活期挂，惰性期 IDENTITY 不动 LazyForEach 行为
@@ -159,7 +171,7 @@ export struct AttachmentBubble {
         }, (brief: AttachmentBrief) => brief.id)
       }
       .padding(12)
-      .backgroundColor($r('app.color.chat_bubble_user'))
+      .backgroundColor(chatBubbleUserBg(this.appColorMode, this.cardAlphaLevel))
       // 圆角与消息泡同源（Theme BUBBLE_RADIUS——同屏相邻同底色的两泡须同步演化；
       // 原字面量 16 于 2026-09-17 自检轮并入单源，值不变）
       .borderRadius(BUBBLE_RADIUS)

@@ -1,4 +1,4 @@
-// 价格模板存储域（2026-09-11 价格模板，任务书-价格模板-20260911；照 PromptTemplateDb
+// 价格模板存储域（任务书-价格模板-20260911；照 PromptTemplateDb
 // 域形态新建）：price_templates 表 CRUD（表结构/迁移在 ChatDbMigrate v28）。
 // 模板 = 服务商级价格模板（一行一套 serializePriceConfig 产出的价格 JSON 串原文——
 // 结构与解析单源 = CostStatsCalc，本层透传不解析不校验：保存链已保证入库前草稿
@@ -8,7 +8,7 @@
 // 名称非空/trim/同服务商查重由调用侧保证（PromptTemplateDb 同款）；上限则两端都判——
 // 调用侧拦（条卡键置灰、列表页 push 前 toast）＝体验，insertTemplate 先查行数达
 // PRICE_TEMPLATE_MAX 即 throw ＝数据有界红线的独立兜底（防将来键形制改动穿透）。
-// ★ 不进任何导出/迁移路径（决明 2026-09-11 拍板③④：服务商「配置迁移」与「数据与同步」
+// ★ 不进任何导出/迁移路径（决明拍板③④：服务商「配置迁移」与「数据与同步」
 // 全量导出/导入都不带模板）——技术债务登记见 docs/变更记录.md 三百九十五节。
 import { relationalStore } from '@kit.ArkData';
 import { nextMessageId, sharedRdbStore } from './ChatDb';

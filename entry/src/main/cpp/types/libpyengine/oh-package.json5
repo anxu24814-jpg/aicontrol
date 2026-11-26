@@ -1,0 +1,6 @@
+{
+  "name": "libpyengine.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "Python 解释器引擎（napi 入口 init / exec / cancel）"
+}

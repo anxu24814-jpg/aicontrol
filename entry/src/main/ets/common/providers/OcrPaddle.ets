@@ -1,30 +1,21 @@
-// 内置识别引擎推理编排（2026-09-16，方案-内置PaddleOCR-20260916 §3.3，ZCode 侧）：
-// PP-OCRv6 tiny 三模型（det / rec / cls）经 converter_lite 转 .ms 随包，由**鸿蒙系统内置**
-// MindSpore Lite 推理——完全离线，图不出设备。纯函数层在 common/OcrPaddleText.ets
-//（零 import、断言直跑）；本件只管 IO 与编排：rawfile 取模 / 解码 / 张量填充 / 出页文本。
-//
-// ★ 阶段 0 设备实测结论（2026-09-16，独立探针工程装机跑通，判据三条全过）——以下四点按
-//   实测落地，与方案
-//   字面有偏差处即本头注释为准：
+// 内置识别引擎推理编排：PP-OCRv6 tiny 三模型（det / rec / cls）经 converter_lite 转 .ms
+// 随包，由**鸿蒙系统内置** MindSpore Lite 推理——完全离线，图不出设备。纯函数层在
+// common/OcrPaddleText.ets（零 import、断言直跑）；本件只管 IO 与编排。
+// ★ 阶段 0 设备实测结论（与方案字面有偏差处以本头注释为准）：
 //   ① **输入张量布局 = NHWC**（不是方案预设的 NCHW）：三模型实测 shape = det [1,960,960,3]、
-//      rec [1,48,320,3]、cls [1,80,160,3]（converter_lite 的 --inputDataFormat 默认 NHWC 且
-//      四维输入生效）。故本件**直接按 HWC 顺序写缓冲**（构建期即按 HWC 落位，运行期零重排
-//      ——方案 §3.2「取运行时最简的一路」的答案）。
-//   ② **cls 必须转换期固定 shape**：不加 --inputShape 转出的 cls.ms 在推理时 CheckInputs
-//      failed（宿主 Windows benchmark 与图一致），补 --inputShape=x:1,3,80,160 后通过。
-//      三模型转换命令见 docs 阶段 0 验证记录；.ms 体积 det 1.69MB / rec 4.24MB / cls 0.94MB。
-//   ③ **rec 长行必须分块**（纯函数层 recChunkSpans 单源，理由见 OcrPaddleText 头注释）。
+//      rec [1,48,320,3]、cls [1,80,160,3]——本件直接按 HWC 顺序写缓冲，运行期零重排。
+//   ② **cls 必须转换期固定 shape**：不加 --inputShape 的 cls.ms 推理时 CheckInputs failed，
+//      补 --inputShape=x:1,3,80,160 后通过（转换命令见 docs 阶段 0 验证记录）。
+//   ③ **rec 长行必须分块**（recChunkSpans 单源，理由见 OcrPaddleText 头注释）。
 //   ④ 类别数 = 字典行数 + 2（blank + 字典 + 末尾空格），dictClassCountOk 唯一放行。
-// ★ 模型**进程级常驻、永不释放**：官方 ArkTS API 未提供 close / dispose / release，且
-//   MindSpore Lite 模型对象无释放接口——**禁**在此补伪释放机制（如置 null 再懒加载，看着像
-//   省内存实则只是让下次多付一次加载耗时；真机内存压力有证据再议）。系统识别引擎那套
-//   init/release 成对契约**不适用**于本件（那是 CoreVisionKit 的接口要求，勿照搬）。
+// ★ 模型**进程级常驻、永不释放**：官方 ArkTS API 无 close / dispose / release，MindSpore
+//   Lite 模型对象无释放接口——**禁**在此补伪释放机制（置 null 再懒加载只是让下次多付一次
+//   加载耗时；真机内存压力有证据再议）；CoreVisionKit 的 init/release 成对契约不适用于
+//   本件（那是接口要求），勿照搬。
 // ★ 加载路径 = 官方示例口径：resourceManager.getRawFileContent() → loadModelFromBuffer
 //   （官方 FAQ 明文：rawfile 的 fd 不是文件系统 fd，**禁**走 loadModelFromFd）。
-// ★ 懒加载 + 单飞：ensurePaddleReady 用模块级 promise 保证并发首调只加载一次（三模型加载
-//   实测约 35ms 量级，但重复加载会白耗内存）。
-// ★ 无模型释放 **不等于** 无失败重试：加载失败（缺文件/加载异常）不复位 promise——一次失败
-//   即引擎本次会话不可用（走回退编排换引擎），防「每次识别都重付加载失败的开销」。
+// ★ 懒加载 + 单飞：模块级 promise 保证并发首调只加载一次。加载失败不复位 promise——一次
+//   失败即本次会话不可用（走回退编排换引擎），防「每次识别都重付加载失败的开销」。
 import { mindSporeLite } from '@kit.MindSporeLiteKit';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -66,8 +57,7 @@ let recModel: mindSporeLite.Model | null = null;
 let clsModel: mindSporeLite.Model | null = null;
 let ocrDict: string[] = [];
 
-// 资源管理器注入（调用点 = EntryAbility.onCreate——common 层拿不到 UIContext，能力上下文是
-// 应用级单一真源；与 persistProp 注册同处，属组合根职责）
+// 资源管理器注入（调用点 = EntryAbility.onCreate——common 层拿不到 UIContext；属组合根职责）
 export function paddleAttachContext(ctx: common.Context): void {
   resourceManagerRef = ctx;
 }
@@ -429,8 +419,8 @@ function chunkToRecInput(crop: OcrRgbaCrop, span: OcrChunkSpan): Float32Array {
   return out;
 }
 
-// cls 输入：裁片等比缩到 160×80（不保比例——官方 PreProcess 就是直接 resize 到 160×80），
-// ImageNet 归一化，HWC
+// cls 输入：裁片直接缩放到 160×80（不保比例——官方 PreProcess 就是直接 resize），ImageNet
+// 归一化，HWC
 function rgbaToImagenetHwc(rgba: Uint8Array, cw: number, ch: number, w: number,
   h: number): Float32Array {
   const out: Float32Array = new Float32Array(w * h * 3);

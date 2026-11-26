@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_label",
       "value": "AI 控制台"
+    },
+    {
+      "name": "location_reason",
+      "value": "在对话中按需获取当前位置，用于回答与位置有关的问题"
+    },
+    {
+      "name": "calendar_reason",
+      "value": "在对话中按需查询与创建日程，只读写本应用创建的日程"
     }
   ]
 }

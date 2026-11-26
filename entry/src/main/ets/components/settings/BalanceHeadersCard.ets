@@ -1,104 +1,78 @@
-// 余额请求头编辑卡（2026-08-31 新增，半模态内嵌区块，自 ProviderBalancePanel 拆出腾红线）：
-// kv 行两输入 + 删除键 + 「添加请求头」键——ProviderHeadersPanel 同构形制（项目已有 kv 行
-// UI），无卡片壳（半模态 List 内容直排风格）。表单值 @Link 双向直写父页
-//（ProviderDetailPage @State balHeaderPairs），随标题栏「保存」统一落库（balance_headers
-// JSON 列，空 k/v 行丢弃——serializeHeaderPairs 既有语义）；发送 = 余额查询时逐条追加、
-// 同名覆盖默认 Authorization/Accept 头（BalanceApi——new-api 系 New-Api-User 校验头场景）。
-// 行键 = 下标（HeaderPair 无稳定 id；删除移位后同键换数据刷新——TextInput 内容随 text
-// 参数重置，可接受；ProviderHeadersPanel 同款取舍）。
+// 余额请求头编辑卡（半模态内嵌区块）：表单值 @Link 双向直写宿主页
+//（BalanceConfigPage @State balHeaderPairs），随标题栏「保存」统一落库（balance_headers JSON 列，
+// 空 k/v 行丢弃——serializeHeaderPairs 既有语义）；发送 = 余额查询时逐条追加、同名覆盖默认
+// Authorization/Accept 头（BalanceApi——new-api 系 New-Api-User 校验头场景）。
+// · 行组挂公共件 KeyValueWell 单源：行键与增删全在井内，本卡只留「标题 + 说明 + 折叠 + 挂井」。
+// · 折叠：标题行行尾折叠箭头 + 整行可点切换 + animateTo 条件渲染（形制照四卡收起展开族，
+//   官方 FAQ faqs-arkui-769）；说明小字恒显示，收起态 = 标题 + 说明两行短卡；行值仍在宿主页
+//   @State，展开重建即回填；收放态持久化键 PREF_BALANCE_HEADERS_CARD_COLLAPSED_KEY（@StorageLink）。
+// · 标题行不带按压蒙层（裸 Row + .onClick，无 Button 包壳）：理由见 ProviderHeadersPanel。
 import { ConfigurationConstant } from '@kit.AbilityKit';
+import { PREF_BALANCE_HEADERS_CARD_COLLAPSED_KEY } from '../../common/AppPreferences';
 import { HeaderPair } from '../../common/providers/AiTypes';
-import { badgeBg, cardDescColor, cardTitleColor } from '../../common/Theme';
-import { CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect } from '../../common/ImmersiveLevel';
+import { cardDescColor, cardTitleColor } from '../../common/Theme';
+import { KeyValueWell } from '../KeyValueWell';
 
-// 头名/头值输入长度上限（与聊天链路自定义头同界）
+// 头名/头值输入长度上限（与聊天链路自定义头同界；井的入参穿透下去）
 const HEADER_KEY_MAX: number = 100;
 const HEADER_VALUE_MAX: number = 500;
 
+// 折叠动画时长（官方 FAQ faqs-arkui-769 示例同值；与四卡收起展开笔 FOLD_ANIM_MS 同族，UIContext 形态）
+const FOLD_ANIM_MS: number = 300;
+
 @Component
 export struct BalanceHeadersCard {
-  // kv 行数组（父页 BalanceConfigPage @State 持有，保存动作在本页标题栏键〔2026-09-11
-  // 余额配置二级页化——原「详情页标题栏键」口径随迁页作废〕；@Link 双向直写）
+  // 键值行数组（宿主页 BalanceConfigPage @State 持有，保存动作在本页标题栏键；@Link 双向直写）
   @Link pairs: HeaderPair[];
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  // 沉浸光感档位（行内添加/删除键双态随档——光感态 resolvedButton*
-  // 原材质光感、实底态 fallbackButton* 官方实底，同 ProviderHeadersPanel 口径）
-  // 内容区回退开关（2026-09-03）：true = 本键官方实底（新规范下内容区材质不生效）；
-  // false = 原材质光感；AppStorage 订阅式切换即刷（坑16 正解，同档位键契约）
-  @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-
-  private addRow(): void {
-    this.pairs.push({ k: '', v: '' });
-  }
-
-  private removeRow(index: number): void {
-    this.pairs.splice(index, 1);
-  }
+  // 卡收放态（缺省 false = 默认展开）。@StorageLink 双向 = 用户点标题行即写即落盘
+  //（persistProp 已注册），退出重进/重启保持
+  @StorageLink(PREF_BALANCE_HEADERS_CARD_COLLAPSED_KEY) collapsed: boolean = false;
 
   build() {
     Column({ space: 12 }) {
-      Text('余额请求头')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(cardTitleColor())
+      // 标题行 + 说明小字：整行可点切换，说明小字恒显示——收起态 = 标题 + 说明两行短卡
+      //（形制同 HTTP 域名两卡：标题紧贴说明成组，再 12 间距进卡体）。箭头 rotate 双态与卡体
+      // 条件渲染同源 this.collapsed；裸 Row 无按压蒙层
+      Column({ space: 2 }) {
+        Row() {
+          Text('余额请求头')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(cardTitleColor())
+            .layoutWeight(1)
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(12)
+            .fontColor([cardDescColor()])
+            .rotate({ angle: this.collapsed ? 0 : 180 })
+        }
         .width('100%')
-      Text('查询时逐条追加，同名覆盖默认认证头，例如中转站要求的 New-Api-User。名称或值为空的行保存时丢弃')
-        .fontSize(13)
-        .fontColor(cardDescColor())
-        .width('100%')
-      if (this.pairs.length === 0) {
-        Text('暂无自定义头。官方端点通常无需填写')
+        .alignItems(VerticalAlign.Center)
+        .onClick((): void => {
+          this.getUIContext().animateTo({ duration: FOLD_ANIM_MS, curve: Curve.EaseInOut },
+            (): void => {
+              this.collapsed = !this.collapsed;
+            });
+        })
+        Text('查询时逐条追加，同名覆盖默认认证头，例如中转站要求的 New-Api-User。名称或值为空的行保存时丢弃')
           .fontSize(13)
           .fontColor(cardDescColor())
           .width('100%')
       }
-      ForEach(this.pairs, (pair: HeaderPair, index: number) => {
-        Row({ space: 8 }) {
-          TextInput({ placeholder: 'Header 名，例如 New-Api-User', text: pair.k })
-            .maxLength(HEADER_KEY_MAX)
-            .layoutWeight(1)
-            .onChange((value: string): void => {
-              pair.k = value;
-            })
-          TextInput({ placeholder: '值', text: pair.v })
-            .maxLength(HEADER_VALUE_MAX)
-            .layoutWeight(1)
-            .onChange((value: string): void => {
-              pair.v = value;
-            })
-          // 删除键（2026-09-04 决明指令「去掉圈选圆框，只保留删除按钮」）：灰实底在真机上
-          // 观感如选中圈——退役光感化四件套，改无底图标键（TEXTUAL，刷新键/更多键/助手卡
-          // 删除键同款官方形制；内容区材质本就不生效——09-03 定论，TEXTUAL 自带官方按压
-          // 变淡反馈，功能不变）
-          Button() {
-            SymbolGlyph($r('sys.symbol.trash'))
-              .fontSize(16)
-              .fontColor([$r('sys.color.font_secondary')])
-          }
-          .buttonStyle(ButtonStyleMode.TEXTUAL)
-          .onClick((): void => {
-            this.removeRow(index);
-          })
-        }
-        .width('100%')
-        .padding(10)
-        .borderRadius(12)
-        .backgroundColor(badgeBg(this.appColorMode))
-        .alignItems(VerticalAlign.Center)
-      }, (pair: HeaderPair, index: number): string => 'bh' + index)
-      // 「添加请求头」= 主操作（2026-09-02 决明要求：官方蓝底——primary=true 强调蓝 +
-      // 恒白字，与 ProviderHeadersPanel / ProviderBodyPanel 同构）——内容区双态：光感态
-      // resolvedButton*（官方蓝灰 + 材质光感）、实底态 fallbackButton*（官方强调蓝实底 + 恒白）
-      Button('添加请求头')
-        .fontColor(fallbackButtonFont(this.contentFallback, true))
-        .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, true))
-        .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, true))
-        .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
-        .width('100%')
-        .onClick((): void => {
-          this.addRow();
+      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      // 卡体（键值井）：收起态整体隐藏。折叠纯 UI 态，行值仍在宿主页 @State，展开重建即回填
+      if (!this.collapsed) {
+        KeyValueWell({
+          rows: $pairs,
+          keyPlaceholder: 'Header 名，例如 New-Api-User',
+          valuePlaceholder: '值',
+          addLabel: '＋ 添加请求头',
+          keyMaxLength: HEADER_KEY_MAX,
+          valueMaxLength: HEADER_VALUE_MAX,
+          emptyHint: '暂无自定义头。官方端点通常无需填写'
         })
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

@@ -25,9 +25,23 @@ export function modelMatchesFilter(name: string, modelId: string, providerName: 
     providerName.toLowerCase().includes(keyword);
 }
 
+// ── 筛选 chip 档位（2026-10-24 chip 筛选笔：分段胶囊换官方 Chip 横滑行，单选语义）──
+// 筛选键三态：'' = 全部（默认档）；FAV_FILTER_KEY = 收藏档；其余值 = 服务商 id（厂商档，
+// chip 与列表分组同源同名——模型清单无独立厂商字段，拍板按服务商名筛）。
+export const FAV_FILTER_KEY = '__fav__';
+
+// 分组在筛选档下是否保留（组级判定）：全部/收藏档恒留组（收藏是行级过滤，由调用侧对组内
+// 行承担）；厂商档只留目标组。行级收藏过滤与关键词过滤仍在 ModelPickerSheet.visibleSections
+export function sectionUnderFilter(providerId: string, filterKey: string): boolean {
+  return filterKey === '' || filterKey === FAV_FILTER_KEY || filterKey === providerId;
+}
+
 // 空态提示文案选取（'' = 不显提示）。优先级自上而下，逐条短路：
 // ①无任何可用模型（库内无启用服务商模型）②有可见行（正常态）③关键词无命中
 // ④收藏段内无收藏（引导去收藏）⑤其余不显
+// ★ 厂商档（filterKey = 服务商 id）无专属档位（2026-10-24 chip 筛选笔推演）：厂商 chip 由
+// 已加载分组派生，选中档必含模型——无关键词时不可能空；叠关键词无命中则走 ③ 兜住。favOnly
+// 入参语义随分段退役改为「filterKey === FAV_FILTER_KEY」（调用侧判定，本函数签名不变）
 export function pickEmptyHint(sourceCount: number, visibleCount: number, keyword: string,
   favOnly: boolean): string {
   if (sourceCount === 0) {

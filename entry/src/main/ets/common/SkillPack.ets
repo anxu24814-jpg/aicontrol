@@ -1,59 +1,49 @@
-// 技能包（zip 目录）导入导出域（2026-09-13 技能层笔 2，方案 §3.3）：
-// · 导出 = 临时目录 <dirName>/SKILL.md + <dirName>/files/* → zlib.compressFile 打包 zip 落
-//   cacheDir → 调用方 systemShare 分享（自带「另存为文件」）；临时目录用完即删，zip 由下次
-//   导出时按前缀清（writeShareFile 同款「先写后清」）。★ 附件按名落 `files/<件名>`，件名可含
-//   路径段（规范包导入的件名是相对路径形态）——写入前须建父目录，且须容「父目录已存在」的
-//   EEXIST（2026-09-14 格式兼容笔 + 同日全面自检轮修，理由见 mkdirParents 注释）。
-// · 单文件导出 SKILL.md（2026-09-13 入口调整笔自 SkillEditPage 迁入——入口改挂技能库行卡
-//   右侧菜单，页面侧只负责调分享面板）：serializeSkillMd → filesDir 暂存 → 返回路径，历史
-//   同类件同样按前缀清。两导出同域的理由 = 都是「技能交换文件」的产出（同份序列化件，一个
-//   单发一个带附件打包），且共用暂存/清理姿势。
-// · 导入（两形态，2026-09-14 格式兼容笔；★ 2026-09-22 多技能包笔扩为「一件或多件」）：zip
-//   技能包 → 拷入沙箱临时件 → 解包到 cacheDir 临时目录 → **技能根扫描**（包根有 SKILL.md 即
-//   包根；否则扫两级子目录里含 SKILL.md 的目录，判定单源 = SkillText.pickSkillRoots）→
-//   逐根 frontmatter 解析（容错三态，方案 §3.3）→ **载荷过技能本体校验**（越界值拒收，
-//   2026-09-13 全面自检轮补——见 parseOneSkillRoot 注释）→ 附件**递归全树采集**（从技能根起
-//   任意深度，件名取相对路径形态；拿不进来的一律计中文警告）→ 结果由调用方**先给用户审阅再
-//   入库**（技能正文是指令注入面，导入须用户过目）→ 无论成败 finally 清临时目录与临时 zip。
-//   多件包语义（≥2 个技能根）：逐件解析，坏件计入 skipped 如实呈报、好件照常导入，全坏才拒
-//   整包；单件包走原单件链——任何失败即拒整包、文案逐字不变（既有断言的契约面零回归）。
-//   单文件 SKILL.md 走 readSkillMdFile 出**同一个**结果形态（恒 1 件、无附件、无跳过），
-//   复用同一条审阅/落库链。
-// · ★ 2026-09-16 上传编码检测笔（评审 §2.6 收口）：解码链一律 UTF-8 强解且不报错（非 UTF-8
-//   字节被替换成 U+FFFD）——GBK 中文文本或二进制伪装件于是「解码成功」却整体乱码，静默进
-//   编辑页/落库。三个解码点各接检出（判据纯函数 SkillText.isGarbledText，出现替换字符即拒）：
-//   上传与单文件导入（readPickedSkillFile）拒收；zip 内主文件读后拒整包；zip 附件逐件警告跳过。
-//   评审只点了上传链，zip 链同族缺口一并收口（残限说明见该函数注释）。
-// ★ 「不建常驻文件存储」（方案 §3.3 原文）：解包产物只在 cacheDir 临时目录存活一次调用，
-//   出栈即删；被打断（进程被杀）残留的目录由系统 cacheDir 回收，本域不做启动期清扫
-//   （与 ExportImport 的 sweepExportTemp 不同——那边是常驻 zip 与导出目录，本域连常驻件
-//   都没有；这是笔 2 有意取的最小形态，不是漏做）。
+// 技能包（zip 目录）导入导出域：
+// · 导出 = 临时目录 <dirName>/SKILL.md + files/* → zlib 打 zip 落 cacheDir → 调用方
+//   systemShare 分享（自带「另存为文件」）；临时目录用完即删，zip 由下次导出按前缀清（先写
+//   后清）。★ 附件按名落 `files/<件名>`，件名可含路径段（规范包导入的件名是相对路径形态）
+//   ——写入前须建父目录且容「父目录已存在」的 EEXIST（见 mkdirParents 注释）。
+// · 单文件导出 SKILL.md（serializeSkillMd → filesDir 暂存 → 返回路径）；与 zip 导出同域 =
+//   都是「技能交换文件」的产出，共用暂存/清理姿势。
+// · 导入（★ 一件或多件）：zip → 沙箱临时件 → 解包 → **技能根扫描**（判定单源 =
+//   SkillText.pickSkillRoots）→ 逐根 frontmatter 解析 → **载荷过技能本体校验**（越界值拒收，
+//   见 parseOneSkillRoot 注释）→ 附件**递归全树采集**（拿不进来的一律计中文警告）→ 调用方
+//   **先给用户审阅再入库**（技能正文是指令注入面）→ finally 清临时目录与临时 zip。
+//   多件包（≥2 技能根，合集包与 GitHub 技能仓库 zip 都是这个形态）：逐件解析，坏件计
+//   skipped 如实呈报、好件照常导入，全坏才拒整包；单件包走原单件链——任何失败即拒整包、
+//   文案逐字不变（既有断言契约面零回归）。单文件 SKILL.md 走 readSkillMdFile 出**同一个**
+//   结果形态，复用同一条审阅/落库链。
+// · ★ 解码链一律 UTF-8 强解不报错（非 UTF-8 字节替换成 U+FFFD），故三个解码点各接
+//   isGarbledText 检出（出现替换字符即拒）：上传与单文件导入拒收；zip 主文件拒整包；zip
+//   附件逐件警告跳过。
+// ★ 「不建常驻文件存储」：解包产物只在 cacheDir 临时目录存活一次调用，出栈即删；被打断
+//   （进程被杀）残留的目录由系统 cacheDir 回收，本域不做启动期清扫（与 ExportImport 的
+//   常驻 zip 不同——有意取的最小形态，不是漏做）。
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
-import zlib from '@ohos.zlib';
+import { zlib } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { classifySkillPackEntry, foldLineBreaks, hasLineBreak, isGarbledText, parseSkillMd,
-  pickSkillRoots, serializeSkillMd,
-  skillFileExt, skillPackDirName, SKILL_CONTENT_MAX, SKILL_FILE_CONTENT_MAX, SKILL_FILE_EXTS,
-  SKILL_FILE_MAX_COUNT, SKILL_FILE_NAME_MAX, SkillArgsValidation, SkillMdParse,
+import { classifySkillPackEntry, foldLineBreaks, hasLineBreak, isGarbledText,
+  pickSkillRoots,
+  skillFileExt, SKILL_CONTENT_MAX, SKILL_FILE_CONTENT_MAX, SKILL_FILE_EXTS,
+  SKILL_FILE_MAX_COUNT, SKILL_FILE_NAME_MAX, SkillArgsValidation,
   validateSkillArgs } from './SkillText';
+// SKILL.md 解析/序列化族（自 SkillText 外迁 SkillMdIo.ets，单向依赖）
+import { parseSkillMd, serializeSkillMd, skillPackDirName, SkillMdParse } from './SkillMdIo';
 import { SkillFileRow, SkillRow } from './store/SkillDb';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'SkillPack';
 
-// 导入 zip 大小上限（技能包是纯文本集合，8MB 已远超「10 件 × 8000 字」的量级；超此值
-// 基本可判定不是技能包，早拒省得白解包）
+// 导入 zip 大小上限（技能包是纯文本集合，超此值基本不是技能包，早拒省得白解包）
 const MAX_PACK_ZIP_BYTES: number = 8 * 1024 * 1024;
-// 上传/导入单文件大小上限（读进内存前的粗拦——正文上限 8000 字对应 UTF-8 至多几十 KB，
-// 1MB 的文件读出来必然超限，先拒省内存）
+// 上传/导入单文件大小上限（读进内存前的粗拦——正文上限对应 UTF-8 至多几十 KB，1MB 必超限）
 const MAX_PICKED_BYTES: number = 1024 * 1024;
-// ★ 2026-09-13 全面自检轮：**读取前的字节预检线**（zip 8MB 上限拦不住解压后的大件——一个
-// 1MB 的 zip 能解出几百 MB 的纯文本，直接 readText 会按 size 申请等长 ArrayBuffer = 主线程
-// 大分配）。正文/单件的字符上限 8000 对应 UTF-8 至多约 24KB（BMP 中文 3 字节/字），留 4 倍
-// 余量后仍超的文件不可能通过字符校验——先按字节早拒，一个超限大件不读进内存
+// ★ **读取前的字节预检线**（zip 上限拦不住解压后的大件——小 zip 能解出几百 MB 文本，直接
+// readText 会按 size 申请等长 ArrayBuffer = 主线程大分配）。字符上限 8000 对应 UTF-8 至多
+// 约 24KB（BMP 中文 3 字节/字），留 4 倍余量后仍超的文件不可能通过字符校验——先按字节早拒
 const MAX_PACK_MD_BYTES: number = SKILL_CONTENT_MAX * 4 + 4096;
 const MAX_PACK_FILE_BYTES: number = SKILL_FILE_CONTENT_MAX * 4;
 
@@ -61,9 +51,9 @@ const MAX_PACK_FILE_BYTES: number = SKILL_FILE_CONTENT_MAX * 4;
 export const SKILL_PACK_MD_NAME: string = 'SKILL.md';
 export const SKILL_PACK_FILES_DIR: string = 'files';
 
-// 导入结果（ok = false 时 error 为中文原因；payloads = 本包可导入件——单技能包与单文件链恒 1 件，
-// 多技能包逐件；skipped = 包内未导入件与原因，仅多技能包有值，单技能包的任何失败仍走 error 的
-// 整包语义（文案与行为逐字不变）；附件链的容错跳过说明逐件挂各自 payload.warnings，不静默丢件）
+// 导入结果（ok = false 时 error 为中文原因；payloads = 可导入件——单技能包与单文件链恒 1 件，
+// 多技能包逐件；skipped = 未导入件与原因（仅多技能包有值，单技能包失败仍走 error 整包语义，
+// 文案与行为逐字不变）；附件的容错跳过说明逐件挂 payload.warnings，不静默丢件）
 export interface SkillPackPayload {
   name: string;
   description: string;
@@ -96,16 +86,13 @@ function rejectItem(error: string): SkillPackItemParse {
   return { ok: false, payload: emptyPayload(), error: error };
 }
 
-// 导出：整目录打包（zlib compressFile 条目名形态未文档化——ExportImport 同款整目录打包，
-// 导入侧技能根扫描对「多一层目录」右对齐容错（现为两级下钻，判定见 SkillText.pickSkillRoots）。
-// 返回 zip 绝对路径，调用方
-// systemShare 用；失败上抛（中文由调用方 toast）
+// 导出：整目录打包（ExportImport 同款；导入侧技能根扫描对「多一层目录」容错，判定见
+// pickSkillRoots）。返回 zip 绝对路径供调用方 systemShare 用；失败上抛（中文由调用方 toast）
 export async function exportSkillPack(ctx: common.Context, skill: SkillRow,
   files: SkillFileRow[]): Promise<string> {
   const stamp: string = packStamp();
-  // 目录名走 SkillText.skillPackDirName 单源（★ 复核轮收口：本域原自持一份同名副本，理由
-  // 写的是「免 import 循环」，但方向本就正确——SkillText 零 import、本域已 import 它，
-  // 不存在环；副本的真实代价 = 清洗规则两处漂移，且安全切点修复够不到文件名）
+  // 目录名走 skillPackDirName 单源（★ 原自持副本的理由「免 import 循环」不成立——本域已
+  // import SkillText 无环；副本代价 = 清洗规则两处漂移）
   const dirName: string = skillPackDirName(skill.name);
   const staging: string = ctx.cacheDir + '/skillpack_' + stamp;
   const root: string = staging + '/' + dirName;
@@ -132,9 +119,8 @@ export async function exportSkillPack(ctx: common.Context, skill: SkillRow,
 
 // 单文件导出：serializeSkillMd（frontmatter + 正文）→ filesDir 沙箱暂存 → 返回 md 绝对路径，
 // 调用方 systemShare 用；失败上抛（中文由调用方 toast）。文件名 = 「aicontrol-skill-<目录名>-
-// <时间戳>.md」（目录名清洗走 SkillText.skillPackDirName 单源；时间戳为秒级——同秒导出同名，靠写入
-// TRUNC 覆盖，同源内容无害，跨秒唯一）；写前不清、写后清历史同类件——先写后清的理由与
-// ProviderShare.writeShareFile 一致（先清后写在写入失败时连旧文件一起损失）
+// <秒级时间戳>.md」（同秒导出同名靠 TRUNC 覆盖，同源内容无害，跨秒唯一）；写前不清、写后清
+// 历史同类件——先写后清防写入失败连旧文件一起损失（ProviderShare.writeShareFile 同款）
 export function exportSkillMd(ctx: common.Context, skill: SkillRow): string {
   const fileName: string = 'aicontrol-skill-' + skillPackDirName(skill.name) + '-' + packStamp() + '.md';
   const path: string = ctx.filesDir + '/' + fileName;
@@ -145,11 +131,9 @@ export function exportSkillMd(ctx: common.Context, skill: SkillRow): string {
 }
 
 // 导入：zipPath（选择器 URI）→ 沙箱临时 zip → 解包 → 技能根扫描 → 逐件解析 → 返回载荷
-// （不入库；入库由调用方在用户过目后执行）。失败一律中文 error，不抛（调用方 toast）
-// ★ 2026-09-22 多技能包笔（决明「竞品批量导入我们也要」）：一个压缩包里装多件技能（每件一个
-// 目录、各带 SKILL.md——合集包与 GitHub 技能仓库的 zip 下载都是这个形态）时逐件解析，好件进
-// payloads、坏件进 skipped 如实呈报（不静默丢件）；单技能包（含包根主文件形态）走原单件链——
-// 解析失败即拒整包、文案逐字不变，既有断言的契约面零回归
+//（不入库，由调用方在用户过目后执行）。失败一律中文 error 不抛（调用方 toast）。
+// 多技能包形态（每件一个目录各带 SKILL.md）逐件解析，好件进 payloads、坏件进 skipped 如实
+// 呈报；单技能包（含包根主文件形态）走原单件链——失败即拒整包、文案逐字不变（契约面零回归）
 export async function readSkillPack(ctx: common.Context,
   zipUri: string): Promise<SkillPackReadResult> {
   const stamp: string = packStamp();
@@ -192,13 +176,11 @@ export async function readSkillPack(ctx: common.Context,
   }
 }
 
-// 读取选择器拿到的文本文件（上传附件用——provider.Share 的 readShareFileText 同款姿势：
-// 直接按 URI open，stat 粗拦大小，读完成对 close）。
-// ★ 2026-09-14 格式兼容笔：fileWord = 超限句里的对象词，按入口语境给——同一函数被两条链共用
-// （附件上传 / 单文件 SKILL.md 导入），而「技能附件只支持纯文本」在单文件链上是误导（导入的
-// 是技能本体，不是附件）。默认值保原句逐字不变（附件链零回归）
-// ★ 2026-09-16 编码检测笔：解码后先过 isGarbledText——非 UTF-8 件（GBK 中文/二进制伪装）在
-// 读取处即抛中文原因拒收，不进编辑页过目链
+// 读取选择器拿到的文本文件（按 URI open，stat 粗拦大小，读完成对 close）。
+// ★ fileWord = 超限句里的对象词，按入口语境给——同一函数被两条链共用（附件上传 / 单文件
+// SKILL.md 导入），「技能附件只支持纯文本」在单文件链上是误导；默认值保原句逐字不变（附件链
+// 零回归）。★ 解码后先过 isGarbledText——非 UTF-8 件（GBK 中文/二进制伪装）在读取处即
+// 抛中文原因拒收，不进编辑页过目链
 export function readPickedSkillFile(uri: string, fileWord: string = '技能附件'): string {
   const file: fs.File = fs.openSync(uri, fs.OpenMode.READ_ONLY);
   try {
@@ -211,7 +193,7 @@ export function readPickedSkillFile(uri: string, fileWord: string = '技能附�
     const readLen: number = fs.readSync(file.fd, ab);
     let text: string = util.TextDecoder.create('utf-8')
       .decodeToString(new Uint8Array(ab).subarray(0, readLen));
-    // 非 UTF-8 件在解码处即拒（强解不报错，乱码靠人眼兜底兜不住——2026-09-16 编码检测笔）
+    // 非 UTF-8 件在解码处即拒（强解不报错，乱码靠人眼兜不住）
     if (isGarbledText(text)) {
       throw new Error('文件不是 UTF-8 编码文本，请另存为 UTF-8 后重试');
     }
@@ -224,11 +206,11 @@ export function readPickedSkillFile(uri: string, fileWord: string = '技能附�
   }
 }
 
-// 单文件导入（P2，2026-09-14 格式兼容笔）：选择器拿到的单个 .md（自家 exportSkillMd 产物或
-// 别家按规范写的 SKILL.md）→ 沙箱读取（字节预检 + 编码检出 + BOM 剥离）→ frontmatter 解析 → **技能本体
-// 校验**（与 zip 链同一份 validateSkillArgs，越界值拒收的理由见 parseOneSkillRoot 注释）→ 出**同一个**
-// SkillPackReadResult（payloads 恒 1 件、无附件、skipped 恒空）——调用方拿到的形态与 zip 链完全一致，
-// 重名判定 / 审阅弹窗 / 落库链全复用，页面侧零分叉。错误一律中文、不抛（调用方 toast）
+// 单文件导入：单个 .md（自家导出产物或别家按规范写的 SKILL.md）→ 沙箱读取（字节预检 +
+// 编码检出 + BOM 剥离）→ frontmatter 解析 → **技能本体校验**（与 zip 链同一份
+// validateSkillArgs，越界值拒收理由见 parseOneSkillRoot 注释）→ 出**同一个**
+// SkillPackReadResult（payloads 恒 1 件、无附件、skipped 恒空）——重名判定 / 审阅弹窗 /
+// 落库链与 zip 链全复用，页面侧零分叉。错误一律中文不抛（调用方 toast）
 export function readSkillMdFile(uri: string): SkillPackReadResult {
   let text: string = '';
   try {
@@ -245,8 +227,8 @@ export function readSkillMdFile(uri: string): SkillPackReadResult {
   if (!parsed.ok) {
     return rejectPack('SKILL.md 解析失败：' + parsed.error);
   }
-  const check: SkillArgsValidation = validateSkillArgs(parsed.name, parsed.description, '',
-    parsed.content);
+  const check: SkillArgsValidation =
+    validateSkillArgs(parsed.name, parsed.description, parsed.content);
   if (!check.ok) {
     return rejectPack('不能导入：' + check.error);
   }
@@ -284,8 +266,8 @@ interface SkillPackItemParse {
   error: string;
 }
 
-// 单个技能根解析（原 readSkillPack 的解析段原样搬入，错误文案逐字不变——它是既有断言的契约面）：
-// 主文件字节预检 → 读取 → 乱码检出 → frontmatter 解析 → 技能本体校验 → 附件全树采集
+// 单个技能根解析（错误文案逐字不变——它是既有断言的契约面）：字节预检 → 读取 → 乱码检出
+// → frontmatter 解析 → 技能本体校验 → 附件全树采集
 function parseOneSkillRoot(root: string): SkillPackItemParse {
   const mdPath: string = root + '/' + SKILL_PACK_MD_NAME;
   if (!fileExists(mdPath)) {
@@ -297,8 +279,7 @@ function parseOneSkillRoot(root: string): SkillPackItemParse {
   let parsed: SkillMdParse;
   try {
     const mdText: string = readText(mdPath);
-    // zip 链同族收口（2026-09-16 编码检测笔）：主文件乱码即拒该件，与上传链同一判据
-    //（多件包里只坏这一件——其余照常导入，本件原因进 skipped）
+    // 主文件乱码即拒该件，与上传链同一判据（多件包里只坏这一件——其余照常导入，原因进 skipped）
     if (isGarbledText(mdText)) {
       return rejectItem('压缩包里的 SKILL.md 不是 UTF-8 编码文本，请另存为 UTF-8 后重新打包');
     }
@@ -309,14 +290,12 @@ function parseOneSkillRoot(root: string): SkillPackItemParse {
   if (!parsed.ok) {
     return rejectItem('SKILL.md 解析失败：' + parsed.error);
   }
-  // ★ 2026-09-13 全面自检轮：入库前过一遍**技能本体校验**（编辑页保存链走的那一份
-  // validateSkillArgs）——原实现把解析结果直接落库，而导入是本应用唯一收外部手写文件的
-  // 入口（「标准格式红利」正是立项目标之一）。越界值的两个真实后果：超 50 字的名称让系统
-  // 提示词清单预算失效（首条恒放行 → 整段超长清单常驻每次请求）、超 8000 字的正文会在
-  // use_skill 回执处被 clipToolResult 切掉尾部（说明书收尾步骤 = 执行依据，正是 511 笔修过
-  // 的那个失败形态）。此处拒 + 说清原因，不静默截断（P0-1）
-  const check: SkillArgsValidation = validateSkillArgs(parsed.name, parsed.description, '',
-    parsed.content);
+  // ★ 入库前过一遍**技能本体校验**（编辑页保存链同一份 validateSkillArgs）——导入是本应用
+  // 唯一收外部手写文件的入口。越界值的真实后果：超 50 字的名称让系统提示词清单预算失效
+  //（首条恒放行 → 整段超长清单常驻每次请求）、超 8000 字的正文会在 use_skill 回执处被
+  // clipToolResult 切尾（说明书收尾步骤 = 执行依据）。此处拒 + 说清原因，不静默截断（P0-1）
+  const check: SkillArgsValidation =
+    validateSkillArgs(parsed.name, parsed.description, parsed.content);
   if (!check.ok) {
     return rejectItem('不能导入：' + check.error);
   }
@@ -327,10 +306,9 @@ function parseOneSkillRoot(root: string): SkillPackItemParse {
     content: check.content, files: files, warnings: warnings }, error: '' };
 }
 
-// 包内技能根扫描（2026-09-22 多技能包笔）：包根有 SKILL.md 时只报这一条（根主文件已足够定性，
-// 不再下钻——规则①的短路判定仍在纯函数里，这里只是省掉整棵树的扫描）；否则扫两级子目录收集
-// 全部 SKILL.md 相对路径，交 SkillText.pickSkillRoots 单源判定（规则与理由见该函数注释）。
-// 扫描深度与纯函数同界：深于两层的包装不在支持面
+// 包内技能根扫描：包根有 SKILL.md 时只报这一条（根主文件已足够定性，不再下钻——省掉整棵
+// 树扫描）；否则扫两级子目录收集全部 SKILL.md 相对路径，交 SkillText.pickSkillRoots 单源
+// 判定（规则与理由见该函数注释）。扫描深度与纯函数同界：深于两层的包装不在支持面
 function collectSkillRoots(dir: string): string[] {
   const mdPaths: string[] = [];
   if (fileExists(dir + '/' + SKILL_PACK_MD_NAME)) {
@@ -377,23 +355,19 @@ function listSubDirs(dir: string): string[] {
 }
 
 // 多件链的件名标签 = 技能根相对包根的路径（用户在报告里能对上包内目录）；根形态（rel 为空）
-// 在单件链已短路，此处兜底给「包根」。换行类字符折叠——警告行自身不能被拆行（附件链先例）
+// 兜底给「包根」。换行类字符折叠——警告行自身不能被拆行
 function rootLabel(dir: string, root: string): string {
   const prefix: string = dir + '/';
   const rel: string = root.startsWith(prefix) ? root.substring(prefix.length) : '';
   return foldLineBreaks(rel === '' ? '包根' : rel);
 }
 
-// 附件收集（**递归全树**，2026-09-14 格式兼容笔）：
-// 原实现只扫 root/files/ 一层，且有两处静默路径——没有 files 目录时直接 return、files 内的
-// 嵌套目录裸 continue；外部规范包（references/ scripts/ assets/）的资源因此被静默丢弃，与
-// 「不静默丢件」的立意相抵。现口径：从包根起递归任意深度，件名取**相对路径形态**（归一化
-// 规则单源在 SkillText.classifySkillPackEntry，本文件不自持副本），拿不进来的一律计中文警告；
-// 以 . 开头的项（.git 等版本控制元数据）跳过并按聚合计数呈报（防元数据挤占 10 件上限）。
-// 遍历序 = 同层按名字升序后再递归下钻，保证「哪 10 件进来」可复现、可断言。
-// ★ 2026-09-13 全面自检轮：**件数在收集处封顶**并计警告——原实现只由库页落库循环按
-// SKILL_FILE_MAX_COUNT 截断，第 11 件起既不入库也不出现在任何提示里（静默丢件）。封顶移到
-// 收集处 = 超限件在**审阅弹窗**里就如实列出，用户点「导入」前即知道包里有什么没进来
+// 附件收集（**递归全树**）：从包根起递归任意深度（原实现只扫 files/ 一层且嵌套目录静默丢弃，
+// 与「不静默丢件」立意相抵），件名取**相对路径形态**（归一化规则单源 =
+// SkillText.classifySkillPackEntry，本文件不自持副本），拿不进来的一律计中文警告；以 . 开头
+// 的项（.git 等元数据）跳过并聚合计数呈报（防挤占 10 件上限）；遍历序 = 同层名字升序后再
+// 递归下钻，「哪 10 件进来」可复现、可断言。★ **件数在收集处封顶**并计警告——超限件在
+// **审阅弹窗**里就如实列出，用户点「导入」前即知道包里有什么没进来（不静默丢件）
 function collectPackFiles(root: string, files: SkillPackFilePayload[],
   warnings: string[]): void {
   const counters: PackCollectCounters = { dropped: 0, hidden: 0 };
@@ -453,12 +427,10 @@ function scanPackDir(absDir: string, relDir: string, files: SkillPackFilePayload
 
 // 单件处理（判据与顺序照原实现，防文案与断言错位）：件名归一化 → 换行类字符 → 件名长度 →
 // 扩展名白名单 → 字节预检 → 读取 → 空内容 → 字符数 → 包内重名。**每条跳过分支都产出中文
-// 警告**（P0-1：包里的东西要么进库、要么在审阅弹窗里被列出）
-// ★ 2026-09-15 同族收口加换行判（件名含换行类字符 → 跳过）：件名源头是 zip 条目名（任意
-// 字节串），解包后经暂存目录遍历进入本函数——**解包是否逐字保留件名未实测**，本判为防御性
-// 收口（新来源一律先拒）。换行件名能把附件清单段（逐行、`- 件名`）拆行、让逐字定位键失配；
-// 判据与族集同纯域（hasLineBreak / LINE_BREAK_CHARS）。警告里的件名走 foldLineBreaks——
-// 警告行自身不能再被换行拆开（审阅弹窗按行/分号排版）
+// 警告**（P0-1：要么进库、要么在审阅弹窗里被列出）。★ 换行判为防御性收口——件名源头是
+// zip 条目名（任意字节串，解包是否逐字保留未实测，新来源一律先拒）；换行件名能把附件清单段
+// 拆行、让逐字定位键失配（判据与族集同纯域 hasLineBreak）。警告里的件名走 foldLineBreaks
+//——警告行自身不能再被换行拆开（审阅弹窗按行排版）
 function collectOnePackFile(absPath: string, relPath: string, files: SkillPackFilePayload[],
   warnings: string[], counters: PackCollectCounters): void {
   if (files.length >= SKILL_FILE_MAX_COUNT) {
@@ -511,14 +483,10 @@ function collectOnePackFile(absPath: string, relPath: string, files: SkillPackFi
 }
 
 // 写附件前建父目录：件名可含路径段（规范包导入后件名是相对路径形态，如 references/api.md），
-// 只建了 files/ 一级的旧实现对这类件名会抛 ENOENT——导入了却导不出去（2026-09-14 格式兼容笔）。
-// ★★ 2026-09-14 全面自检轮修：**目标目录已存在时 `mkdirSync(path, true)` 仍抛 EEXIST
-//   (13900015)**，recursion 不豁免（真机实测口径：dshinhm `KimiAttachmentCtrl`「目录已存在时
-//   mkdirSync 亦抛 EEXIST——真机实测三入口全短路」+ 本仓 `AttachmentUtil.ensureAttachDir`
-//   同款容错）。裸调用的后果不是「建目录失败」而是**整条导出链失败**：平铺件名的父目录恒是
-//   本函数上方刚建过的 `files/`、同目录第二个路径件名的父目录同样已存在——带附件的技能一律
-//   导不出去（探针 = scripts/.tmp/skill-import-probe/probe-export.mjs，真机语义桩实测）。
-//   故 EEXIST = 目标状态静默、其他错误上抛（姿势照 ensureAttachDir 先例）
+// 只建 files/ 一级对这类件名会抛 ENOENT——导入了却导不出去。★★ **目标目录已存在时
+// `mkdirSync(path, true)` 仍抛 EEXIST (13900015)，recursion 不豁免**（真机实测口径，
+// AttachmentUtil.ensureAttachDir 同款容错）。裸调用的后果不是「建目录失败」而是**整条导出链
+// 失败**——带附件的技能一律导不出去。故 EEXIST = 目标状态静默、其他错误上抛（照先例姿势）
 function mkdirParents(path: string): void {
   const slash: number = path.lastIndexOf('/');
   if (slash <= 0) {
@@ -605,8 +573,8 @@ function cleanOldPacks(ctx: common.Context, keepPath: string): void {
   }
 }
 
-// 历史导出 md 清理（数据有界：前缀 + .md，保留本次；清理失败只记不阻断导出——cleanOldPacks
-// 同款。包 zip 名为 aicontrol-skillpack- 前缀，与 aicontrol-skill- 不互噬）
+// 历史导出 md 清理（数据有界，cleanOldPacks 同款；前缀 aicontrol-skill- 与包 zip 的
+// aicontrol-skillpack- 不互噬）
 function cleanOldMdExports(ctx: common.Context, keepPath: string): void {
   try {
     for (const name of fs.listFileSync(ctx.filesDir)) {

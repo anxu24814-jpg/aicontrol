@@ -13,7 +13,10 @@
 // 配 .transition(opacity 0.99)——官方约束「参与转场的组件须设 transition 保证离场不析构」；
 // id 判据三处同源 sharedGeomId（广播键，见 AttachmentUtil 常量注释）。
 // 红线：Image 沙箱图必经 fileUri.getUriFromPath 转 URI（官方 FAQ faqs-arkui-154）+
-// sourceSize 按屏幕尺寸给解码目标（禁原图整幅入内存）——两红线沿第三轮查看器不改。
+// 解码下采样（禁原图整幅入内存）——★ 2026-10-09 图片原比例笔：下采样由 `.autoResize(true)`
+// 承接（按显示区尺寸、**保原比例**）；原「sourceSize 按屏幕尺寸给解码目标」在图片原比例 ≠
+// 屏比例时整幅被拉伸（Image Kit desiredSize 官方注释「若与原尺寸比例不一致，则会拉伸/缩放」；
+// 工程 ImageEditUtil 头注释同源坑记录），随本笔退役。
 // ★ 2026-09-15 锚点与边界修复笔（决明报障「双指放大不以双指锚点为中心、统一以左上角为
 // 锚点」）：①捏合中点改取 pinchCenterX/Y 原值——官方 d.ts 实锤「in vp, relative to the
 // original area of the current component」，原实现取 fingerList.globalDisplayX/Y 再 px2vp，
@@ -43,9 +46,6 @@ export struct AttachmentImagePage {
   @Prop zoomScale: number = 1;
   @Prop zoomX: number = 0;
   @Prop zoomY: number = 0;
-  // 图片解码目标（壳层 aboutToAppear 按屏算一次下发，普通成员）
-  decodeW: number = 360;
-  decodeH: number = 760;
   // 图片区顶部留白（壳层下发 = 状态栏 + MINI 标题栏 + 蒙层下延，与文本模式同源）：
   // 1x 时图片整体落在标题栏下方、不从渐变模糊蒙层下经过（决明「图片同文字默认不进入标题栏
   // 蒙层」）；放大后图片越出本区仍可渲染（见 build 内注释），上缘可进入蒙层——「避免展示
@@ -100,7 +100,13 @@ export struct AttachmentImagePage {
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Contain)
-        .sourceSize({ width: this.decodeW, height: this.decodeH })
+        // ★ 2026-10-09 图片原比例笔（决明「图片查看会默认拉长，能改为原比例吗」）：原
+        // `.sourceSize({ width: decodeW, height: decodeH })`（= 屏尺寸框）在图片原比例 ≠ 屏
+        // 比例时把整幅拉伸（Image Kit desiredSize 官方注释实锤「比例不一致则会拉伸/缩放」）。
+        // 改官方 `autoResize(true)` = 按显示区尺寸下采样**且保原比例**（官方 d.ts 例：800×1200
+        // 原图在 200×200 显示区解码为 200×300），「禁原图整幅入内存」红线由显示区上界承接
+        // （autoResize 默认 false，须显式开；本件显示区 = 查看器整页）
+        .autoResize(true)
         // 实际绘制尺寸实测（壳层平移边界基准——官方《图片预览器》边界公式输入 = 图片显示
         // 尺寸而非组件尺寸）。loadingStatus===1（解码完成）该组字段才有效（官方 d.ts），
         // 单位 px 转 vp；未变则重复上报无副作用。形参用官方具名类型 ImageLoadResult

@@ -1,24 +1,22 @@
-// 断点判定单一来源（2026-09-04 平板分栏适配任务 1 新件；纯函数 + AppStorage 键常量，
-// 无 UI 无状态——规格自 docs/任务书-平板分栏适配-20260903.md；Cube 参考工程断点常量
-// 同值借鉴，窗格宽度/拖拽钳位函数族不搬——Split 模式宽度由 navBarWidth/navBarWidthRange
-// 官方管理）。
-// ★ 官方查证结论（2026-09-04 任务 0 联网官方文档 + 本地 SDK d.ts 实锤，动工前置）：
+// 断点判定单一来源（纯函数 + AppStorage 键常量，无 UI 无状态——规格自
+// docs/任务书-平板分栏适配-20260903.md；Cube 参考工程断点常量同值借鉴，窗格宽度/拖拽
+// 钳位函数族不搬——Split 模式宽度由 navBarWidth/navBarWidthRange 官方管理）。
+// ★ 官方查证结论（联网官方文档 + 本地 SDK d.ts 实锤，动工前置）：
 // · 模式口径：NavigationMode 为显式设置（Stack 单栏 / Split 分栏两态；Auto 为官方自适应
-//   模式——按任务书拍板不采用，MEDIUM 档维持 Stack，断点切换 = 自算档位驱动 mode 属性
-//   重渲染实时切换；HdsNavigation mode :2288 / onNavigationModeChange :2394 透传实锤，
+//   模式——按拍板不采用，MEDIUM 档维持 Stack，断点切换 = 自算档位驱动 mode 属性重渲染
+//   实时切换；HdsNavigation mode / onNavigationModeChange 透传实锤，
 //   enableModeChangeAnimation 官方默认带切换动画，不额外配置）。
 // · 拖拽调宽：官方 HdsNavigation 参考页实锤「仅设 navBarWidth 不支持分割线拖拽，
 //   navBarWidthRange 指定分割线可拖拽范围」——NavBarWidthRangeOptions{minWidth,maxWidth}
-//   （d.ts :2047）设置后拖拽由 HDS 自动携带；enableDragBar(:2434，@since 6.0.0(20))
-//   显式传 true 保底（默认值未注明，显式化 = 需求必需非额外开关）。
-// · 占位与转场：分栏空栈右栏走 splitPlaceholder(:2484，@since 6.1.0(23)，ComponentContent
-//   形态)；NavDestination 在右栏内转场由官方接管（divider 分割线默认显示，null 才隐藏，
+//   设置后拖拽由 HDS 自动携带；enableDragBar(@since 6.0.0(20)) 显式传 true 保底（默认值
+//   未注明，显式化 = 需求必需非额外开关）。
+// · 占位与转场：分栏空栈右栏走 splitPlaceholder(@since 6.1.0(23)，ComponentContent 形态)；
+//   NavDestination 在右栏内转场由官方接管（divider 分割线默认显示，null 才隐藏，
 //   保留默认）；minContentWidth 不设（官方默认管理）。
 // · 宽度源与刷新纪律：Index.ets window.getLastWindow 链上 on('windowSizeChange') 实测
-//   （@ohos.window.d.ts :5360，Callback<Size> px 单位经 px2vp 换算），**仅档位跨越时写
-//   AppStorage**（窗口连续拖动不逐帧刷新——性能红线）；断点不持久（persistProp 不需要），
-//   AppStorage 缺省 = COMPACT——手机竖屏/窄悬浮窗恒 COMPACT，分栏路径零触达 = 窄屏
-//   行为零变化。
+//  （Callback<Size> px 单位经 px2vp 换算），**仅档位跨越时写 AppStorage**（窗口连续拖动
+//   不逐帧刷新——性能红线）；断点不持久（persistProp 不需要），AppStorage 缺省 =
+//   COMPACT——手机竖屏/窄悬浮窗恒 COMPACT，分栏路径零触达 = 窄屏行为零变化。
 // 三档口径（Cube 同值）：COMPACT < 600vp / MEDIUM 600~840 / EXPANDED ≥ 840。
 
 // AppStorage 断点档位键（消费方 @StorageProp 订阅；0/1/2 = COMPACT/MEDIUM/EXPANDED）

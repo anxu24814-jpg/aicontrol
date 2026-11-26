@@ -1,10 +1,8 @@
-// 联网搜索·query 加工纯函数层（2026-09-10 多引擎一期，决明拍板带进一期）：模型给出的
-// 搜索关键词在进引擎前做两道归一——①口语前缀清洗（「帮我搜索一下 X」→「X」，Cube
-// 快照 utils/SearchQueryUtils.ets:50-85 裁剪移植，chatcube MIT）；②相对时间词归一
-//（「今天的 AI 新闻」→「2026年9月10日 今天的 AI 新闻」，仅新闻意图，Cube :3-122 同源
-// 裁剪——非新闻意图不改写，避免过度加工吞掉用户原话语义）。★ 零 import 契约（同
-// WebSearchParse——node 直跑断言依赖，scripts/sse-assert.mjs ㊿ 组消费；本文件禁加任何
-// import）。
+// 联网搜索·query 加工纯函数层：模型给出的搜索关键词在进引擎前做两道归一——①口语前缀
+// 清洗（「帮我搜索一下 X」→「X」，Cube 快照 utils/SearchQueryUtils 裁剪移植，chatcube
+// MIT）；②相对时间词归一（「今天的 AI 新闻」→「2026年9月10日 今天的 AI 新闻」，仅新闻
+// 意图，Cube 同源裁剪——非新闻意图不改写，避免过度加工吞掉用户原话语义）。
+// ★ 零 import 契约（同 WebSearchParse——node 直跑断言依赖；本文件禁加任何 import）。
 
 // 关键词长度截断（search_web description 已要求聚焦关键词——超长串多为模型传参脏，
 // 截断保引擎 URL 不爆；控制字符清掉后按字符位截）

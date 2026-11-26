@@ -10,6 +10,7 @@
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { HeaderPair } from './AiTypes';
+import { applyDefaultUserAgent, applyEffectiveProxy, setHeaderCaseInsensitive } from './RequestIdentity';
 import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from '../ReqLog';
 
 const CONNECT_TIMEOUT_MS: number = 10000;
@@ -119,14 +120,16 @@ export function fetchBalance(query: BalanceQuery): Promise<BalanceResult> {
     const path: string = query.path.trim().startsWith('/') ? query.path.trim() : '/' + query.path.trim();
     const url: string = base + path;
     const request: http.HttpRequest = http.createHttp();
-    // 默认认证头 + 自定义头逐条覆盖（同名覆盖语义——如 new-api 系 New-Api-User 校验头）
+    // 默认认证头 + 全局 UA 兜底 + 自定义头逐条覆盖（同名覆盖语义——如 new-api 系
+    // New-Api-User 校验头；UA 名走大小写不敏感写入，2026-09-24 全局请求标识 UA 笔）
     const header: Record<string, string> = {
       'Authorization': 'Bearer ' + query.key.trim(),
       'Accept': 'application/json'
     };
+    applyDefaultUserAgent(header);
     for (const pair of query.headers) {
       if (pair.k.trim() !== '' && pair.v.trim() !== '') {
-        header[pair.k.trim()] = pair.v.trim();
+        setHeaderCaseInsensitive(header, pair.k.trim(), pair.v.trim());
       }
     }
     const options: http.HttpRequestOptions = {
@@ -137,6 +140,9 @@ export function fetchBalance(query: BalanceQuery): Promise<BalanceResult> {
       connectTimeout: CONNECT_TIMEOUT_MS,
       readTimeout: READ_TIMEOUT_MS
     };
+    // 代理兜底写入（2026-09-24 网络设置页扩区笔）：system 档零介入 = options 原样；
+    // direct/custom 档写 usingProxy（读超时保持本链自档 15s，不吃全局档——任务书 §4 边界）
+    applyEffectiveProxy(options);
     const startedAt: number = Date.now();
     const logId: string = reqLogBegin({
       source: '余额查询', model: '', method: 'GET', url: url, headers: header, body: ''

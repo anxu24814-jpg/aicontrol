@@ -12,6 +12,14 @@
   },
   "logging": {
     // "level": "info"                          /* Define the log level. Value: [ "debug" | "info" | "warn" | "error" ]. Default: "info" */
+    // ★ 2026-09-26 自检位C：固定 "error" —— 存量 ArkTS 编译 WARN（「Function may throw exceptions.
+    // Special handling is required.」全仓约 1785 条 / 109 件，剥离 ANSI 后约 266 KB）会把构建
+    // stderr 顶到 ~399 KB，远超自动构建管线 262144 B 的输出上限（实测：未触碰文件的 WARN 单
+    // 独就 > 上限 ⇒ 任何一笔都会撞），管线读不到结果即报「构建命令未能执行」。本档只关 WARN
+    // 打印，不关任何检查：退出码与 0 ERROR 判定全不变（实测成功态 stdout/stderr 皆 0 字节 /
+    // exit=0；故意编译错变异反验：exit=1 + 「ArkTS Compiler Error」与出错文件行列、COMPILE
+    // RESULT:FAIL 照常可见）。人工要看 WARN 时用 `hvigorw -w assembleHap` 覆盖本档。
+    "level": "error"
   },
   "debugging": {
     // "stacktrace": false                      /* Disable stacktrace compilation. Value: [ true | false ]. Default: false */

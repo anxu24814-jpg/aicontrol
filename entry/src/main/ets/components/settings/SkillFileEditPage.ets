@@ -1,19 +1,19 @@
-// 技能附件编辑页（2026-09-13 技能层笔 2，方案 §3.1——倾向方案「独立小编辑页」落地）：
-// 技能编辑页文件组卡「新建文件/上传文件」与行内编辑键 push，param = SkillFileEditParam。
+// 技能附件编辑页：技能编辑页文件组卡「新建文件/上传文件」与行内编辑键 push，param =
+// SkillFileEditParam。
 // · 新建/编辑共页：fileId '' = 新建（可带 draft 初值——上传链把选择器读到的内容带进来让用户
 //   过目后再存）；非空 = 编辑该件（回填内容，可改名）。
-// · 校验走 SkillText.validateSkillFileArgs（件名空/超长/扩展名不在白名单、内容空/超限全拒），
-//   同名件由 SkillDb 写入侧硬拒（件名是模型取件的唯一定位键，同名即歧义）——两处分工：
-//   格式问题本地先说清，库内冲突由库层判。
-// · 编辑态底部「删除文件」红字键（PriceTemplateEditPage 同款形制 + 同源色）。
+// · 校验走 SkillText.validateSkillFileArgs（件名空/超长/扩展名不在白名单、内容空/超限全拒）；
+//   同名件由 SkillDb 写入侧硬拒（件名是模型取件的唯一定位键，同名即歧义）——格式问题本地说清，
+//   库内冲突由库层判。
+// · 编辑态「危险操作」卡（危险文字键灰底红字四件套，与保存动作拉开距离）；卡头「纯文本」徽标、
+//   名称标签「含扩展名」、内容字数在标签行。
 // · 保存/删除成功 pop({ saved: true })（坑17）→ 技能编辑页文件组卡 onPop 重拉。
-import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsNavigationMenuContentOptions } from '@kit.UIDesignKit';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { PageShell } from '../../common/PageShell';
 import { ROUTE_SKILL_FILE_EDIT_PAGE } from '../../common/RouteNames';
 import {
-  CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor, SECTION_TITLE_FONTSIZE
+  CARD_PANEL_WIDTH, CARD_SPACING, cardBg, cardDescColor, cardTitleColor, CARD_SECTION_TITLE_FONTSIZE, CARD_RADIUS
 } from '../../common/Theme';
 import {
   deleteSkillFile, insertSkillFile, querySkillFile, SkillFileRow, updateSkillFile
@@ -22,8 +22,12 @@ import {
   SKILL_FILE_CONTENT_MAX, SKILL_FILE_EXTS, SKILL_FILE_NAME_MAX, SkillFileValidation,
   validateSkillFileArgs
 } from '../../common/SkillText';
-import { overlayMaterial } from '../../common/ImmersiveLevel';
+import {
+  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg, fallbackButtonMaterial,
+  fallbackButtonStateEffect, overlayMaterial
+} from '../../common/ImmersiveLevel';
 import { ConfirmDialog } from '../chat/ConfirmDialog';
+import { BadgeTone, StatusBadge } from '../StatusBadge';
 
 // push 参数（技能编辑页构造：skillId 必填；fileId '' = 新建；draft* 仅新建态初值用）
 export interface SkillFileEditParam {
@@ -44,16 +48,10 @@ function fileSaveMenuHds(onSave: () => void): HdsNavigationMenuContentOptions {
   } as HdsNavigationMenuContentOptions;
 }
 
-function fileSaveMenuNav(onSave: () => void): NavigationMenuItem[] {
-  return [{
-    value: '保存',
-    symbolIcon: new SymbolGlyphModifier($r('sys.symbol.checkmark')),
-    action: onSave
-  } as NavigationMenuItem];
-}
-
 @Component
 export struct SkillFileEditPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI、不上行；数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
@@ -63,6 +61,10 @@ export struct SkillFileEditPage {
   @State private name: string = '';
   @State private content: string = '';
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
+  // 危险键双态四件套入参（按《规范-行内按钮与光感》§1「危险文字键」落灰底 + 红字；能力位
+  // 恒 true = 官方实底）
+  @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
+  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
   // 删除确认弹窗（坑7：组件成员位构造）
   private confirmCtrl: CustomDialogController = new CustomDialogController({
     systemMaterial: overlayMaterial(),
@@ -95,13 +97,15 @@ export struct SkillFileEditPage {
       return;
     }
     if (this.fileId === '') {
-      // 新建：带 draft 初值（上传链）或空表单
       this.name = param.draftName;
       this.content = param.draftContent;
       return;
     }
     querySkillFile(this.fileId)
       .then((row: SkillFileRow | null): void => {
+        if (this.departed) {
+          return;
+        }
         if (row === null) {
           this.getUIContext().getPromptAction().showToast({ message: '文件不存在，按新建处理' });
           this.fileId = '';
@@ -111,6 +115,9 @@ export struct SkillFileEditPage {
         this.content = row.content;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '文件读取失败：' + (e as Error).message });
       });
   }
@@ -126,10 +133,16 @@ export struct SkillFileEditPage {
       }) : updateSkillFile(this.fileId, this.skillId, v.name, v.content);
     chain
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '已保存' });
         this.pathStack.pop({ saved: true });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '保存失败：' + (e as Error).message });
       });
   }
@@ -137,10 +150,16 @@ export struct SkillFileEditPage {
   private doDelete(): void {
     deleteSkillFile(this.fileId)
       .then((): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '已删除' });
         this.pathStack.pop({ saved: true });
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '删除失败：' + (e as Error).message });
       });
   }
@@ -148,22 +167,32 @@ export struct SkillFileEditPage {
   @Builder
   Content() {
     Scroll() {
-      Column({ space: 12 }) {
+      Column({ space: CARD_SPACING }) {
+        // ── 文件卡（卡头 + 名称/内容两字段；字数计数在内容标签行）──
         Column({ space: 12 }) {
-          Text('文件')
-            .fontSize(SECTION_TITLE_FONTSIZE)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(cardTitleColor())
-            .width('100%')
-          // 两字段各配恒可见标签行（2026-09-23 字段标签笔；形制与三处先例见规范《列表卡片与
-          // 组卡》§4.5，知识与技能两文件页同款同源）：占位符一填内容就不再显示，只靠它认不了
-          // 字段；「内容」框占位符原以「纯文本内容。」起头，标签已给字段名故去该前缀（纯文本
-          // 这条限制仍由卡底格式说明承载，信息零丢失）
+          Row({ space: 8 }) {
+            Text('文件')
+              .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .layoutWeight(1)
+            StatusBadge({ text: '纯文本', tone: BadgeTone.WEAK })
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+          // 两字段各配恒可见标签行（形制见规范《列表卡片与组卡》§4.5，知识与技能两文件页
+          // 同源）：占位符一填内容就不再显示，只靠它认不了字段
           Column({ space: 6 }) {
-            Text('名称')
-              .fontSize(13)
-              .fontColor(cardDescColor())
-              .width('100%')
+            Row() {
+              Text('名称')
+                .fontSize(13)
+                .fontColor(cardDescColor())
+                .layoutWeight(1)
+              Text('含扩展名')
+                .fontSize(13)
+                .fontColor(cardDescColor())
+            }
+            .width('100%')
             TextInput({ placeholder: '例如 数据字典.md', text: this.name })
               .width('100%')
               .maxLength(SKILL_FILE_NAME_MAX)
@@ -174,10 +203,16 @@ export struct SkillFileEditPage {
           .width('100%')
           .alignItems(HorizontalAlign.Start)
           Column({ space: 6 }) {
-            Text('内容')
-              .fontSize(13)
-              .fontColor(cardDescColor())
-              .width('100%')
+            Row({ space: 8 }) {
+              Text('内容')
+                .fontSize(13)
+                .fontColor(cardDescColor())
+                .layoutWeight(1)
+              Text(this.content.length + ' / ' + SKILL_FILE_CONTENT_MAX)
+                .fontSize(13)
+                .fontColor(cardDescColor())
+            }
+            .width('100%')
             TextArea({
               placeholder: '助手加载技能后，可按文件名取用这份内容。',
               text: this.content
@@ -191,11 +226,6 @@ export struct SkillFileEditPage {
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start)
-          Text(this.content.length + ' / ' + SKILL_FILE_CONTENT_MAX)
-            .fontSize(13)
-            .fontColor(cardDescColor())
-            .width('100%')
-            .textAlign(TextAlign.End)
           Text('只支持纯文本文件，例如 ' + SKILL_FILE_EXTS.join('、') +
             '。不支持脚本与二进制文件，也请勿写入口令、密钥等敏感信息。')
             .fontSize(13)
@@ -203,23 +233,50 @@ export struct SkillFileEditPage {
             .width('100%')
         }
         .width(CARD_PANEL_WIDTH)
-        .padding(14)
+        .padding(16)
         .backgroundColor(cardBg(this.appColorMode))
-        .borderRadius(16)
+        .borderRadius(CARD_RADIUS)
         .alignItems(HorizontalAlign.Start)
 
-        // 删除键（编辑态；PriceTemplateEditPage 底部红字键同款形制与同源色）
         if (this.fileId !== '') {
-          Button('删除文件')
-            .fontSize(15)
-            .fontColor($r('app.color.dialog_confirm_red'))
-            .backgroundColor(cardBg(this.appColorMode))
-            .borderRadius(16)
-            .width(CARD_PANEL_WIDTH)
-            .padding({ top: 13, bottom: 13 })
-            .onClick((): void => {
-              this.confirmCtrl.open();
-            })
+          Column({ space: 12 }) {
+            Text('危险操作')
+              .fontSize(CARD_SECTION_TITLE_FONTSIZE)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .width('100%')
+            Row({ space: 10 }) {
+              Column({ space: 3 }) {
+                Text('删除这个文件')
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(cardTitleColor())
+                  .width('100%')
+                Text('删除后不可恢复，助手加载该技能时也不再看到这个文件。')
+                  .fontSize(13)
+                  .fontColor(cardDescColor())
+                  .width('100%')
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+              // 危险文字键（规范 §1：灰底次钮档 bg/material 四件套 + 红字；破坏性动作不入主操作位）
+              Button('删除文件')
+                .fontColor($r('app.color.dialog_confirm_red'))
+                .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
+                .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
+                .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
+                .onClick((): void => {
+                  this.confirmCtrl.open();
+                })
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+          }
+          .width(CARD_PANEL_WIDTH)
+          .padding(16)
+          .backgroundColor(cardBg(this.appColorMode))
+          .borderRadius(CARD_RADIUS)
+          .alignItems(HorizontalAlign.Start)
         }
       }
       .width('100%')
@@ -230,6 +287,7 @@ export struct SkillFileEditPage {
     .height('100%')
     .align(Alignment.TopStart)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .scrollBar(BarState.Off)
   }
 
   build() {
@@ -238,12 +296,13 @@ export struct SkillFileEditPage {
       menuHds: fileSaveMenuHds((): void => {
         this.save();
       }),
-      menuNav: fileSaveMenuNav((): void => {
-        this.save();
-      }),
       content: (): void => {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

@@ -1,26 +1,25 @@
-// 视觉引擎非流式通道（2026-09-15 附件 OCR 二期，任务书-附件OCR链路 §3.3）：用用户已配置
-// 的一个模型把一批图读成文字——照 TitleApi 非流式小请求通道形制（一次 http.request 拿全
-// 响应、复用四协议 compose 纯函数 + toNonStream 传输层后处理、三错误路径中文、request 用
-// 完即毁无事件绑定）。端点/密钥解析复用 TitleGen.resolveTitleEndpoint（服务商启用 + 模型
-// 为该服务商启用对话模型 + key 池非空——同标题链单级验证，禁走四级链）。
-// · 请求体：单条 user 消息 = 生效识别提示词（默认内置，★ 2026-09-17 起用户可定制，见下方
-//   提示词节）+ 本批图片（四协议图片部件现成，compose 零改动）；thinking='' / sampling=null
-//   / tools=[] / anthropic 不传 cache。
+// 视觉引擎非流式通道：用用户已配置的一个模型把一批图读成文字——照 TitleApi 非流式通道
+// 形制（一次 http.request 拿全响应、复用四协议 compose 纯函数 + toNonStream 传输层后处理、
+// 三错误路径中文、request 用完即毁无事件绑定）；端点/密钥解析复用 TitleGen.
+// resolveTitleEndpoint（同标题链单级验证，禁走四级链）。
+// · 请求体：单条 user 消息 = 生效识别提示词（默认内置，★ 用户可定制，见下方提示词节）
+//   + 本批图片（四协议图片部件现成，compose 零改动）；thinking='' / sampling=null /
+//   tools=[] / anthropic 不传 cache。
 // · 非流式改写（红线 7）：openai chat / responses / anthropic 传 toNonStream(body, true)
-//   （剔 stream_options，残留被服务端 400 拒——2026-09-08 沙箱日志实锤）；gemini 传 false。
-// · 分批（§7.3）：OCR_VISION_BATCH = 5 张/批逐批串行——单请求体量可控（页图单张裸
-//   base64 ≈ 11.7 万字符，5 张 ≈ 58 万字符），批次间文本以 '\n\n' 拼接；批失败即整件
-//   失败**不重试**（回退编排归 OcrEngine §3.4，本层只报事实不决策）。
-// · 响应清洗：各协议非流式正文提取复用 TitleApi.extractTitleText / extractTitleUsage
-//   （导出共享，零改动）；trim 后等于 NO_TEXT 哨兵 → 视作空串（空白图）。
-// · 记账（§7.9）：成功路径 logTaskUsage('ocr', '', ...)——conversationId 空串（OCR 与
-//   具体会话无绑定，照 KeyConnectTester 探针先例；7 参无 durationMs，照标题链调用形态）。
-// · 超时（书内口径 4）：15000 连接 + 60000 读取——比标题链 30s 放宽（多图请求体大、视觉
-//   推理慢）；常量单源在本件。
+//   （剔 stream_options，残留被服务端 400 拒——沙箱日志实锤）；gemini 传 false。
+// · 分批（§7.3）：OCR_VISION_BATCH = 5 张/批逐批串行（单请求体量可控），批次间文本以
+//   '\n\n' 拼接；批失败即整件失败**不重试**（回退编排归 OcrEngine，本层只报事实不决策）。
+// · 响应清洗：非流式正文提取复用 TitleApi.extractTitleText / extractTitleUsage（导出共享，
+//   零改动）；trim 后等于 NO_TEXT 哨兵 → 视作空串（空白图）。
+// · 记账：成功路径 logTaskUsage('ocr', '', ...)——conversationId 空串（OCR 与具体会话无
+//   绑定，照 KeyConnectTester 探针先例；7 参无 durationMs）。
+// · 超时：15000 连接 + 60000 读取——比标题链 30s 放宽（多图请求体大、视觉推理慢）；常量
+//   单源在本件。
 import { http } from '@kit.NetworkKit';
 import { AiChatMessage, AiImagePart, ENDPOINT_RESPONSES, PROTOCOL_ANTHROPIC, PROTOCOL_GEMINI } from './AiTypes';
-import { composeAnthropicBody, composeGeminiBody, composeOpenAiBody,
-  composeOpenAiResponsesBody } from './RequestCompose';
+import { composeAnthropicBody, composeGeminiBody, composeOpenAiBody } from './RequestCompose';
+import { composeOpenAiResponsesBody } from './RequestComposeResponses';
+import { applyEffectiveProxy } from './RequestIdentity';
 import { extractApiError } from './SseParser';
 import { extractTitleText, extractTitleUsage, NonStreamEndpoint, resolveNonStreamEndpoint,
   TitleUsageFrame, toNonStream } from './TitleApi';
@@ -34,23 +33,23 @@ import { BusinessError } from '@kit.BasicServicesKit';
 export const OCR_VISION_BATCH: number = 5;
 const OCR_VISION_CONNECT_MS: number = 15000;
 const OCR_VISION_READ_MS: number = 60000;
-// 提示词与哨兵（§7.4；★ 2026-09-17 决明指令开放自定义，形制照 TitleGen 三槽先例）：
+// 提示词与哨兵（★ 决明指令开放自定义，形制照 TitleGen 三槽先例）：
 // OCR_PROMPT_TEMPLATE = 内置默认（唯一真源）；OCR_PROMPT_KEY（'ocrPrompt' AppStorage 持久
-// 键，EntryAbility persistProp 注册）存用户定制覆盖——'' = 未定制 = 生效内置（恢复默认 =
-// 清键回退，内置模板后续升级自动跟随）；生效模板单源 = resolveOcrPromptTemplate()，识别链
-// 与功能模型页编辑面板共用，无缓存（保存后下次识别立即生效）。
-// · 本槽无占位符——提示词不含变量插入点（图片以附件部件随请求发送，不是文本插值），
-//   编辑保存不校验占位符（与标题/记忆三槽不同）。
-// · 哨兵 NO_TEXT 由内置模板约定（模型无文字可提时回）。用户定制若不再要求输出它，空白图
-//   会返回描述性文字被当识别结果——定制即自担；清洗链只认字面哨兵，判定不因定制改变。
+// 键，EntryAbility persistProp 注册）存用户定制覆盖——'' = 未定制 = 生效内置（清键回退，
+// 内置模板后续升级自动跟随）；生效模板单源 = resolveOcrPromptTemplate()，识别链与功能
+// 模型页编辑面板共用，无缓存（保存后下次识别立即生效）。
+// · 本槽无占位符（图片以附件部件随请求发送，非文本插值），编辑保存不校验占位符（与
+//   标题/记忆三槽不同）；转写规格 = 表格用 markdown 表格、公式用 LaTeX、标题与列表保留
+//   层级（kel/rik 共同点，适配「只转写不翻译」口径）。
+// · 哨兵 NO_TEXT 由内置模板约定（模型无文字可提时回）。用户定制若不再要求输出它，空白
+//   图会返回描述性文字被当识别结果——定制即自担；清洗链只认字面哨兵，判定不因定制改变。
 export const OCR_PROMPT_TEMPLATE: string =
-  '提取图片中的全部文字，保持原有顺序与换行，不要翻译、不要总结、不要添加说明。若图中没有文字，只输出 NO_TEXT。';
+  '提取图片中的全部文字，保持原有顺序与换行，保留标题与列表的层级。表格用 markdown 表格转写，公式用 LaTeX。不要翻译、不要总结、不要添加说明。若图中没有文字，只输出 NO_TEXT。';
 // 识别提示词定制键（AppStorage 持久化；'' = 未定制 = 生效内置模板——清删式语义）
 export const OCR_PROMPT_KEY: string = 'ocrPrompt';
 const NO_TEXT_SENTINEL: string = 'NO_TEXT';
 
-// 生效模板纯选择（custom 非空取 custom，空回退内置——AppStorage 读取在 IO 面，本纯函数
-// 可节点直跑断言：内核回退与定制两路）
+// 生效模板纯选择（custom 非空取 custom，空回退内置——内核回退与定制两路可直跑断言）
 export function pickOcrPrompt(custom: string): string {
   return custom !== '' ? custom : OCR_PROMPT_TEMPLATE;
 }
@@ -100,10 +99,9 @@ function buildOcrBody(protocol: string, endpoint: string, model: string,
 }
 
 // 单批请求（非流式一次响应；失败不抛错——ok=false + 中文 errorMessage + status 事实返回）
-// ★ 请求日志（2026-09-24 扩面笔）：本批**五条**返回路径（非 200 / JSON 解析失败 / 缺正文 /
-// 成功 / 网络异常）逐条手写收尾必漏（ModelListApi F1 同族：六条 reject 出口漏一条 ⇒ 该条
-// 永远停在「进行中」），故收敛到 settle 一处。多图分批时**每批一条**日志（每批是独立请求，
-// 排障要看的是「第几批挂了」）。model = 视觉引擎模型名（本链针对具体模型，同标题链口径）
+// ★ 本批五条返回路径（非 200 / JSON 解析失败 / 缺正文 / 成功 / 网络异常）收敛到 settle 一处
+//（逐条手写收尾必漏，漏一条该条日志永远停在「进行中」）；多图分批**每批一条**日志（每批
+// 是独立请求，排障要看「第几批挂了」）。model = 视觉引擎模型名（本链针对具体模型）
 function requestOcrBatch(auth: NonStreamEndpoint, model: string, body: string, protocol: string,
   endpoint: string): Promise<OcrVisionResult> {
   return new Promise<OcrVisionResult>((resolve) => {
@@ -132,6 +130,9 @@ function requestOcrBatch(auth: NonStreamEndpoint, model: string, body: string, p
       connectTimeout: OCR_VISION_CONNECT_MS,
       readTimeout: OCR_VISION_READ_MS
     };
+    // 代理兜底写入（本出口经 resolveNonStreamEndpoint 共享构造器吃全局 UA 却曾漏接代理——
+    // direct/custom 档下 OCR 绕开代理对需代理可达的服务商必败；system 档零介入）
+    applyEffectiveProxy(options);
     request.request(auth.url, options)
       .then((resp: http.HttpResponse): void => {
         if (resp.responseCode !== 200) {
@@ -172,8 +173,7 @@ function requestOcrBatch(auth: NonStreamEndpoint, model: string, body: string, p
           status: -1, promptTokens: 0, completionTokens: 0, cachedTokens: 0 }, null, '');
       })
       .finally((): void => {
-        // destroy 包 try（同 ModelListApi / TitleApi / KeyConnectTester 先例）：裸 destroy 抛错
-        // 会从 finally 穿出成未捕获的 promise 拒绝——本层无日志设施，故静默忽略
+        // destroy 包 try（同 ModelListApi 先例）：裸抛会从 finally 穿出成未捕获拒绝，静默忽略
         try {
           request.destroy();
         } catch (e) {
@@ -213,13 +213,13 @@ export async function requestOcrText(providerId: string, modelId: string,
       buildOcrBody(resolved.protocol, resolved.endpoint, resolved.modelId, batch),
       resolved.protocol, resolved.endpoint);
     if (!result.ok) {
-      // 批失败即整件失败，不重试（回退编排归 OcrEngine §3.4）
+      // 批失败即整件失败，不重试（回退编排归 OcrEngine）
       return result;
     }
     promptTokens += result.promptTokens;
     completionTokens += result.completionTokens;
     cachedTokens += result.cachedTokens;
-    // 哨兵清洗（§3.3.7）：trim 后恰等于 NO_TEXT = 空白图，视作空串
+    // 哨兵清洗：trim 后恰等于 NO_TEXT = 空白图，视作空串
     const text: string = result.text.trim() === NO_TEXT_SENTINEL ? '' : result.text.trim();
     if (text !== '') {
       parts.push(text);

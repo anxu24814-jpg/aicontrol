@@ -1,66 +1,71 @@
-// 聊天页模型选择面板（2026-08-30 服务商管理域新增，待接入清单第 1 件「模型选择」落地：
-// 原标题栏模型入口点击占位 toast 换真面板）：三站点共用的对话模型选择半模态（对话页
-// 标题栏 / 助手编辑页「模型设置」/ 设置页「功能模型」——对外接口见下方成员，宿主零改动）。
-// ★ 2026-09-15 档位（决明指令：「默认展开全屏 + 取消半屏态 + 全屏下拉直接收起」）：档位是
-// **宿主侧 bindSheet 参数**，不在本件内部——三站点一律传 KimiSheetCommon.DETENTS_FULL
-// （= [LARGE] 全屏单挡位：开局全屏、下拉无中间停靠直达关闭）。改档位改那三处宿主（值源同一
-// 常量，改常量即三处同效）；本件内容层不受影响。
-// ★ 2026-09-08 面板重构（决明指令「参照图片，对模型选择的半模态进行功能优化」+ 四项拍板，
-// 任务书-模型选择半模态优化-20260908）：自上而下（全部在滚动流内，不做吸顶——顶部固定区
-// 会让滚动内容挡在标题栏外、渐变模糊失去采样内容，规范-半模态 §2）=
-//   当前选择行卡（手选/绑定值在已加载清单内反查展示）
-//   → 官方 Search 实时筛选 → 「全部/收藏」分段
-//   → 服务商分组：分组标题（卡外）+ 组卡（同服务商模型合并一张卡）
-// · 组卡规格（规范-列表卡片与组卡 §3 官方实测表 + §4.2 两区并列不嵌套）：卡宽
-//   CARD_PANEL_WIDTH / 圆角 16 / 上下 padding 4 / 行缩进 = 外包 Column padding 4（禁 margin
-//   写法，§5 红线 1）/ 行高有副行 64 无副行 56 固定分档 / 分割线 0.5vp 左 8 右 4 末行不显 /
-//   无前导图标（不做厂商头像）；行尾 = 选中打勾（仅选中态、纯视觉不挂点击）+ 收藏爱心键
-//   （TEXTUAL 无底）——打勾在爱心**左侧**，爱心恒为行尾最右键（2026-09-08 决明真机反馈：
-//   原打勾在爱心右侧会把心形挤左、跨行对不齐）；左侧文本区 layoutWeight(1) + 两行文本
-//   maxLines(1) 省略号，长名/长能力标签只截断不挤走右侧键。
-// · 刷新责任在调用方（组卡规范 §4.1 真机报障根因）：外层分组键 = `modelGroupKey`（providerId
-//   | 使用中 | listEpoch | 可见行集合签名，单源在 ModelPickFilter）——收藏/选中态变化自增
-//   纪元 → 整组重建；内层行键含 favorite/selected 双态；禁只靠内层键承担刷新、禁 @Prop 承载
-//   （坑16 家族）。★ 可见集必须进键（2026-09-09 决明真机报障：收藏段显示整个服务商的组卡、
-//   未收藏行也在里面——ForEach 键不变即复用旧组件，切分段/输关键词只换数组不换键，组卡
-//   沿用旧快照不重建）。
-// · 收藏写读链：爱心键 onClick → setModelFavorite → 写库成功才更新内存行 + listEpoch++
-//   （比乐观更新少一条回滚路径）；失败 toast「收藏保存失败」（P0-1 不静默）。读 = 每次打开
-//   重查（面板随 bindSheet 显隐重建 → 天然无跨面板缓存）。本机语义——ProviderShare /
-//   ExportImport 零改动（全量备份靠 SELECT * 自动往返，单家分享不携带）。
-// · 筛选/空态：关键词与收藏段双层内存过滤（visibleSections 派生，不重查库、无防抖——
-//   P1-3 零冗余等待）；空态文案 = ModelPickFilter.pickEmptyHint 派生（行内提示行，首拉
-//   在途不显——loading 闸），读取失败沿用 hintText 通道。
-// 数据 = ProviderDb（服务商详情页「获取模型/添加」维护的清单；仅启用服务商 + 对话型
-// 模型）——面板只读不拉网络（GET /models 在服务商详情页，职责分离）。
-// 壳形态 = KimiFullInputSheet 同款半模态三件套（HdsNavigation MODAL 标题栏 +
-// sheetTitleBarOptions 5 参规格 + bindToScrollable 滚动感知 + 底部安全区延伸）。
-// 选中/使用中刷新 = ForEach 键并入状态（2026-09-03 自检轮修正：官方 ForEach 文档非首次
-// 渲染仅随数据源变化驱动——键不变即不复渲染，item 内读 @StorageProp 不触发项重建；键含
-// 选中/使用中态则父页写键后对应项重建、打勾与徽章即时刷新——ModelFetchSheet 键含勾选态
-// 同款正解；调用方直传的当前值下键恒稳定无重建）。
+// 聊天页模型选择面板：三站点共用的对话模型选择半模态（对话页标题栏 / 助手编辑页「模型设置」/
+// 设置页「功能模型」；对外接口见下方成员，宿主零改动）。
+// ★ 档位（决明拍板「默认展开全屏 + 取消半屏态 + 全屏下拉直接收起」）：档位是**宿主侧
+//   bindSheet 参数**，不在本件内部——三站点一律传 KimiSheetCommon.DETENTS_FULL（= [LARGE]
+//   全屏单挡位：开局全屏、下拉无中间停靠直达关闭）；改档位改三处宿主（值源同一常量，
+//   改常量即三处同效）。
+// · 布局自上而下：**搜索框在标题栏下方带（bottomBuilder，吸顶）** → 筛选 chip 行 → 当前选择
+//   行卡 → 服务商分组（分组标题卡外 + 同服务商模型合并一张组卡，规格见 ModelGroupCard 注释）。
+//   ★ 2026-10-31 搜索吸顶笔（决明「搜索框合入标题自定义区吸顶、走光感」）：原判据「全部在
+//   滚动流内、不吸顶」针对的是**内容区固定块**——它会把 Scroll 起点顶下去，标题栏背后永远
+//   没内容可透、渐变模糊空转（规范-半模态 §2）；迁入标题栏自定义区不属该形态：带属标题栏
+//   自身，模糊/材质/滚动感知三件原样，滚动内容仍经 clip(false) 穿透到带下。带件 = SearchTopBand
+//   （四库页同源，REGULAR 恒光感），带高 = segmentBandParams（下移 8 + 40 = 48）。
+// · 当前选择行卡：与功能模型页八卡同走 resolveModelDisplayLabel 单源——行已删 = 未选择，
+//   不回退 modelId 原文（原「清单内反查不到回退原文」口径作废：清单只含启用行，会把停用/
+//   删除/悬空伪装成「仍选着」）；已停用目标由数据面清空两键（停用即解绑 + 启动/导入后
+//   对账），本卡不另判启用态。
+// · 刷新责任在调用方（组卡规范 §4.1 真机报障根因）：外层分组键 = modelGroupKey 单源
+//   （providerId | 使用中 | listEpoch | 可见行集合签名，在 ModelPickFilter）——收藏/选中态
+//   变化自增纪元 → 整组重建；内层行键含 favorite/selected 双态；禁只靠内层键承担刷新、
+//   禁 @Prop 承载（坑16 家族）。★ 可见集必须进键（真机报障：ForEach 键不变即复用旧组件，
+//   切分段/输关键词只换数组不换键，组卡沿用旧快照）。
+// · chip 筛选（决明拍板，取代收藏分段 + SegmentBar）：filterKey 三态 + 官方 Chip 横滑行，
+//   细节见 filterKey / FilterChipRow 注释。
+// · 收藏写读链：写库成功才更新内存行 + 纪元自增（比乐观更新少一条回滚路径）；读 = 每次
+//   打开重查（面板随 bindSheet 显隐重建，无跨面板缓存）。本机语义——分享/备份零改动（全量
+//   备份 SELECT * 自动往返，单家分享不携带）。
+// · 筛选/空态：关键词与收藏段双层内存过滤（visibleSections 派生，不重查库无防抖——P1-3
+//   零冗余等待）；空态文案 = pickEmptyHint 派生（首拉在途不显——loading 闸），读取失败走
+//   hintText 通道。
+// · 数据 = ProviderDb（服务商详情页维护的清单；仅启用服务商 + 对话型模型）——面板只读不拉
+//   网络（GET /models 在服务商详情页，职责分离）。
+// · 壳形态 = KimiFullInputSheet 同款半模态三件套（HdsNavigation MODAL 标题栏 +
+//   sheetTitleBarOptions 同源〔本笔起带第 7 参搜索带〕+ bindToScrollable 滚动感知 + 底部安全区延伸）。
+// · 选中/使用中刷新 = ForEach 键并入状态（item 内读 @StorageProp 不触发项重建，键含态才
+//   重建——ModelFetchSheet 同款正解；「键不变即复用旧组件」机理见上条 ★）。
+import { CARD_RADIUS } from '../../common/Theme';
 import { ConfigurationConstant } from '@kit.AbilityKit';
-import { SegmentButtonV2Items, TextModifier, uiMaterial } from '@kit.ArkUI';
+import { Chip, LengthMetrics, TextModifier } from '@kit.ArkUI';
 import { HdsListItemCard, HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import {
   capLabels, effectiveCaps, ModelRow, ProviderRow,
   queryModels, queryProviders, setModelFavorite
 } from '../../common/store/ProviderDb';
+// 「当前选择」显示名单源解析器（旧口径作废判据见文件头）
+import { ModelDisplayLabel, resolveModelDisplayLabel } from '../../common/store/ModelDisplayLabel';
 import {
-  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, resolvedUiMaterial
+  IMMERSIVE_LEVEL_KEY, segmentBandParams
 } from '../../common/ImmersiveLevel';
 import {
-  CARD_PANEL_WIDTH, CARD_SPACING, cardBg, cardBorderColor, cardDescColor, cardTitleColor
+  CARD_PANEL_WIDTH, CARD_SPACING, SECTION_GAP, cardBg, cardBorderColor, cardDescColor, cardTitleColor
 } from '../../common/Theme';
 import {
-  modelGroupKey, modelMatchesFilter, normalizeModelFilterKeyword, pickEmptyHint
+  FAV_FILTER_KEY, modelGroupKey, modelMatchesFilter, normalizeModelFilterKeyword,
+  pickEmptyHint, sectionUnderFilter
 } from '../../common/providers/ModelPickFilter';
-import { SegmentBar } from '../SegmentBar';
 import { sheetTitleBarOptions } from './KimiSheetCommon';
+// 搜索带承载件（页面四库页同件——标题栏下方带搜索框恒 REGULAR 光感）
+import { SearchTopBand } from '../SearchTopBand';
+// 全站状态词徽标形制单源（分节头「使用中」= 实底胶囊）
+import { StatusBadge } from '../StatusBadge';
 
-// 服务商分组间距（2026-09-03 卡片化新增）：组间 = 2 倍组内（组内 CARD_SPACING 10），
-// 分组视觉分层明确——「不同厂商过近」防呆；首组顶部间距由外层 Column padding 提供
-const SECTION_GAP: number = 20;
+// 筛选 chip 行高：官方资源 chip_normal_height = 36vp（实读官方资源，即 chip 完整外框高）
+// **必须显式给**：横向 Scroll 在 Column（无固定高）内不设高度会按剩余空间撑开，把 chip 行
+// 拉成大片空白
+const FILTER_CHIP_HEIGHT: number = 36;
+
+// 分组间距：组间 SECTION_GAP / 组内 CARD_SPACING（Theme 常量单源），首组顶部间距由外层 Column padding 提供
 
 // 面板数据节（服务商 + 其对话模型；加载侧组装，筛选后为副本）
 interface ProviderSection {
@@ -70,55 +75,47 @@ interface ProviderSection {
 
 @Component
 export struct ModelPickerSheet {
-  // 选中回调（父页写 AppStorage 后重读连接；本组件不落键——数据与编排在父页惯例，
-  // 但面板需读键渲染当前项，见 aboutToAppear）
+  // 页面存活守卫：置位后本组件迟到异步回调不写状态、不碰 UI、不上行；写库等数据层意图照常完成
+  private departed: boolean = false;
+  // 选中回调（数据与编排在父页，本组件不落库）
   onPick: (providerId: string, modelId: string) => void = () => {
   };
   onClose: () => void = () => {
   };
-  // 底部系统导航条高（vp，宿主 bottomPad 注入——列表尾部占位，坑66 方案 B：末卡滚到
-  // 底停在导航条上方；缺省 0 = 无占位（宿主未传时行为与旧版一致））
+  // 底部系统导航条高（vp，宿主注入——列表尾部占位，坑66：末卡滚到底停在导航条上方；
+  // 缺省 0 = 无占位）
   bottomInset: number = 0;
   @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-  // 光感新规范开关（2026-09-08 面板重构新增：搜索框双态——开 = 官方灰阶实底、关 =
-  // 沉浸光感材质；订阅式切换即刷，同档位键契约）
-  @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
-  // 当前选择（**一律由调用方直传**——三站点各自的"当前"语义不同：对话页 = 本会话生效值
-  //〔会话级覆盖 ?? 助手绑定 ?? 全局默认〕、助手「模型设置」页 = 该助手绑定、功能模型页 =
-  // 该槽位绑定；'' = 未指定 → 全列表无打勾）。普通成员直传 = 打开时刻快照（面板每次开
-  // 重建、选中即关，无滞后窗口）
-  // ★ 2026-09-10 会话级覆盖层笔：原「对话页读全局 active 两键 / 其余站点走 useCustomSelection
-  // 直传」的**双口径统一为直传单口径**——active 两键整体退役；"读一个全局当前模型"正是
-  // 本笔修掉那个 bug 的根因形态（会话内的选择被写成全局默认），勿再引入
+  // 当前选择（**一律由调用方直传**——三站点「当前」语义不同：对话页 = 会话级覆盖 ?? 助手
+  // 绑定 ?? 全局默认、助手「模型设置」页 = 该助手绑定、功能模型页 = 该槽位绑定；'' = 未指定
+  // → 全列表无打勾；普通成员直传 = 打开时刻快照，面板每次开重建、选中即关，无滞后窗口）。
+  // ★ 勿再读全局 active 两键（已退役）——「读一个全局当前模型」正是当年会话内选择被写成
+  // 全局默认 bug 的根因形态
   selProviderId: string = '';
   selModelId: string = '';
-  // 系统颜色模式（卡底深浅色随动——ModelFetchSheet/面板卡同款口径）
+  // 系统颜色模式（卡底深浅色随动）
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   @State private sections: ProviderSection[] = [];
   @State private hintText: string = '';
-  // 首拉完成闸（2026-09-08 新增，ChatSessionList.loaded 同款）：false = 查询在途——空态
-  // 提示行不显示（防「暂无可用模型」闪现）；查询落定（成功/失败）置 false
+  // 首拉完成闸：true = 查询在途——空态提示行不显示（防「暂无可用模型」闪现）；查询落定
+  //（成功/失败）置 false
   @State private loading: boolean = true;
   // 搜索关键词（$$ 双向绑定实时过滤；空串 = 不过滤）
   @State private keyword: string = '';
-  // 收藏分段（0 = 全部 / 1 = 收藏）：切换内存过滤不重查库（visibleSections 派生）
-  @State private favSegment: number = 0;
+  // 筛选 chip 单值档（取代 favSegment 收藏分段）：'' = 全部 / FAV_FILTER_KEY = 收藏 /
+  // 服务商 id = 厂商档——语义与组级判定单源 ModelPickFilter；再点选中 chip = 回全部
+  //（toggle）；切换内存过滤不重查库
+  @State private filterKey: string = '';
   // 刷新纪元（组卡规范 §4.1）：收藏/选中态变化自增 → 外层分组键变重建 → 行内爱心与打勾
   // 即时刷新（内层键单独承担不了跨组重建）
   @State private listEpoch: number = 0;
-  // 分段选项（SegmentButtonV2Items 纯展示，普通成员——ChatSessionList favSegItems 同款；
-  // 项为 { text } 对象数组，非字符串数组）
-  private favSegItems: SegmentButtonV2Items = new SegmentButtonV2Items([
-    { text: '全部' },
-    { text: '收藏' }
-  ]);
+  // 「当前选择」显示名：resolveModelDisplayLabel 查全库（不看启用态、不依赖已加载分组），
+  // 查不到 = missing = 未选择；异步落定前按 modelId 兜底（与功能模型页八卡同窗口口径）
+  @State private pickLabel: string = '';
+  @State private pickMissing: boolean = false;
   private listScroller: Scroller = new Scroller();
-  // 官方 HDS 列表卡可用性（HdsListItemCard 要求 HDSComponent.Full——SettingsPage 同款门槛）
-  private hdsListCardAvailable: boolean = canIUse('SystemCapability.UIDesign.HDSComponent.Full');
 
-  // 行选中判定（打勾渲染；当前值由调用方直传，见 selProviderId 注释——★ 2026-09-10 会话级
-  // 覆盖层笔自检：原 if(双口径分支) 结构删分支后留成 if(...) return true; return false 冗余壳，
-  // 收敛为单表达式，行为等价）
+  // 行选中判定（打勾渲染；当前值由调用方直传，见 selProviderId 注释）
   private isSelected(providerId: string, modelId: string): boolean {
     return this.selProviderId === providerId && this.selModelId === modelId;
   }
@@ -128,7 +125,7 @@ export struct ModelPickerSheet {
     return this.selProviderId === providerId;
   }
 
-  // 当前选择的服务商/模型两键（单口径：调用方直传——各站点自己决定"当前"是什么）
+  // 当前选择两键（单口径：调用方直传，语义见 selProviderId 注释）
   private currentProviderId(): string {
     return this.selProviderId;
   }
@@ -137,26 +134,15 @@ export struct ModelPickerSheet {
     return this.selModelId;
   }
 
-  // 当前选择主文案（三态口径，任务书 §2.3）：命中 = 模型显示名（name 空则 modelId）；
-  // 两键非空但清单内反查不到（目标已停用/删除）= modelId 原文（不谎报「未选择」）；
-  // 两键含空 = 「未选择」灰字
+  // 当前选择主文案（三态口径单源见文件头「当前选择行卡」条）：两键含空或 pickMissing =
+  // 「未选择」；命中 = 显示名（name 空则 modelId）
   private currentPickPrimary(): string {
     const providerId: string = this.currentProviderId();
     const modelId: string = this.currentModelId();
-    if (providerId === '' || modelId === '') {
+    if (providerId === '' || modelId === '' || this.pickMissing) {
       return '未选择';
     }
-    const section: ProviderSection | undefined =
-      this.sections.find((item: ProviderSection): boolean => item.provider.id === providerId);
-    if (section === undefined) {
-      return modelId;
-    }
-    const model: ModelRow | undefined =
-      section.models.find((item: ModelRow): boolean => item.modelId === modelId);
-    if (model === undefined) {
-      return modelId;
-    }
-    return model.name !== '' ? model.name : model.modelId;
+    return this.pickLabel !== '' ? this.pickLabel : modelId;
   }
 
   // 当前选择副文案（'' = 无副行）：仅命中态显示「服务商名 · 模型 ID」
@@ -179,24 +165,27 @@ export struct ModelPickerSheet {
     return section.provider.name + ' · ' + model.modelId;
   }
 
-  // 未选择判定（当前选择行卡灰字/默认色分治）
+  // 未选择判定（当前选择行卡灰字/默认色分治）：两键含空或解析不可用
   private currentPickUnselected(): boolean {
-    return this.currentProviderId() === '' || this.currentModelId() === '';
+    return this.currentProviderId() === '' || this.currentModelId() === '' || this.pickMissing;
   }
 
   // 模型行能力标签文本（副行；'' = 不显该行——行高随之分档）。必须走 effectiveCaps
-  //（派生语义单源，禁直读 model.caps），全称标签不引入第二套短标签
+  //（派生语义单源，禁直读 model.caps）
   private capText(model: ModelRow): string {
     return capLabels(effectiveCaps(model)).join(' · ');
   }
 
-  // 可见分节（build 内派生，ChatSessionList.visibleRows 先例）：先收藏段过滤（只留含收藏
-  // 模型的分组 + 组内只留收藏行），再关键词过滤（组内空则丢组）；不动排序
+  // 可见分节（build 内派生）：先组级 chip 筛选（sectionUnderFilter 单源），再收藏行级过滤，
+  // 再关键词过滤（组内空则丢组）；不动排序
   private visibleSections(): ProviderSection[] {
     const keyword: string = normalizeModelFilterKeyword(this.keyword);
-    const favOnly: boolean = this.favSegment === 1;
+    const favOnly: boolean = this.filterKey === FAV_FILTER_KEY;
     const result: ProviderSection[] = [];
     for (const section of this.sections) {
+      if (!sectionUnderFilter(section.provider.id, this.filterKey)) {
+        continue;
+      }
       let models: ModelRow[] = section.models;
       if (favOnly) {
         models = models.filter((model: ModelRow): boolean => model.favorite);
@@ -226,7 +215,7 @@ export struct ModelPickerSheet {
       visibleCount += section.models.length;
     }
     return pickEmptyHint(sourceCount, visibleCount,
-      normalizeModelFilterKeyword(this.keyword), this.favSegment === 1);
+      normalizeModelFilterKeyword(this.keyword), this.filterKey === FAV_FILTER_KEY);
   }
 
   // 收藏切换（写库成功才更新内存 + 纪元自增；失败 toast 不静默——P0-1）
@@ -238,6 +227,9 @@ export struct ModelPickerSheet {
         this.listEpoch++;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({
           message: '收藏保存失败：' + (e as Error).message
         });
@@ -245,11 +237,27 @@ export struct ModelPickerSheet {
   }
 
   aboutToAppear(): void {
+    // 显示名解析（字段口径见 pickLabel 注释）；查询失败按 modelId 兜底（展示增强不阻断面板）
+    if (this.selProviderId !== '' && this.selModelId !== '') {
+      resolveModelDisplayLabel(this.selProviderId, this.selModelId)
+        .then((state: ModelDisplayLabel): void => {
+          if (this.departed) {
+            return;
+          }
+          this.pickLabel = state.label;
+          this.pickMissing = state.missing;
+        })
+        .catch((_e: Object): void => {
+          if (this.departed) {
+            return;
+          }
+          this.pickLabel = this.selModelId;
+        });
+    }
     queryProviders()
       .then(async (rows: ProviderRow[]): Promise<ProviderSection[]> => {
-        // 逐启用服务商拉对话模型组装分节（服务商 = 用户手建小数据集，条目级循环查询
-        // 开销可忽略；分组语义不值得为它加聚合查询）；停用模型不列（模型卡开关启停的
-        // 消费端之一——显示形态不变，仅数据过滤）
+        // 逐启用服务商拉对话模型组装分节（用户手建小数据集，条目级循环查询开销可忽略）；
+        // 停用模型不列（启停开关消费端之一——仅数据过滤，显示形态不变）
         const sections: ProviderSection[] = [];
         for (const provider of rows) {
           if (!provider.enabled) {
@@ -264,10 +272,16 @@ export struct ModelPickerSheet {
         return sections;
       })
       .then((sections: ProviderSection[]): void => {
+        if (this.departed) {
+          return;
+        }
         this.sections = sections;
         this.loading = false;
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.hintText = '模型清单读取失败：' + (e as Error).message;
         this.loading = false;
       });
@@ -275,27 +289,18 @@ export struct ModelPickerSheet {
 
   build() {
     HdsNavigation() {
-      // 滚动内容穿透标题栏背后被 GRADIENT_BLUR 模糊采样（模型面板机制，档案 6.2）；
-      // Scroll+Column 嵌套分区——组间 SECTION_GAP / 组内 CARD_SPACING 分级（同面板
-      // ModelFetchSheet 同源姿势；Clip false + TopStart 对齐 + Spring 见规范-半模态 §2）
+      // 滚动内容穿透标题栏背后被 GRADIENT_BLUR 模糊采样；Scroll+Column 嵌套分区——组间
+      // SECTION_GAP / 组内 CARD_SPACING 分级（clip(false) + TopStart + Spring 见规范-半模态 §2）
       Scroll(this.listScroller) {
         Column({ space: SECTION_GAP }) {
+          // ── 筛选 chip 行（全部/收藏 + 服务商档，单选横滑，取代分段胶囊）──
+          this.FilterChipRow()
           // ── 当前选择（分组标题 + 行卡；纯信息展示不挂点击）──
           Column({ space: CARD_SPACING }) {
             this.CurrentPickHeader()
             this.CurrentPickCard()
           }
           .width('100%')
-          // ── 搜索行（官方 Search + 光感双态；随列表滚动不吸顶——模糊生效前提）──
-          this.SearchRow()
-          // ── 「全部/收藏」分段（收藏入口；宽度 = 父容器约束，SegmentBar 无宽度参数）──
-          Column() {
-            SegmentBar({
-              items: this.favSegItems,
-              selectedIndex: $favSegment
-            })
-          }
-          .width(CARD_PANEL_WIDTH)
           if (this.hintText !== '') {
             Text(this.hintText)
               .fontSize(13)
@@ -318,8 +323,7 @@ export struct ModelPickerSheet {
           }, (section: ProviderSection): string => modelGroupKey(section.provider.id,
             this.isProviderInUse(section.provider.id), this.listEpoch,
             section.models.map((model: ModelRow): string => model.id)))
-          // 尾部安全区让位（ignoreLayoutSafeArea BOTTOM 后末卡不贴导航条；bottomInset=0
-          // 时高度 0 无占位）
+          // 尾部安全区让位（末卡滚到底不贴导航条；bottomInset=0 时高度 0 无占位）
           Row()
             .width('100%')
             .height(Math.max(0, this.bottomInset - CARD_SPACING))
@@ -335,12 +339,15 @@ export struct ModelPickerSheet {
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .scrollBar(BarState.Off)
     }
-    // 半模态三件套（KimiFullInputSheet 同款规格——标题栏 5 参 + MODAL + 滚动感知 + 底部
-    // 安全区延伸）
+    // 半模态三件套（KimiFullInputSheet 同款规格）+ 标题栏下方搜索带（第 7 参；带高算式
+    // 单源 segmentBandParams——带属标题栏、内容零手算让位，见本件头注释）
     .titleBar(sheetTitleBarOptions('选择模型', '服务商 · 模型',
       (): void => {
         this.onClose();
-      }, this.immersiveLevel))
+      }, this.immersiveLevel, undefined, undefined,
+      segmentBandParams((): void => {
+        this.SearchBand();
+      })))
     .titleMode(HdsNavigationTitleMode.MODAL)
     .hideBackButton(true)
     .bindToScrollable([this.listScroller])
@@ -349,7 +356,7 @@ export struct ModelPickerSheet {
     .height('100%')
   }
 
-  // 「当前选择」分组标题（分组标题规格 = 粗体 15fp + 左缘 16 对卡缘，规范-半模态 §3）
+  // 「当前选择」分组标题（规格同分节头 SectionHeader，规范-半模态 §3）
   @Builder
   CurrentPickHeader() {
     Row() {
@@ -362,64 +369,91 @@ export struct ModelPickerSheet {
     .padding({ left: 16, right: 16 })
   }
 
-  // 当前选择行卡（HDS 官方列表卡优先 + 无 Full 回退自制卡；纯信息展示不挂 onClick——
-  // 避免「按得下去没反应」；HDS 卡宽度官方语义 = 容器 −32，勿挂 .width()）。
-  // 主副行文案三态见 currentPickPrimary/currentPickSecondary；长名单行省略号截断
+  // 当前选择行卡（HDS 官方列表卡；纯信息展示不挂 onClick——避免
+  // 「按得下去没反应」；HDS 卡宽度官方语义 = 容器 −32，勿挂 .width()）。主副行三态见
+  // currentPickPrimary/currentPickSecondary；长名省略号截断
   @Builder
   CurrentPickCard() {
-    if (this.hdsListCardAvailable) {
-      HdsListItemCard({
-        textItem: {
-          primaryText: {
-            text: this.currentPickPrimary(),
-            modifier: this.currentPickUnselected() ?
-              new TextModifier().fontColor(cardDescColor()) : undefined
-          },
-          secondaryText: this.currentPickSecondary() !== '' ?
-            { text: this.currentPickSecondary() } : undefined
+    HdsListItemCard({
+      textItem: {
+        primaryText: {
+          text: this.currentPickPrimary(),
+          modifier: this.currentPickUnselected() ?
+            new TextModifier().fontColor(cardDescColor()) : undefined
         },
-        cardBorderRadius: 16,
-        cardBackgroundColor: cardBg(this.appColorMode)
-      })
-    } else {
-      Column({ space: 2 }) {
-        Text(this.currentPickPrimary())
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.currentPickUnselected() ? cardDescColor() : cardTitleColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.currentPickSecondary() !== '') {
-          Text(this.currentPickSecondary())
-            .fontSize(14)
-            .fontColor(cardDescColor())
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-      }
-      .alignItems(HorizontalAlign.Start)
-      .width(CARD_PANEL_WIDTH)
-      .padding(16)
-      .backgroundColor(cardBg(this.appColorMode))
-      .borderRadius(16)
-    }
+        secondaryText: this.currentPickSecondary() !== '' ?
+          { text: this.currentPickSecondary() } : undefined
+      },
+      cardBorderRadius: CARD_RADIUS,
+      cardBackgroundColor: cardBg(this.appColorMode)
+    })
   }
 
-  // 搜索行（官方 Search 实时过滤；写法逐参数对齐 SessionSearchPage.SearchBox，去掉其
-  // hdsAvailable 分支——面板内恒单路径。不挂 searchButton/defaultFocus：实时过滤无需
-  // 提交式，选择器打开即弹键盘会遮住列表。材质双态 = 光感新规范开关）
+  // 搜索带（标题栏下方自定义区承载，吸顶）：形制/材质/几何单源 = SearchTopBand（四库页同件
+  // ——官方 Search + REGULAR 恒光感 + 整带命中透传），本件零自绘底色/材质。关键词经 $$ 双向
+  // 绑定回流本组件 @State，visibleSections() 派生过滤（无提交动作、不挂 defaultFocus——进面板
+  // 即弹键盘会遮列表）。★ 2026-10-31 起本带取代内容区 SearchRow（白底口径随迁退役：带在标题栏
+  // 生效区内，输入族按 REGULAR 恒光感单源，见规范-行内按钮与光感 §2）
   @Builder
-  SearchRow() {
-    Search({ value: $$this.keyword, placeholder: '筛选模型' })
-      .backgroundColor(this.contentFallback ? $r('app.color.comp_fallback_gray') : Color.Transparent)
-      .systemMaterial(this.contentFallback ? uiMaterial.Material.empty :
-        resolvedUiMaterial(uiMaterial.ImmersiveStyle.THIN, this.immersiveLevel, false))
-      .width(CARD_PANEL_WIDTH)
-      .height(40)
+  SearchBand() {
+    SearchTopBand({ keyword: $keyword, placeholder: '筛选模型' })
   }
 
-  // 分节头（服务商名 + 使用中徽章 + 模型数；分组标题规格 = 粗体 15fp + 左缘 16 对卡缘，
-  // 规范-半模态 §3；上下间距交容器 space，不占 padding）
+  // 筛选 chip 选中底色（灰白系拍板）：浅 #FFFFFF 实底 / 深 #26FFFFFF 亮胶囊，弃官方默认
+  // 强调蓝 activated 底（全站「蓝底突兀」拍板）；官方无选中底深浅分治资源，手写三元
+  private chipActiveBg(): ResourceColor {
+    const dark: boolean = this.appColorMode ===
+      ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    return dark ? '#26FFFFFF' : '#FFFFFF';
+  }
+
+  // 单枚筛选 chip（官方 Chip）：allowClose 默认 true **必须显式传 false**（否则每 chip 带
+  // 关闭叉）；未选底不传 = 官方默认灰；再点选中档一次 = 回全部（toggle）
+  @Builder
+  FilterChip(chipKey: string, text: string) {
+    Chip({
+      label: {
+        text: text,
+        activatedFontColor: $r('sys.color.font_primary')
+      },
+      activated: this.filterKey === chipKey,
+      allowClose: false,
+      activatedBackgroundColor: this.chipActiveBg(),
+      onClicked: (): void => {
+        this.filterKey = this.filterKey === chipKey ? '' : chipKey;
+      }
+    })
+  }
+
+  // 筛选 chip 行：全部/收藏 + 服务商档（sections 派生——loading 期只显前两枚），单选。官方
+  // Chip **无内置横滑无 overflow 处理**（d.ets 核实），外包横向 Scroll 承接；fadingEdge
+  // 渐隐软化边缘裁切（决明拍板自然滚动 + 渐隐、弃 scrollSnap 吸附）。服务商 chips 键含
+  // 选中态（坑44/80：activated 不进键 = 切筛选时高亮静默冻结）；行内间距 8 = ChipGroup
+  // 官方默认 itemSpace 同值
+  @Builder
+  FilterChipRow() {
+    Scroll() {
+      Row({ space: 8 }) {
+        this.FilterChip('', '全部')
+        this.FilterChip(FAV_FILTER_KEY, '收藏')
+        ForEach(this.sections, (section: ProviderSection) => {
+          this.FilterChip(section.provider.id, section.provider.name)
+        }, (section: ProviderSection): string =>
+          section.provider.id + '|' +
+            (this.filterKey === section.provider.id ? '1' : '0'))
+      }
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+    .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(16) })
+    .width(CARD_PANEL_WIDTH)
+    .height(FILTER_CHIP_HEIGHT)
+  }
+
+  // 分节头（服务商名 + 使用中徽章 + 模型数；标题规格 = 粗体 15fp + 左缘 16 对卡缘，规范-
+  // 半模态 §3；上下间距交容器 space）。「使用中」= 实底胶囊 StatusBadge；未使用仍是灰胶囊
+  // 计数（元数据非状态词）
   @Builder
   SectionHeader(section: ProviderSection) {
     Row({ space: 8 }) {
@@ -429,21 +463,26 @@ export struct ModelPickerSheet {
         .fontColor(cardTitleColor())
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(this.isProviderInUse(section.provider.id) ? '使用中' : section.models.length + ' 模型')
-        .fontSize(10)
-        .fontColor($r('sys.color.font_secondary'))
-        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-        .borderRadius(6)
-        .backgroundColor($r('sys.color.comp_background_tertiary'))
+      if (this.isProviderInUse(section.provider.id)) {
+        StatusBadge({ text: '使用中' })
+      } else {
+        Text(section.models.length + ' 模型')
+          .fontSize(10)
+          .fontColor($r('sys.color.font_secondary'))
+          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          .borderRadius(6)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+      }
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
     .alignItems(VerticalAlign.Center)
   }
 
-  // 组卡（同一服务商的模型合并一张卡；官方实测规格 = 卡宽 CARD_PANEL_WIDTH + 圆角 16 +
-  // 上下 padding 4；行间 0.5vp 细线末行不显；内层行键含收藏/选中双态——跨组刷新靠外层
-  // 纪元键，见 listEpoch 注释）
+  // 组卡（同一服务商的模型合并一张卡；官方实测规格 = 卡宽 CARD_PANEL_WIDTH + 圆角
+  // CARD_RADIUS + 上下 padding 4 + 行缩进 = 外包 Column padding 4〔禁 margin 写法〕+
+  // 行高有副行 64 无副行 56 + 行间 0.5vp 细线左 8 右 4 末行不显 + 无前导图标；内层行键含
+  // 收藏/选中双态——跨组刷新靠外层纪元键，见 listEpoch 注释）
   @Builder
   ModelGroupCard(section: ProviderSection) {
     Column() {
@@ -461,13 +500,12 @@ export struct ModelPickerSheet {
     }
     .width(CARD_PANEL_WIDTH)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
+    .borderRadius(CARD_RADIUS)
     .padding({ top: 4, bottom: 4 })
   }
 
-  // 模型行（两区并列不嵌套，规范-列表卡片与组卡 §4.2）：左侧可点区 = 选模型（标题 +
-  // 能力标签副行）；右侧键区 = 收藏爱心 + 选中打勾（兄弟节点，禁嵌套进左区——点击双触发）。
-  // 行缩进 = 外包 Column padding 4（禁 margin，红线 1）；行高 64（有副行）/ 56 固定分档
+  // 模型行（两区并列不嵌套，规范-列表卡片与组卡 §4.2）：左侧可点区 = 选模型（标题 + 能力
+  // 标签副行）；右侧键区 = 收藏爱心 + 选中打勾（兄弟节点，禁嵌套进左区——点击双触发）
   @Builder
   ModelRowItem(providerId: string, model: ModelRow) {
     Column() {
@@ -495,16 +533,15 @@ export struct ModelPickerSheet {
         .onClick((): void => {
           this.onPick(providerId, model.modelId);
         })
-        // 选中打勾（纯视觉不挂点击；未选中不占位）——★ 2026-09-08 决明真机反馈：勾在收藏
-        // 键左侧（原在右侧会把爱心挤左、跨行心形对不齐）；爱心键恒为行尾最右键，打勾的
-        // 出现/消失只压缩左侧可点区，心形位置不动
+        // 选中打勾（纯视觉不挂点击；未选中不占位）——决明真机反馈：勾在爱心**左侧**、爱心
+        // 恒为行尾最右（原勾在右侧会把心形挤左、跨行对不齐）
         if (this.isSelected(providerId, model.modelId)) {
           SymbolGlyph($r('sys.symbol.checkmark'))
             .fontSize(16)
             .fontColor([$r('sys.color.comp_background_emphasize')])
         }
-        // 收藏键（行内图标键 TEXTUAL 无底——未收藏 heart/font_secondary、已收藏
-        // heart_fill/font_emphasize，两色均为官方语义色非自绘；行尾最右键，恒贴卡右缘）
+        // 收藏键（行内图标键 TEXTUAL 无底；未收藏 heart / 已收藏 heart_fill，两色官方语义
+        // 色非自绘；恒为行尾最右键贴卡右缘）
         Button() {
           SymbolGlyph(model.favorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
             .fontSize(20)
@@ -523,5 +560,9 @@ export struct ModelPickerSheet {
       .alignItems(VerticalAlign.Center)
     }
     .padding({ left: 4, right: 4 })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

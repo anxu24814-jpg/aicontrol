@@ -1,65 +1,26 @@
-// 内置浏览器动作域（2026-09-18 内置浏览器 P2 任务书执行笔 A/B 单元原域，2026-09-18 修复
-// 笔自 ToolBrowse.ets 整体外迁——原文件剔头后 1181 行贴 1200 硬线，本笔动作域修复再增
-// 必超线，按宪法「先把本次改动所属的功能域拆到独立文件再动手」整域搬迁）：browse_act
-// 五动作（官方 AIPageInteraction 协议）+ 高危闸门（词表 + 属性类别 + fail-closed）+ 批准
-// 戳与桥层预检（B 单元）。共用协议纯函数（命令组装/解析/正文拼装/预算收敛/串行通道）仍在
-// providers/ToolBrowse.ets——本文件 import 复用，ToolBrowseAct → ToolBrowse → BrowseWeb
-// 单向链，域件禁自 ToolTypes 引（环纪律不变）。
-// · 修复笔（2026-09-18 深挖卷开工单，docs/调研-内置浏览器深挖卷-隐形宿主与诊断探针
-//   -20260918.md §六）：#1 wants 对象形态回正 + 属性面缺失 fail-closed（安全链）；
-//   #2③ 交互命令失败回传原始命令与响应；#4 回执带动作后新元素清单（对齐竞品「动作后
-//   重拍快照」范式）；#5 click/type 放行 xpath 定位（target 以 / 开头即路由，失败回退
-//   nodeid 正路）；#7 高危判据属性类别化（button 默认 submit——跨语言中轴）+ 英文词表
-//   兜底；#8 确认卡不可逆档（删除类目标加「可能无法撤销」）。
-// · 三轮修复（2026-09-18 #11，真机二轮回证「内核 text 恒缺」）：fetchTargetSemantics 命中
-//   节点后经 xpath 旁路补标签（isHighRiskAction 词表层与确认卡说明复明——缺文本时安全
-//   判定只剩属性层半盲）；settle 回执元素同口径回填 + wants 带 visible。回填函数本体与
-//   探针脚本组装/解析在读域 ToolBrowse（#11 三面共用单源）。
-// · 四轮修复（2026-09-18 #12，真机三轮回证「441 = 模型回传重组错 id」——长 nodeid 从未
-//   在任何下发清单里出现，fetchTargetSemantics 按错 id 直配恒 null，词表层/确认卡三轮
-//   实仍在空转）：短序号定位——模型面 id = 清单短序号，fetchTargetSemantics 经
-//   resolveListedXpath 统一匹配键（序号→缓存 xpath；xpath·真 id 直通）在当次快照重解析，
-//   browseActNow 命中即改用快照内真实定位发命令（fresh nodeid 优先、内核未返 id 时 xpath
-//   兜底直发）；settle 回执清单同入缓存。缓存与翻译单源在读域 ToolBrowse。
-// · 五轮修复（2026-09-18 #13，真机四轮回证「内核 nodeid 定位通道对本隐形宿主恒坏」——
-//   #12 链路全程正确：序号 18 → 缓存 xpath → 当次快照配中真实节点 |9 → 命令带真实
-//   nodeid 发出，内核仍 type 441 / click 421；|9 小于清单首节点 |14 = 内核轻量 DOM 非
-//   文档序编号，自证是内核自家 id〔上轮另一文档搜索框 |11 同形态〕；不需 nodeid 的
-//   scroll/send_keys 全成功）：①命中改发**官方 xpath 定位参数**优先（绕 nodeid 注册表
-//   走 live DOM 求值，nodeid 退为内核未返 xpath 时的兜底——#12 的 fresh nodeid 优先序
-//   废止）；②定位族失败码（115/131/42x/44x）且目标已过闸配中（verifiedXpath 非空）→
-//   同页 runPageJs 注入兜底（el.click() / 原生 value setter + input·change 事件——通道
-//   #9/#11 真机已证），注入未成交回退原错误面不吞。安全链不变：注入许可面 =
-//   verifiedXpath（模型自造定位未配中不给注入），password 恒拒/fail-closed/高危闸全在
-//   注入点之前；回执 type 免「无变化」note（输入不改写正文是常态，防误导死磕重输）。
-//   脚本组装/结果解析纯函数在读域 ToolBrowse（127 组断言行直跑）。
-// · 六轮修复（2026-09-18 #14，真机五轮回证「xpath 直发也恒坏 + 回车/提交不跳转」——
-//   命令历史铁证：click 带官方 xpath 参数发出内核仍 421，定位面双路全坏；type 注入
-//   成交后 Enter 两发 send_keys 假成功零效果〔无目标焦点路由恒空转〕）：①click 改注入
-//   直投优先（未成交回退内核原路），脚本补 form.requestSubmit 兜底（合成 click 无内建
-//   隐式提交保证）；②press_key Enter 改注入（buildEnterInjectScript：键盘三连 +
-//   requestSubmit 兜底），目标 = 最近成交 type 的 xpath（lastTypedXpathFor，URL 守卫
-//   防导航后误中），lastTyped 未命中走原 send_keys；③type 成交即记 xpath
-//   （noteTypedXpath——内核直发与注入兜底两路同记）；④injectTried 防复注（注入优先
-//   未成交回退内核再遇定位族码时，同脚本复注定同果）。★ 宿主 A/B（#6）落地时须回评
-//   注入优先级——健康宿主上内核 click/send_keys 是一等面。安全面不扩大：Enter 注入
-//   目标面 = 过闸成交的 type 目标（password 恒拒/高危闸上游同链），lastTyped 空时
-//   退化 = 原 send_keys 豁免口径不变
-// · 自动通过档（2026-09-18 七百五十五节，第二道降压阀——04 专题档 §五·2 预留位）：全局
-//   偏好 prefBrowseAutoApprove（AppPreferences 单源），开 = 预检早退不弹卡 + 执行器高危
-//   分支免戳放行（两闸同判据同源）；密码恒拒（红线 9）与 fail-closed 顺位在前不受影响；
-//   不可逆档随预检返回的档位字段（ConfirmPrompt.level）上卡，自动通过档不弹卡故不呈现。
-// ★ 2026-09-20 审批卡视觉迁移笔 A：预检返回形态由「串（'' = 直通）」改「说明串＋档位二元组」
-//   （ConfirmPrompt | null）；不可逆档**不再拼接串尾「。此操作可能无法撤销」**——该信息改由
-//   卡面风险块承载（档位字段为判据），拼在串里会与之逐字重复（方案 §2.1 ★ 逻辑连带变更）。
-// · 红线沿用任务书：isHighRiskAction 兜底判定与批准戳三条件（单次消费/60s TTL/会话一致）
-//   不得删除（红线 8/10）；password 恒拒（红线 9）；动作全经 browseService.queued 串行
+// 内置浏览器动作域（自 ToolBrowse.ets 域级拆分）：browse_act 五动作（官方 AIPageInteraction
+// 协议）+ 高危闸门（词表 + 属性类别 + fail-closed）+ 批准戳与桥层预检。共用协议纯函数
+//（命令组装/解析/正文拼装/预算收敛/串行通道）仍在 providers/ToolBrowse.ets——本文件
+// import 复用，ToolBrowseAct → ToolBrowse → BrowseWeb 单向链，域件禁自 ToolTypes 引
+//（环纪律不变）。
+// 现行定位链（隐形宿主真机多轮回证定案）：模型面 id = 清单短序号，经 resolveListedXpath
+//（序号→缓存 xpath；xpath·真 id 直通）在当次快照重解析；命中即改发**官方 xpath 定位参数**
+// 优先（内核 nodeid 注册表对本隐形宿主恒坏，nodeid 退兜底）；click 与 Enter 注入直投优先
+//（buildActInjectScript / buildEnterInjectScript，未成交回退内核原路；injectTried 防复注）；
+// 定位族失败码（115/131/42x/44x）且 verifiedXpath 非空 → 同页 runPageJs 注入兜底。安全链：
+// 注入许可面 = verifiedXpath（模型自造定位未配中不给注入），password 恒拒 / fail-closed /
+// 高危闸全在注入点之前。★ 宿主 A/B 落地时须回评注入优先级——健康宿主上内核 click/
+// send_keys 是一等面。
+// 红线沿用任务书：isHighRiskAction 兜底判定与批准戳三条件（单次消费/60s TTL/会话一致）
+// 不得删除（红线 8/10）；password 恒拒（红线 9）；动作全经 browseService.queued 串行
 //（红线 3）；回执自控 ≤ 8192（红线 11）。
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfirmPrompt, CONFIRM_LEVEL_IRREVERSIBLE, CONFIRM_LEVEL_WRITE,
-  ToolExecutor } from './ToolContracts';
-import { isBrowseAutoApproveEnabled, isSearchServiceEnabled } from '../AppPreferences';
-import { CHAT_ACTIVE_CONV_KEY } from './ToolChatSearch';
+  ToolExecutor, toolArgsParseErrorText, toolErrorText } from './ToolContracts';
+import { routeConfirmPrompt } from './ConfirmRouting';
+import { ToolExecutionContext } from '../chat/MessageContracts';
+import { APPROVE_MODE_AUTO, browseApproveMode } from '../AppPreferences';
+import { resolveConfirmMode } from '../chat/PermissionMode';
 import { browseService, browseFailureSignals, BrowsePageState } from '../BrowseWeb';
 import {
   DOMAIN,
@@ -98,38 +59,34 @@ export const BROWSE_ACT_SETTLE_TIMEOUT_MS: number = 3000;
 export const BROWSE_ACT_SETTLE_STEP_MS: number = 300;
 // scroll 缺省滚动距离（约一屏；负值 = 向下看，官方 deltaY 语义）
 export const BROWSE_ACT_SCROLL_DEFAULT_DELTA: number = -600;
-// scroll 速度（2026-09-20 真机探针定案）：官方 speed 负值 = 立即到位无动画；默认 800ms
-// 动画与本工具「每轮先等 300ms、文本一变即 break」的结算循环错配——回执只截到动画前段
-//（-600 只报出 +199/+261/+219；实测传 -200 时页面实际已推进 +1301）。传负值让位置一步
-// 到位：300ms 首采即终值，回执与到账量一致。★ 取值 -1 而非 0（官方 0 = 码 392 无效值）
+// scroll 速度（真机探针定案）：官方 speed 负值 = 立即到位无动画——默认 800ms 动画与
+//「每轮先等 300ms、文本一变即 break」结算循环错配，回执只截到动画前段。★ 取值 -1 而非 0
+//（官方 0 = 码 392 无效值）
 export const BROWSE_ACT_SCROLL_SPEED: number = -1;
-// scroll 视口坐标（固定视口中心近似——手机竖屏典型 360×780 的中心。落正文区概率最大：
-// 顶部多为导航横幅、底部多为评论输入区，中部是正文容器；官方语义「落容器内滚容器」，
-// 落错内嵌列表时由回执内容变化可观测，观察项 4）
+// scroll 视口坐标（固定视口中心近似——落正文区概率最大：顶部多导航横幅、底部多评论输入
+// 区；官方「落容器内滚容器」，落错内嵌列表时由回执内容变化可观测）
 export const BROWSE_ACT_SCROLL_X: number = 180;
 export const BROWSE_ACT_SCROLL_Y: number = 400;
 // 增量段上限（比 open/read 的 8000 小——动作常连发省 token；模型要全文自会 browse_read）
 export const BROWSE_ACT_TEXT_MAX_CHARS: number = 2000;
-// 高危词表（任务书 §6.1 中文定稿 + 修复笔 #7 英文补强）：均为「改动网站数据或账户状态」
-// 动词。中文组：「回复/评论」拦的是发帖面——输入框与按钮都命中；「搜索/查询/展开/收起」
-// 刻意不在表（读向）。英文组（#7 L1：属性类别化后的文本兜底，2026-09-18 拍板①下半）：
-// 归一后包含匹配天然覆盖大小写与前后缀；"post"/"order" 类高歧义词刻意不入（读向误拦），
-// "login" 含于 "login page" 类目标文本属可接受确认成本（漏拦代价 = 英文站写动作静默执行）。
-// 真机误拦/漏拦增删须同步真值表断言（123 组）
+// 高危词表（中文定稿 + 英文补强）：均为「改动网站数据或账户状态」动词。中文组「回复/
+// 评论」拦的是发帖面；「搜索/查询/展开/收起」刻意不在表（读向）。英文组（属性类别化后
+// 的文本兜底）：归一后包含匹配天然覆盖大小写；"post"/"order" 类高歧义词刻意不入（读向
+// 误拦），"login" 含于 "login page" 类目标文本属可接受确认成本（漏拦代价 = 英文站写动作
+// 静默执行）。真机误拦/漏拦增删须同步真值表断言（123 组）
 export const BROWSE_ACT_HIGH_RISK_WORDS: string[] = ['提交', '下单', '支付', '付款', '购买',
   '结算', '删除', '发布', '发送', '登录', '注册', '转账', '充值', '评论', '回复', '关注',
   '点赞', '订阅', '确认订单',
   'submit', 'send', 'delete', 'remove', 'publish', 'confirm', 'pay', 'buy', 'purchase',
   'checkout', 'transfer', 'register', 'log in', 'login', 'sign in', 'comment', 'reply',
   'follow', 'subscribe', 'donate'];
-// 不可逆档词表（#8 永久删除档位）：命中即预检档位取 CONFIRM_LEVEL_IRREVERSIBLE——卡面
-// 出红徽章与风险块（★ 2026-09-20 笔 A 起：不再往说明串尾拼提示，改由档位字段承载）；
-// 保留确认卡不退恒拒——2026-09-18 总授权默认取推荐，要更严改恒拒只动本判据的消费分支
+// 不可逆档词表（删除族）：命中即预检档位取 CONFIRM_LEVEL_IRREVERSIBLE——卡面红徽章与
+// 风险块由档位字段承载；保留确认卡不退恒拒——要更严改恒拒只动本判据的消费分支
 const IRREVERSIBLE_WORDS: string[] = ['删除', '清空', 'delete', 'remove', 'erase', 'clear'];
 
 // browse_act 入参（执行器解析 argsJson 后的字段载体）。target = nodeid 或 xpath（以 /
-// 开头即 xpath 形态——修复笔 #5 路由：转 xpath 参数发，官方一等定位面）；xpath 另可由
-// select 专用参数显式传入（click/type 路由写入同一字段）
+// 开头即 xpath 形态——#5 路由转官方 xpath 参数发）；xpath 另可由 select 专用参数显式传入
+//（click/type 路由写入同一字段）
 export interface ActCommandParams {
   target?: string;
   xpath?: string;
@@ -140,13 +97,11 @@ export interface ActCommandParams {
   deltaY?: number;
 }
 
-// 动作目标节点语义（高危判据面：attributes.type 判 password/submit，text/role/tag 判词表；
-// tag+type 判提交控件类别）。attributesSeen = wants 对象项是否生效（本次查询拿没拿到
-// attributes 字段）——fail-closed 判据（#1）：false 时 type 不可信，写动作不得静默放行。
-// #12：id/xpath = 命中节点在**当次快照**里的定位面（'' = 内核未返——官方「仅在可生成
-// 节点标识时返回」）——browseActNow 据此把模型的定位值（短序号/重组错 id/手写 xpath）
-// 改写成当次快照里真实存在的定位再发命令（★ #13 起 xpath 直发优先——内核 nodeid 注册表
-// 对本隐形宿主恒坏，nodeid 退为兜底）
+// 动作目标节点语义（高危判据面：attributes.type 判 password/submit，text/role/tag 判词表）。
+// attributesSeen = wants 对象项是否生效——fail-closed 判据（#1）：false 时 type 不可信，
+// 写动作不得静默放行。id/xpath = 命中节点在**当次快照**里的定位面（'' = 内核未返——官方
+//「仅在可生成节点标识时返回」）——browseActNow 据此把模型的定位值（短序号/重组错 id/
+// 手写 xpath）改写成快照里真实存在的定位再发命令（#13 起 xpath 直发优先）
 export interface ActTarget {
   id: string;
   xpath: string;
@@ -158,7 +113,7 @@ export interface ActTarget {
 }
 
 // settle 结果（page = 覆写后的新页态；changed = 正文或地址是否变化；elements = 动作后
-// 新元素清单——回执定位值来源，D4 修复笔回归「动作后重拍快照」范式）
+// 新元素清单——回执定位值来源，对齐「动作后重拍快照」范式）
 interface ActSettleOutcome {
   page: BrowsePageState;
   changed: boolean;
@@ -166,14 +121,12 @@ interface ActSettleOutcome {
 }
 
 // 动作命令组装（官方 AIPageInteraction 协议；字段序固定逐字钉——method → params）：
-// · scroll：x/y 视口坐标 + deltaY + speed（负值 = 立即到位无动画：结算循环 300ms 首采与
-//   800ms 动画错配会让回执只截到前段，见 2026-09-20 真机回执）；
-// · click/type：定位二选一——params.xpath 在位走官方 xpath 参数（#5 路由的落点），否则
-//   nodeid；两参数互斥只发其一（官方语义 nodeid 优先，我们构造上就不同时给）；type 固定
-//   clear:true + index:0（清空后从头插入 = 完整替换输入，最可预测形态；官方「未获焦先
-//   获焦」语义自动处理焦点）；
-// · select：xpath 定位 + indexes/values（官方同给以 indexes 优先——这里按入参在位者组装，
-//   index 在位走 indexes）；press_key：keydown + keyup 两发（官方「连续发送模拟完整按键」）
+// · scroll：x/y 视口坐标 + deltaY + speed（负值 = 立即到位无动画，见常量注释）；
+// · click/type：定位二选一——params.xpath 在位走官方 xpath 参数，否则 nodeid；两参数互斥
+//   只发其一；type 固定 clear:true + index:0（清空后从头插入 = 完整替换输入，最可预测
+//   形态；官方「未获焦先获焦」语义自动处理焦点）；
+// · select：xpath 定位 + indexes/values（按入参在位者组装，index 在位走 indexes）；
+//   press_key：keydown + keyup 两发（官方「连续发送模拟完整按键」）
 export function buildActCommand(action: string, params: ActCommandParams): string | string[] {
   if (action === 'scroll') {
     const scrollParams: Record<string, Object> = {};
@@ -242,16 +195,16 @@ export function buildActCommand(action: string, params: ActCommandParams): strin
   return [JSON.stringify(down), JSON.stringify(up)];
 }
 
-// ── F1 选项序号解析（2026-09-20 任务书-浏览器动作三项修复）──
+// ── F1 选项序号解析 ──
 
-// select 选项文字 → 序号（0 起；未配中 = -1）（2026-09-20 真机探针定案：内核 select 的
-// values 按 option **内部值**匹配——传显示文字「广东省」回码 253，传内部值 440000 成功；
-// 而模型在 nodes 清单里只看得见显示文字）⇒ 发命令前把文字换算成 indexes 发出。
-// 口径（B1/B2）：trim 后**全等**（禁包含/模糊——选错项比选不中更糟）；序号优先取该
-// option xpath 末段 option[N] 的 N-1（免疫清单截断），取不到该形态才用该 select 下
-// option 出现序兜底。只认「挂在该 select 下」的 option（xpath 前缀匹配，防串到另一组）。
+// select 选项文字 → 序号（0 起；未配中 = -1）（真机探针定案：内核 select 的 values 按
+// option **内部值**匹配——传显示文字「广东省」回码 253，传内部值 440000 成功；而模型在
+// nodes 清单里只看得见显示文字）⇒ 发命令前把文字换算成 indexes 发出。
+// 口径：trim 后**全等**（禁包含/模糊——选错项比选不中更糟）；序号优先取该 option xpath
+// 末段 option[N] 的 N-1（免疫清单截断），取不到该形态才用该 select 下 option 出现序兜底；
+// 只认「挂在该 select 下」的 option（xpath 前缀匹配，防串到另一组）。
 // ★ selectXpath 必须是 resolveSelectXpath 归一后的**绝对形态**——`//select[1]` 简写在这里
-//   配不中（先归一、再调本函数；两级顺序见 B13）
+//   配不中（先归一、再调本函数）
 export function matchOptionIndex(selectXpath: string, wantText: string,
   nodes: BrowseDomNode[]): number {
   const want: string = wantText.trim();
@@ -260,8 +213,8 @@ export function matchOptionIndex(selectXpath: string, wantText: string,
   }
   let seen: number = 0;
   for (const node of nodes) {
-    // tag 判等小写归一（2026-09-21 自检轮修）：与同笔 resolveSelectXpath 的 tag 比较口径
-    // 对齐——此前本处区分大小写，内核若回大写 tag 则归一成功而配序恒 -1（静默退化成 253）
+    // tag 判等小写归一（与 resolveSelectXpath 口径对齐——内核若回大写 tag 则归一成功而
+    // 配序恒 -1，静默退化成 253）
     if ((node.tag ?? '').toLowerCase() !== 'option') {
       continue;
     }
@@ -278,13 +231,11 @@ export function matchOptionIndex(selectXpath: string, wantText: string,
   return -1;
 }
 
-// select 定位归一（B13，2026-09-20 自检轮补）：模型给的 select xpath 有两种实证形态——
-// ①照抄 nodes 清单的绝对形态（`/html[1]/body[1]/select[1]`，schema 明示「取自 nodes 结果」）；
-// ②XPath 简写（`//select[1]`——真机回执里模型用的就是它，内核也按「第 N 个 select 元素」解，
-// 与 `//select[2]` 实测定案互证）。本函数把两种都归一到「当次快照里真实存在的那一个 xpath」；
-// 其余形态（含 `//div[1]/select[1]` 复合式）回空串 = 不归一——调用侧保持原 `values` 路径，
-// 行为与现状逐字相同。★ 刻意不做后缀/模糊匹配：多 select 嵌套时会选错框，而选错比选不中
-// 更糟（同 B1 理由）
+// select 定位归一（B13）：模型给的 select xpath 两种实证形态——①照抄 nodes 清单的绝对
+// 形态（schema 明示「取自 nodes 结果」）；②XPath 简写（`//select[1]`——内核按「第 N 个
+// select 元素」解）。两种都归一到「当次快照里真实存在的那一个 xpath」；其余形态（含
+// `//div[1]/select[1]` 复合式）回空串 = 不归一——调用侧保持原 values 路径，行为与现状
+// 逐字相同。★ 刻意不做后缀/模糊匹配：多 select 嵌套时会选错框，选错比选不中更糟
 export function resolveSelectXpath(selectXpath: string, nodes: BrowseDomNode[]): string {
   const want: string = selectXpath.trim();
   if (want === '') {
@@ -314,11 +265,10 @@ export function resolveSelectXpath(selectXpath: string, nodes: BrowseDomNode[]):
   return '';
 }
 
-// 解析入口：当次快照取选项面（B5——与 browse_read nodes 同源同口径）→ xpath 归一（B13）
-// → 纯函数配序号（**一次查询**：不再另调 fetchTargetSemantics——它的逐字比对是 P0 缺口，
-// 见任务书 §1.3 #15）。★ 必须走 supplementNodeTexts：本机宿主内核 text 恒缺（debug
-// textLength:0），不补则 option 文字全为空串、匹配恒不中、静默退化成现状（这正是本笔要
-// 修的病）。失败一律回 -1（不抛、不改语义——调用侧保持原 values 路径）
+// 解析入口：当次快照取选项面（与 browse_read nodes 同源同口径）→ xpath 归一 → 纯函数
+// 配序号（**一次查询**，不再另调 fetchTargetSemantics——它的逐字比对是 P0 缺口）。★ 必须
+// 走 supplementNodeTexts：本机宿主内核 text 恒缺，不补则 option 文字全为空串、匹配恒不
+// 中、静默退化成现状（正是本链要修的病）。失败一律回 -1（不抛——调用侧保持原 values 路径）
 async function resolveSelectOptionIndex(selectXpath: string, wantText: string): Promise<number> {
   try {
     const dom: BrowseDomResult | null = await runLiteDom(buildInteractiveRules(),
@@ -339,8 +289,7 @@ async function resolveSelectOptionIndex(selectXpath: string, wantText: string): 
   }
 }
 
-// 动作前取目标节点语义（#1 修复：wants 官方对象形态 {"attributes":["type"]}——2026-09-18
-// 深挖卷 D1，七百三十八 F2 曾把任务书里的对象形态改错成裸字符串，本笔回正；官方页
+// 动作前取目标节点语义（#1 修复：wants 官方对象形态 {"attributes":["type"]}——官方
 // AIPageCommand「wants 类型 = Array<string | Object>」+ getLiteDom 示例对象项）。
 // 定位匹配（#5 起 xpath 双匹配；#12 起三形态统一）：locator 经 resolveListedXpath 成匹配
 // 键——纯数字短序号翻缓存 xpath、xpath 与真 nodeid 原样直通；键以 / 开头按 xpath 配、
@@ -353,8 +302,8 @@ export async function fetchTargetSemantics(locator: string): Promise<ActTarget |
   if (dom === null) {
     return null;
   }
-  // #12：三轮实锤前的旧逻辑（node.id === locator 直配模型长 id）恒落空——模型回传的是凭
-  // 缩写重组的错值（从不在快照里），本函数恒 null = 高危词表层与确认卡说明随 441 同空转
+  // #12：旧逻辑（node.id === locator 直配模型长 id）恒落空——模型回传凭缩写重组的错值
+  //（从不在快照里），本函数恒 null = 高危词表层与确认卡说明随 441 同空转
   const key: string = resolveListedXpath(locator);
   if (key === '') {
     return null;
@@ -365,9 +314,9 @@ export async function fetchTargetSemantics(locator: string): Promise<ActTarget |
     if (hit) {
       let text: string = node.text ?? '';
       if (text === '' && (node.xpath ?? '') !== '') {
-        // #11：内核 text 恒缺 → 单节点 xpath 旁路补标签——高危词表层（isHighRiskAction
-        // 语义层）与确认卡说明（actConfirmSummary）都依赖目标文本，缺文本 = 安全判定半盲；
-        // 旁路失败回空不抛（fail-closed 属性层不受影响，退化 = 旧行为）
+        // #11：内核 text 恒缺 → 单节点 xpath 旁路补标签——高危词表层与确认卡说明都依赖
+        // 目标文本，缺文本 = 安全判定半盲；旁路失败回空不抛（fail-closed 属性层不受影响，
+        // 退化 = 旧行为）
         const probe: BrowseDomNode[] = [{ xpath: node.xpath ?? '' }];
         await supplementNodeTexts(probe);
         text = probe[0].text ?? '';
@@ -381,12 +330,11 @@ export async function fetchTargetSemantics(locator: string): Promise<ActTarget |
   return null;
 }
 
-// 提交控件判据（#7 L1 中轴，跨语言）：显式 type=submit 的 button 与 type∈{submit,image}
-// 的 input 是表单提交控件，type=reset 的 button/input 重置表单清空已填内容同判。★ 无
-// type 的 button 刻意不判——深挖卷 §四方案 B 原文口径即「button[type∈{submit,reset}] +
-// form 内的 button」，form 归属在扁平节点表里不可知，判「无 type = 提交」会让「展开全文/
-// 下一页」类读向按钮（现代 SPA 常为裸 button）大面积误弹卡，与任务书 §1.2 行为表冲突；
-// 英文提交面由 form 内标准写法 type=submit（显式）+ 英文词表兜住
+// 提交控件判据（#7，跨语言中轴）：显式 type=submit 的 button 与 type∈{submit,image} 的
+// input 是表单提交控件，type=reset 的 button/input 重置表单清空已填内容同判。★ 无 type
+// 的 button 刻意不判——form 归属在扁平节点表里不可知，判「无 type = 提交」会让「展开全文/
+// 下一页」类读向按钮（现代 SPA 常为裸 button）大面积误弹卡；英文提交面由显式 type=
+// submit + 英文词表兜住
 export function isSubmitControl(tag: string, type: string): boolean {
   const t: string = (tag ?? '').toLowerCase();
   const v: string = (type ?? '').toLowerCase();
@@ -400,12 +348,11 @@ export function isSubmitControl(tag: string, type: string): boolean {
 }
 
 // 高危判定（纯函数，三层判据）：①动作层——type=password 恒拒（红线 9 凭据面，确认卡也
-// 不放）/ click 的提交控件（#7 起 = isSubmitControl 类别判据，原仅 type=submit）；②语义层
-// ——目标 text/role/tag 归一后命中词表（中英两组，#7 扩；click 与 type 共用：往「发布/
-// 评论/发送」框里输文本同拦）；③例外——scroll/press_key/select 不入高危口径（读向为主；
-// press_key 语义随焦点无法廉价区分，观察项 1）。★ text 入参不参与词表匹配：输入内容是
-// 「要发给站点的内容」非「站点元素的语义」，参与会误拦「帮我删除文件」类正常搜索词——
-// 拦的是目标，不是内容（观察项 5 联动）
+// 不放）/ click 的提交控件（isSubmitControl 类别判据）；②语义层——目标 text/role/tag
+// 归一后命中词表（中英两组，click 与 type 共用：往「发布/评论/发送」框里输文本同拦）；
+// ③例外——scroll/press_key/select 不入高危口径（读向为主；press_key 语义随焦点无法
+// 廉价区分）。★ text 入参不参与词表匹配：输入内容是「要发给站点的内容」非「站点元素的
+// 语义」，参与会误拦「帮我删除文件」类正常搜索词——拦的是目标，不是内容
 export function isHighRiskAction(action: string, target: ActTarget | null, text: string): boolean {
   if (action !== 'click' && action !== 'type') {
     return false;
@@ -428,8 +375,8 @@ export function isHighRiskAction(action: string, target: ActTarget | null, text:
   return false;
 }
 
-// 不可逆档判定（#8）：删除类目标（词表命中 IRREVERSIBLE_WORDS）——确认卡说明串加不可逆
-// 提示。只判 click/type（与高危口径一致——scroll/select 触不到删除语义）
+// 不可逆档判定（#8）：删除类目标（词表命中 IRREVERSIBLE_WORDS）。只判 click/type（与
+// 高危口径一致——scroll/select 触不到删除语义）
 export function isIrreversibleAction(action: string, target: ActTarget | null): boolean {
   if (action !== 'click' && action !== 'type') {
     return false;
@@ -460,9 +407,9 @@ export function sliceIncrement(newText: string, beforeText: string, maxChars: nu
 }
 
 // 动作回执组装（模型阅读面；字段序固定逐字钉）：增量优先口径已在 slice 算好；nodes =
-// 动作后新元素清单（#4 D4：模型续动作的定位值来源，免去额外一轮 browse_read——预算
-// 收敛复用 fitResultBudget 的 nodes 弹出式回缩）；note 终态句——changed=false 报「没有
-// 变化」（防模型重复同一动作死磕，C2；★ #13 起 type 豁免——输入不改写正文是常态）
+// 动作后新元素清单（#4：模型续动作的定位值来源，免去额外一轮 browse_read——预算收敛
+// 复用 fitResultBudget 的 nodes 弹出式回缩）；note 终态句——changed=false 报「没有变化」
+//（防模型重复同一动作死磕；#13 起 type 豁免——输入不改写正文是常态）
 function composeActResult(action: string, page: BrowsePageState, changed: boolean,
   slice: TextSlice, elements: BrowseDomNode[], pendingNote: string): string {
   const rec: Record<string, Object> = {};
@@ -501,9 +448,9 @@ function composeActResult(action: string, page: BrowsePageState, changed: boolea
   return JSON.stringify(out);
 }
 
-// 交互码域中文映射（官方 AIPageResult 码表节选 + 04 篇 A 类边界；文案终态 actionable——
-// 131 带「重新 browse_read」指引，防模型拿过期 id 死磕。420~424 族文案按官方码义「定位值
-// 无效或元素未找到」表述——原「不可点击」措辞与 421「定位值为空」官方义不符，修复笔改）
+// 交互码域中文映射（官方 AIPageResult 码表节选；文案终态 actionable——131 带「重新
+// browse_read」指引，防模型拿过期 id 死磕。420~424 族文案按官方码义「定位值无效或元素
+// 未找到」表述）
 export function mapInteractionCode(code: number): string {
   if (code === 10) {
     return '命令执行成功';
@@ -546,9 +493,9 @@ export function mapInteractionCode(code: number): string {
   return '命令执行失败（码 ' + code + '）';
 }
 
-// 定位族失败码判据（#13 注入兜底触发面，127 组直跑）：115 xpath 参数无效 / 131 目标元素
-// 不存在 / 420~424 click 定位族 / 440~445 type 定位族。110 JSON 无效 / 350 通道族 / 390
-// 参数族刻意不在内——命令本身没被理解时注入同样救不了，原错误面直出
+// 定位族失败码判据（#13 注入兜底触发面）：115 xpath 参数无效 / 131 目标元素不存在 /
+// 420~424 click 定位族 / 440~445 type 定位族。110 JSON 无效 / 350 通道族 / 390 参数族
+// 刻意不在内——命令本身没被理解时注入同样救不了，原错误面直出
 export function isActLocatorFailCode(code: number): boolean {
   return code === 115 || code === 131 || (code >= 420 && code <= 424) || (code >= 440 && code <= 445);
 }
@@ -558,13 +505,11 @@ function clipForDiag(text: string, maxChars: number): string {
   return text.length > maxChars ? text.substring(0, maxChars) + '…' : text;
 }
 
-// 动作后稳定窗口（§2.1-2 事件优先 + 有界采样，P1-3 禁裸 sleep）：每步 300ms——导航中
-//（isReady false，onPageBegin 已复位）只等不采；就绪后采正文（getLiteDom 正文规则 +
-// assemblePageText）与动作前比对，正文或地址变化即稳定（懒加载常需 2~3 轮）；3s 耗尽仍
-// 相同 → changed=false。scroll 即发即忘无导航事件可等，必走采样。稳定后重取新元素清单
-//（#4 D4：回执带定位值，截 60 条与单条 80 字同 nodes 模式口径——上轮执行笔曾按「无消费
-// 者」裁掉，D4 判其为逆范式后回归），随后 commitPage 覆写（convId 沿用原页——动作不换
-// 会话归属；旧 nodeid 与旧正文即弃，红线 4）
+// 动作后稳定窗口（事件优先 + 有界采样，P1-3 禁裸 sleep）：每步 300ms——导航中
+//（isReady false）只等不采；就绪后采正文与动作前比对，正文或地址变化即稳定（懒加载常需
+// 2~3 轮）；3s 耗尽仍相同 → changed=false。scroll 即发即忘无导航事件可等，必走采样。稳定
+// 后重取新元素清单（回执定位值来源，截 60 条与单条 80 字同 nodes 模式口径），随后
+// commitPage 覆写（convId 沿用原页——动作不换会话归属；旧 nodeid 与旧正文即弃，红线 4）
 async function settleAfterAction(before: BrowsePageState): Promise<ActSettleOutcome> {
   const start: number = Date.now();
   let text: string = before.text;
@@ -581,18 +526,16 @@ async function settleAfterAction(before: BrowsePageState): Promise<ActSettleOutc
       if (dom !== null) {
         let fresh: string = assemblePageText(dom.nodes);
         if (fresh === '') {
-          // F3（2026-09-20 真机探针定案）：本机宿主内核文本通道恒空（debug textLength:0），
-          // 原样比较会把每次采样都判成「有变化」（空串 ≠ 上次正文）——真机上「页面内容没有
-          // 变化…」永不出现、反冒出「已变化但无新增」。空串时改取兜底通道（browse_open/act
-          // 尾部同源通道）；两路都空 = 本轮无有效采样，不判变化、继续下一轮（B8）
+          // F3：本机宿主内核文本通道恒空，原样比较会把每次采样都判成「有变化」（空串 ≠
+          // 上次正文）——空串时改取兜底通道（browse_open/act 尾部同源通道）；两路都空 =
+          // 本轮无有效采样，不判变化、继续下一轮（B8）
           fresh = await browseService.runFallbackText();
         }
-        // ★ 2026-09-21 自检轮修（F3 护栏的边界）：原式把地址变化并进空串条件——两路采样
-        // 皆空而真跳转落到正文为空的页（canvas/iframe 主体页、导航后首帧空 body）时，
-        // changed 恒 false 且结尾 commitPage 用旧地址，回执把「跳转成功」误报成「页面内容
-        // 没有变化…不要重复同一操作」。地址变化独立判定（须 dom.url 非空——读不到地址
-        // 时不得当变化），text 随当轮采样取定：新页采样为空即清空，交下方兜底通道重取，
-        // 不回退成旧页正文（错页正文比空正文更误导）
+        // ★ F3 护栏的边界：地址变化独立判定（须 dom.url 非空——读不到地址时不得当变化）
+        //——两路采样皆空而真跳转落到正文为空的页（canvas/iframe 主体页、导航后首帧空
+        // body）时，changed 恒 false 会把「跳转成功」误报成「页面内容没有变化…」。text
+        // 随当轮采样取定：新页采样为空即清空交下方兜底通道重取，不回退旧页正文（错页
+        // 正文比空正文更误导）
         const urlChanged: boolean = dom.url !== '' && dom.url !== url;
         if (urlChanged || (fresh !== '' && fresh !== text)) {
           text = fresh;
@@ -606,11 +549,9 @@ async function settleAfterAction(before: BrowsePageState): Promise<ActSettleOutc
       // 单轮采样失败（页面切换窗口期）不阻断，下一轮再采
     }
   }
-  // #15 正文兜底随 act 链补齐（2026-09-18 真机：#14 回证跳转成功但结果页 browse_read
-  // textLength 0——百度系站点内核 getLiteDom 段落查询 text 恒缺（#11 定案形态，元素清单
-  // 有 xpath 旁路回填而正文链没有），act 导航后新页正文曾以空串 commit。browse_open 链
-  // 同闸门兜底早有且真机实锤百度正文 innerText 可提取——只在退化分支启用（防两套正文
-  // 口径），失败回空串不阻断）
+  // #15 正文兜底随 act 链补齐：#14 回证跳转成功但结果页 textLength 0（百度系内核
+  // getLiteDom 段落查询 text 恒缺——元素清单有 xpath 旁路回填而正文链没有），act 导航后
+  // 新页正文曾以空串 commit——只在退化分支启用（防两套正文口径），失败回空串不阻断
   if (text === '') {
     const fallback: string = await browseService.runFallbackText();
     if (fallback !== '') {
@@ -649,13 +590,13 @@ function actSummary(action: string, target: ActTarget | null): string {
   return '点击 ' + clipped;
 }
 
-// browse_act 主体（排队内执行）：归属终判 → 高危静态拦截（A 笔形态；B 笔后为兜底）→
-// F1 选项面解析（select 专有：高危块之后、注入与发命令之前——见下方接线块）→
+// browse_act 主体（排队内执行）：归属终判 → 高危静态拦截 → F1 选项面解析（select 专有）→
 // #14 注入优先（click/Enter 直投，未成交回退）→ 发命令（press_key 两发连发；#13 定位族
-// 失败且目标过闸配中时 runPageJs 注入兜底〔injectTried 防复注〕；#2③ 失败回传原始命令
-// 与响应）→ type 成交记 xpath（#14）→ settle 重拍覆写 → 增量回执
-async function browseActNow(action: string, params: ActCommandParams): Promise<string> {
-  const ownership: string = browseService.assertOwnership();
+// 失败且目标过闸配中时 runPageJs 注入兜底〔injectTried 防复注〕；#2③ 失败回传原始命令与
+// 响应）→ type 成交记 xpath（#14）→ settle 重拍覆写 → 增量回执。
+// convId 由执行器经执行上下文携带传入
+async function browseActNow(action: string, params: ActCommandParams, convId: string): Promise<string> {
+  const ownership: string = browseService.assertOwnership(convId);
   if (ownership !== '') {
     throw new Error(ownership);
   }
@@ -663,11 +604,10 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
   if (before === null) {
     throw new Error('当前会话没有已打开的页面，请先调用「打开网页」');
   }
-  // #13：注入兜底许可面——只在目标经当次快照配中（下方安全闸全过）后非空；模型自造
-  // 定位未配中时恒空（注入面不开门：未过语义/属性闸的盲 xpath 不许注入——password 恒拒
-  // 红线与词表层的兜底侧门）；scroll/select/press_key 恒空（verifiedXpath 只覆盖
-  // click/type——#14 起 press_key Enter 的注入目标走 lastTypedXpathFor 另一通道，
-  // 与本面无关）
+  // #13：注入兜底许可面——只在目标经当次快照配中（下方安全闸全过）后非空；模型自造定位
+  // 未配中时恒空（未过语义/属性闸的盲 xpath 不许注入——password 恒拒与词表层的兜底侧门）；
+  // scroll/select/press_key 恒空（verifiedXpath 只覆盖 click/type——#14 起 press_key
+  // Enter 的注入目标走 lastTypedXpathFor 另一通道，与本面无关）
   let verifiedXpath: string = '';
   if (action === 'click' || action === 'type') {
     const target: ActTarget | null = await fetchTargetSemantics(
@@ -677,31 +617,35 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
       return JSON.stringify({
         error: '此操作要向密码框输入内容。本应用不允许助手处理任何密码，请让用户自行完成。本次不要重试此操作。' });
     }
-    // fail-closed（#1 D1 安全链）：目标语义查到但属性面缺失（wants 对象项未生效）——
-    // type 无法排除密码框、click 无法判提交控件，不得静默按「非密码/非提交」放行
+    // fail-closed（#1 安全链）：目标语义查到但属性面缺失（wants 对象项未生效）——type
+    // 无法排除密码框、click 无法判提交控件，不得静默按「非密码/非提交」放行
     if (target !== null && !target.attributesSeen) {
       return JSON.stringify({
         error: '页面未返回目标元素的类型属性，无法排除密码框或提交按钮，本次已取消。请让用户自行操作，或仅执行浏览类操作' });
     }
     if (isHighRiskAction(action, target, params.text ?? '')) {
-      // B 单元：批准戳放行（单次消费 + 60s TTL + 会话一致，见 consumeBrowseApproval）；
-      // 自动通过档免戳放行（与预检早退同判据同源——用户已全局放弃逐次确认；短路序 = 本档
-      // 判据在前，开启时不再消费戳）。非本档且无戳 = 兜底静态拒绝（红线 8：桥层弹卡是体验
-      // 层，本判定是安全层，不得删除——绕过确认桥直调执行器的路径必须被此拦住）。密码恒拒
-      // 与 fail-closed 两判据在本分支之前，不受自动通过档影响（红线 9 顺位不动）
-      if (!isBrowseAutoApproveEnabled() && !consumeBrowseApproval()) {
+      // B 单元：批准戳放行（单次消费 + 60s TTL + 会话一致，见 consumeBrowseApproval）。
+      // 免戳判据与预检同源（2026-11-09 会话权限模式笔修）：先经 resolveConfirmMode 归一——
+      // 完全权限（null）全档免戳，与预检直返 null 一致；其余档沿用口径收紧笔「一律放行
+      // 且非不可逆」才免戳（删除族在该档也要人工放行，预检为此档弹卡、用户允许即写戳，本闸
+      // 凭戳放行）。无戳路径（绕过确认桥直调执行器）仍被本判定拦住（红线 8：桥层弹卡是
+      // 体验层，本判定是安全层，不得删除）。★ 两闸判据必须逐字同源——缺一则完全权限下
+      // 预检不弹卡、执行器却因无戳拒（本笔真机前自检实锤的缺陷）。
+      // 密码恒拒与 fail-closed 两判据在本分支之前，不受档位影响（红线 9 顺位不动）
+      const modeNow: string | null = resolveConfirmMode(browseApproveMode());
+      if (!(modeNow === null || (modeNow === APPROVE_MODE_AUTO &&
+          !isIrreversibleAction(action, target))) && !consumeBrowseApproval(convId)) {
         return JSON.stringify({
           error: '此操作会改动网站上的数据（' + actSummary(action, target) +
             '）。本应用不允许助手擅自执行，请告知用户自行完成。本次不要重试此操作。' });
       }
     }
     if (target !== null) {
-      // #13（五轮修复，真机四轮回证）：命中即弃模型原定位值、改用当次快照里的真实定位
-      // 发命令——**xpath 直发优先**（官方一等定位面，走 live DOM 求值）：内核 nodeid
-      // 注册表对本隐形宿主恒坏（真实 id |9/|11 原样回传仍 441/421，#12 的 fresh nodeid
-      // 优先序废止）；内核未返 xpath 时才退 nodeid。模型传的短序号/重组错 id/手写 xpath
-      // 至此全被「当次快照里真实存在的那一个节点」接管；verifiedXpath 落笔 = 注入兜底
-      // 许可面（目标已过闸配中的证据）
+      // #13：命中即弃模型原定位值、改用当次快照里的真实定位发命令——**xpath 直发优先**
+      //（官方一等定位面，走 live DOM 求值：内核 nodeid 注册表对本隐形宿主恒坏，#12 的
+      // fresh nodeid 优先序废止），内核未返 xpath 时才退 nodeid。模型传的短序号/重组错
+      // id/手写 xpath 至此全被「当次快照里真实存在的那一个节点」接管；verifiedXpath
+      // 落笔 = 注入兜底许可面（目标已过闸配中的证据）
       if (target.xpath !== '') {
         params.target = undefined;
         params.xpath = target.xpath;
@@ -714,8 +658,8 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
   }
   // F1（2026-09-20 真机探针定案 + 自检轮补正）：select 传显示文字必回 253（内核 values 走
   // option 内部值匹配，模型只看得见文字）⇒ 把文字换算成序号改发 indexes；配不中/解析失败
-  // 保持原样走 values（行为与现状逐字相同）。两点口径：B3 = 模型显式给了 index 时一律不
-  // 覆盖；B14 = xpath 先过短序号翻译（工具 desc 教模型用短序号，可能填进 xpath 字段）
+  // 保持原样走 values（行为与现状逐字相同）。B3 = 模型显式给了 index 时一律不覆盖；B14 =
+  // xpath 先过短序号翻译（工具 desc 教模型用短序号，可能填进 xpath 字段）
   if (action === 'select' && params.index === undefined && (params.value ?? '') !== '' &&
     params.xpath !== undefined) {
     const locator: string = resolveListedXpath(params.xpath);
@@ -726,12 +670,11 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
       }
     }
   }
-  // #14 注入优先（六轮修复，真机五轮回证）：click 与 Enter 改注入直投、未成交回退内核
-  // 原路——内核定位面双路（nodeid/xpath）对本隐形宿主恒坏（click xpath 直发仍 421），
-  // send_keys 无目标焦点路由恒空转（Enter 两发假成功零效果）。Enter 注入目标 = 最近成交
-  // type 的 xpath（lastTypedXpathFor 带 URL 守卫），lastTyped 未命中不启注入走原
-  // send_keys。★ 宿主 A/B（#6）落地时须回评本优先级——健康宿主上内核 click/send_keys
-  // 是一等面
+  // #14 注入优先（真机五轮回证）：click 与 Enter 改注入直投、未成交回退内核原路——内核
+  // 定位面双路（nodeid/xpath）对本隐形宿主恒坏（click xpath 直发仍 421），send_keys 无
+  // 目标焦点路由恒空转（Enter 两发假成功零效果）。Enter 注入目标 = 最近成交 type 的
+  // xpath（lastTypedXpathFor 带 URL 守卫，防导航后误中），未命中走原 send_keys。★ 宿主
+  // A/B 落地时须回评本优先级——健康宿主上内核 click/send_keys 是一等面
   let injectTried: boolean = false;
   let injectedDone: boolean = false;
   if (action === 'click' && verifiedXpath !== '') {
@@ -754,11 +697,10 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
       if (raw !== '') {
         const code: number = extractCommandCode(raw);
         if (code >= 0 && code !== 10) {
-          // #13 注入兜底（五轮修复）：定位族失败（115/131/42x/44x——nodeid 注册表对本宿主
-          // 恒坏，xpath 直发同路径被拒）且目标已过闸配中（verifiedXpath 非空）→ 同页
-          // runPageJs 注入交付（通道 #9/#11 真机已证）。注入成交 = 本命令视为已执行、续走
-          // settle；未成交落回下方原错误面——失败语义不被吞。#14：injectTried = 本动作
-          // 已注过同脚本（注入优先未成交回退），复注定同果，跳过
+          // #13 注入兜底：定位族失败（115/131/42x/44x）且目标已过闸配中（verifiedXpath
+          // 非空）→ 同页 runPageJs 注入交付（通道真机已证）。注入成交 = 本命令视为已执行、
+          // 续走 settle；未成交落回下方原错误面——失败语义不被吞。#14：injectTried = 本
+          // 动作已注过同脚本（注入优先未成交回退），复注定同果，跳过
           if (!injectTried && verifiedXpath !== '' && isActLocatorFailCode(code)) {
             const injected: boolean = parseActInjectOk(await browseService.runPageJs(
               buildActInjectScript(action, verifiedXpath, params.text ?? '')));
@@ -766,8 +708,8 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
               continue;
             }
           }
-          // #2③ D2 修复：失败回传原始命令与响应（截断）——421 家族可自证（定位值是否
-          // 可解码、内核回了什么），旁注同轮带出
+          // #2③：失败回传原始命令与响应（截断）——421 家族可自证（定位值是否可解码、
+          // 内核回了什么），旁注同轮带出
           const note: string = browseService.takePendingNote();
           throw new Error('页面命令失败：' + mapInteractionCode(code) + '。命令 ' +
             clipForDiag(cmd, 160) + '。响应 ' + clipForDiag(raw, 200) +
@@ -788,11 +730,7 @@ async function browseActNow(action: string, params: ActCommandParams): Promise<s
 }
 
 export class BrowseActExecutor implements ToolExecutor {
-  execute(argsJson: string): Promise<string> {
-    if (!isSearchServiceEnabled()) {
-      return Promise.resolve(JSON.stringify({
-        error: '联网搜索已关闭。请让用户在 设置 → 联网搜索 打开总开关后重试，本次不要重复操作网页。' }));
-    }
+  execute(argsJson: string, ctx: ToolExecutionContext): Promise<string> {
     let action: string = '';
     const params: ActCommandParams = {};
     try {
@@ -830,12 +768,12 @@ export class BrowseActExecutor implements ToolExecutor {
         params.deltaY = deltaYRaw;
       }
     } catch (e) {
-      return Promise.resolve(JSON.stringify({ error: '参数解析失败' }));
+      return Promise.resolve(JSON.stringify({ error: toolArgsParseErrorText(argsJson) }));
     }
-    // 定位值路由（#5，2026-09-18 拍板②）：target 以 / 开头 = xpath 形态 → 转官方 xpath
-    // 参数（一等定位面，规避 nodeid 陈旧与 421 家族）；否则原样按 nodeid 发。★ 只拒空串，
-    // 禁「必须含 |」形态硬拒——官方 nodeid「仅在可生成节点标识时返回」且主 frame 节点
-    // 形态未文档化，硬拒会误杀合法 id（深挖卷 §6 #2 自检修订口径）
+    // 定位值路由（#5）：target 以 / 开头 = xpath 形态 → 转官方 xpath 参数（一等定位面，
+    // 规避 nodeid 陈旧与 421 家族）；否则原样按 nodeid 发。★ 只拒空串，禁「必须含 |」
+    // 形态硬拒——官方 nodeid「仅在可生成节点标识时返回」且主 frame 节点形态未文档化，
+    // 硬拒会误杀合法 id
     if (params.target !== undefined && params.target.startsWith('/')) {
       params.xpath = params.target;
       params.target = undefined;
@@ -866,22 +804,29 @@ export class BrowseActExecutor implements ToolExecutor {
     if (action === 'scroll' && params.deltaY === undefined) {
       params.deltaY = BROWSE_ACT_SCROLL_DEFAULT_DELTA;
     }
-    // 归属前置粗判（快速失败零排队；次序钉：守卫 → 解析路由 → 校验 → 归属 → 排队）+ 排队内
-    // 终判（防等待期间换页）——BrowseReadExecutor 同款双判形制。旧旁注排空：动作可能触发
-    // 导航，防上一页旁注串页（openPage 内同款语义）
-    const ownership: string = browseService.assertOwnership();
+    // 归属前置粗判（快速失败零排队；次序钉：守卫 → 解析路由 → 校验 → 归属 → 排队）+
+    // 排队内终判（防等待期间换页）——BrowseReadExecutor 同款双判形制。旧旁注排空：
+    // 动作可能触发导航，防上一页旁注串页（openPage 内同款语义）
+    const ownership: string = browseService.assertOwnership(ctx.conversationId);
     if (ownership !== '') {
       return Promise.resolve(JSON.stringify({ error: ownership }));
     }
     browseService.clearPendingNote();
-    return browseService.queued((): Promise<string> => browseActNow(action, params))
+    // S4 出队口取消核验（V5）：排队等待期间发起 run 停止/离页则放弃副作用（同 open/read 路径）
+    return browseService.queued((): Promise<string> => {
+      if (!ctx.isRunActive(ctx.runId)) {
+        return Promise.resolve(JSON.stringify({
+          cancelled: true, error: '本次操作已随停止或离开会话取消，未执行' }));
+      }
+      return browseActNow(action, params, ctx.conversationId);
+    })
       .catch((e: Object): string => {
         hilog.warn(DOMAIN, TAG, '操作网页失败：%{public}s', (e as Error).message);
         const rec: Record<string, Object> = {};
-        rec['error'] = (e as Error).message;
-        // 失败回执附诊断信号（2026-09-20 笔试 #A）：act 路径页面在，归属由工厂内
-        // assertOwnership 终判（无页/跨会话返 null 不附）
-        const signals: Record<string, Object> | null = browseFailureSignals('');
+        rec['error'] = toolErrorText(e);
+        // 失败回执附诊断信号：act 路径页面在，归属由工厂内 assertOwnership 终判
+        //（无页/跨会话返 null 不附）
+        const signals: Record<string, Object> | null = browseFailureSignals('', ctx.conversationId);
         if (signals !== null) {
           rec['signals'] = signals;
         }
@@ -891,8 +836,8 @@ export class BrowseActExecutor implements ToolExecutor {
 }
 
 // ── P2 注册面常量（ToolTypes 注册时引用——desc 三段 = 何时用 / 做什么 / 安全声明，安全
-//    句逐字落任务书 §2.2；修复笔 #4/#5 口径：回执带新元素清单（nodes 字段）+ xpath 定位
-//    面开放。schema 只暴露 target（id 或 xpath 形态）与 select 专用 xpath——禁模型自造）──
+//    句逐字落任务书 §2.2；回执带新元素清单（nodes 字段）+ xpath 定位面开放。schema 只
+//    暴露 target（id 或 xpath 形态）与 select 专用 xpath——禁模型自造）──
 
 export const BROWSE_ACT_DESC: string =
   'Act on the page currently open by browse_open: scroll it, click an element, type text into ' +
@@ -924,10 +869,10 @@ export const BROWSE_ACT_SCHEMA: string =
   '"deltaY":{"type":"number","description":"scroll 动作的滚动距离，负值向下滚动，一屏约 -600"}},' +
   '"required":["action"]}';
 
-// ═══ B 单元（确认卡与放行，2026-09-18 任务书 §2.6）：批准戳 + 桥层预检 + 拒绝文案 ═══
+// ═══ B 单元（确认卡与放行）：批准戳 + 桥层预检 + 拒绝文案 ═══
 // 高危动作的放行形态 = 「桥层弹卡（用户点允许）→ 写批准戳 → 执行器凭戳执行」三拍；执行器
 // 内的高危判定与无戳拒绝**不得删除**（红线 8：绕过桥直调执行器的路径必须被兜底拦住）。
-// 戳= AppStorage 短命值（单次消费 + 60s TTL + 会话一致，三条件缺一不可——红线 10）
+// 戳 = AppStorage 短命值（单次消费 + 60s TTL + 会话一致，三条件缺一不可——红线 10）
 
 export const BROWSE_APPROVAL_KEY: string = 'browseActApproval';
 export const BROWSE_APPROVAL_TTL_MS: number = 60000;
@@ -938,8 +883,8 @@ interface BrowseApprovalStamp {
   at: number;
 }
 
-// 写戳（用户点「允许一次」时由工具轮域调用；convId 由**调用方在用户作答那一刻快照**传入
-// ——桥内不自读中转键，负向钉守）
+// 写戳（用户点「允许一次」时由工具轮域调用；convId 由调用方在用户作答那一刻快照传入
+//——桥内不自读中转键，负向钉守）
 export function grantBrowseApproval(convId: string): void {
   if (convId === '') {
     return;
@@ -948,8 +893,9 @@ export function grantBrowseApproval(convId: string): void {
   AppStorage.setOrCreate(BROWSE_APPROVAL_KEY, JSON.stringify(stamp));
 }
 
-// 消费戳（执行器高危分支调；三条件全过才放行且消费即删——单次、同会话、未过期）
-export function consumeBrowseApproval(): boolean {
+// 消费戳（执行器高危分支调；三条件全过才放行且消费即删——单次、同会话、未过期）。
+// currentConvId 由执行上下文携带传入
+export function consumeBrowseApproval(currentConvId: string): boolean {
   const raw: string = AppStorage.get<string>(BROWSE_APPROVAL_KEY) ?? '';
   if (raw === '') {
     return false;
@@ -962,8 +908,7 @@ export function consumeBrowseApproval(): boolean {
     if (typeof convIdRaw !== 'string' || typeof atRaw !== 'number') {
       return false;
     }
-    const active: string = AppStorage.get<string>(CHAT_ACTIVE_CONV_KEY) ?? '';
-    if (active === '' || active !== (convIdRaw as string)) {
+    if (currentConvId === '' || currentConvId !== (convIdRaw as string)) {
       return false; // 跨会话戳不放行（红线 10 会话一致）
     }
     return Date.now() - (atRaw as number) <= BROWSE_APPROVAL_TTL_MS;
@@ -989,27 +934,28 @@ function actConfirmSummary(action: string, target: ActTarget): string {
   return '点击「' + clipped + '」';
 }
 
-// 桥层预检（任务书 §2.6-2 `browseActNeedsConfirm` 的落地形态）：返回**待确认说明串＋档位**
-// 二元组——null = 无需确认；非 null = 需弹确认卡且 text 即卡面说明（工具轮域写入卡消息
-// toolConfirmText）、level 即档位（写入 toolConfirmLevel，卡面档位徽章与风险块的判据）。
-// ★ 与书内形态的两处偏离（实测必要，理由入变更记录）：①**异步**——args 可见面只有
-// action 与定位值，目标文本与 HTML 属性都在页面上，须入队取一次目标语义（getLiteDom）
-// 才能做判定；②**精判而非词表粗判**——args 里没有任何可匹配词表的文本，取「click/type
-// 一律弹卡」式超集会与任务书 §1.2 行为表冲突（点「加载更多」「下一页」是读向动作，不该
-// 弹卡）。判定复用执行器同一 isHighRiskAction（安全层仍在执行器，此处只决定弹不弹卡）。
-// #5 起 target 以 / 开头按 xpath 匹配（路由与执行器同口径）；#8 不可逆档 = 档位字段
-// CONFIRM_LEVEL_IRREVERSIBLE（总授权默认取推荐档——保留确认卡，不退恒拒）。
-// 五类直接 null 不放行弹卡：参数不足（执行器报参数错）/ 目标过期（执行器报 131 指引重取）/
-// type=password（红线 9 恒拒，确认卡也不放）/ 无页或跨会话（执行器报归属错误）
-export async function browseActNeedsConfirm(argsJson: string): Promise<ConfirmPrompt | null> {
-  // 自动通过档早退（2026-09-18 七百五十五节，第二道降压阀）：用户在 设置 → 工具调用 →
-  // 「网页高危操作确认」选「自动通过」时直接回 null——不弹卡，工具轮自动回落并行执行路，
-  // 高危动作与读向动作同路。执行器高危分支有同判据免戳放行（两闸同判据同源，缺一则执行器
-  // 因无戳按红线 8 拒绝）；密码恒拒与 fail-closed 顺位在执行器闸内更前，不受本档影响（红线
-  // 9）。现读 = 切换即时生效，下一个动作按新值；已弹出的确认卡不受影响仍需作答
-  if (isBrowseAutoApproveEnabled()) {
-    return null;
-  }
+// 桥层预检（browseActNeedsConfirm 的落地形态）：返回**待确认说明串＋档位**二元组——
+// null = 无需确认；非 null = 需弹确认卡且 text 即卡面说明（写入 toolConfirmText）、
+// level 即档位（写入 toolConfirmLevel，卡面档位徽章与风险块的判据）。
+// ★ 与任务书形态的两处偏离（实测必要）：①**异步**——args 可见面只有 action 与定位值，
+// 目标文本与 HTML 属性都在页面上，须入队取一次目标语义才能判定；②**精判而非词表粗判**
+//——args 里没有任何可匹配词表的文本，「click/type 一律弹卡」式超集会把「加载更多」
+//「下一页」类读向动作也弹卡。判定复用执行器同一 isHighRiskAction（安全层仍在执行器，
+// 此处只决定弹不弹卡）。target 以 / 开头按 xpath 匹配（路由与执行器同口径）；不可逆档 =
+// CONFIRM_LEVEL_IRREVERSIBLE（保留确认卡不退恒拒）。五类直接 null 不放行弹卡：参数不足
+//（执行器报参数错）/ 目标过期（执行器报 131 指引重取）/ type=password（红线 9 恒拒，
+// 确认卡也不放）/ 无页或跨会话（执行器报归属错误）。ctx：预检随链携带执行上下文
+//（归属前置粗判用）
+export async function browseActNeedsConfirm(argsJson: string,
+  ctx: ToolExecutionContext): Promise<ConfirmPrompt | null> {
+  // 档位三态（口径收紧笔改判：原 auto 在参数解析前早退）：auto **不再早退**——先照常
+  // 精判档位，「一律放行」只豁免写操作档（豁免与 route 归一在 routeConfirmPrompt 单点），
+  // 删除族（不可逆档）在该档也进确认链——先送审、人再点头（审批槽未配置时闸 escalate
+  // 落同一张人工卡）。执行器高危分支免戳判据同步收窄（两闸同判据同源，缺一则执行器因
+  // 无戳按红线 8 拒绝）；密码恒拒与 fail-closed 顺位在执行器闸内更前（红线 9）。现读 =
+  // 切换即时生效；一次读、多处用（豁免判据与 route 同源同值——分次读会在两次读之间被
+  // 用户切档时产生错配）
+  const mode: string = browseApproveMode();
   let action: string = '';
   let target: string = '';
   try {
@@ -1033,15 +979,22 @@ export async function browseActNeedsConfirm(argsJson: string): Promise<ConfirmPr
     return null;
   }
   try {
-    return await browseService.queued(
-      (): Promise<ConfirmPrompt | null> => browseActPreflightNow(action, target));
+    const hit: ConfirmPrompt | null = await browseService.queued(
+      (): Promise<ConfirmPrompt | null> => browseActPreflightNow(action, target, ctx.conversationId));
+    if (hit === null) {
+      return null;
+    }
+    // 归一单点（口径收紧笔）：豁免与去向都在 routeConfirmPrompt——auto 只豁免写档，ask 直指
+    // 人工卡、model 交审批闸；精判函数只出说明串与档位，职责不混
+    return routeConfirmPrompt(hit, mode);
   } catch (e) {
     return null;
   }
 }
 
-async function browseActPreflightNow(action: string, target: string): Promise<ConfirmPrompt | null> {
-  if (browseService.assertOwnership() !== '' || browseService.currentPage() === null) {
+async function browseActPreflightNow(action: string, target: string,
+  convId: string): Promise<ConfirmPrompt | null> {
+  if (browseService.assertOwnership(convId) !== '' || browseService.currentPage() === null) {
     return null;
   }
   const semantic: ActTarget | null = await fetchTargetSemantics(target);
@@ -1057,7 +1010,7 @@ async function browseActPreflightNow(action: string, target: string): Promise<Co
   const page: BrowsePageState | null = browseService.currentPage();
   const title: string = page !== null && page.title !== '' ? page.title : '当前页面';
   const summary: string = '在「' + title + '」上' + actConfirmSummary(action, semantic);
-  // 不可逆信息不再拼进说明串：卡面风险块按 level 渲染同义文案（拼此会逐字重复）
+  // 不可逆信息不拼进说明串：卡面风险块按 level 渲染同义文案（拼此会逐字重复）
   const level: string =
     isIrreversibleAction(action, semantic) ? CONFIRM_LEVEL_IRREVERSIBLE : CONFIRM_LEVEL_WRITE;
   return { text: summary, level: level };

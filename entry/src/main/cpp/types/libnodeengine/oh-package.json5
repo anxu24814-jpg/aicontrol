@@ -1,0 +1,6 @@
+{
+  "name": "libnodeengine.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "Node.js 运行时引擎（napi 入口 start / status）"
+}

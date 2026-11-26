@@ -1,13 +1,12 @@
-// 助手高级设定二级页（2026-09-01 高级设定，领导指令照参考图复刻）：编辑页「高级设定」
-// 分区卡 push 进入，param = 助手 id。
-// · 页面形态：PageShell 自包壳（助手域各页同款，顶部光感 = 渐变模糊常显；卡宽
-//   CARD_PANEL_WIDTH 项目基准）+ 两张行卡（编辑页分区卡形制：icon + 标题 + 副行摘要）：
+// 助手高级设定二级页：编辑页「高级设定」分区卡 push 进入，param = 助手 id。
+// · 页面形态：PageShell 自包壳（助手域各页同款）+ 两张行卡（icon + 标题 + 副行摘要）：
 //   「采样参数」（thermometer——SDK 符号表实锤）→ 三级页 AssistantSamplingPage（四开关
 //   卡：覆盖温度/Top P/双惩罚）；「上下文与输出」（text_alignleft）→ 三级页
 //   AssistantContextPage（上下文消息数/最大输出长度两滑块卡）。
 // · 副行摘要（DB 单一真源）：采样 = '默认'/'已覆盖 N 项'（四采样键开启数）；上下文 =
-//   '不限制 · 无限制'/'20 条 · 64K'（formatTokenText 缩写）。三级页保存返回经 onPop
-//   重拉（三级页无改动无参 pop 不触发——摘要无需刷新，坑17 契约）。
+//   '不限制 · 不限制'/'20 条 · 64K'（formatTokenText 缩写；输出侧与上下文侧统一为
+//  「不限制」）。三级页保存返回经 onPop 重拉（三级页无改动无参 pop 不触发——摘要无需
+//   刷新，坑17 契约）。
 // · 返回 = onBackPressed 拦截 pop({saved:true})（本页无保存动作的完成返回——触发编辑页
 //   onPop 刷「高级设定」卡摘要；未改动返回 reload 幂等无害）。
 import { ConfigurationConstant } from '@kit.AbilityKit';
@@ -15,7 +14,7 @@ import { PageShell } from '../../common/PageShell';
 import {
   ROUTE_ASSISTANT_ADVANCED_PAGE, ROUTE_ASSISTANT_CONTEXT_PAGE, ROUTE_ASSISTANT_SAMPLING_PAGE
 } from '../../common/RouteNames';
-import { CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor } from '../../common/Theme';
+import { CARD_PANEL_WIDTH, cardBg, cardDescColor, cardTitleColor, CARD_RADIUS } from '../../common/Theme';
 import {
   AssistantAdvancedParams, parseAssistantAdvancedParams
 } from '../../common/providers/AiTypes';
@@ -30,6 +29,8 @@ interface AdvancedSummary {
 
 @Component
 export struct AssistantAdvancedPage {
+  // 页面存活守卫：置位后迟到异步回调不写状态、不碰 UI；写库等数据层意图照常完成
+  private departed: boolean = false;
   @Prop topPad: number = 0;
   @Prop bottomPad: number = 0;
   pathStack: NavPathStack = new NavPathStack();
@@ -39,8 +40,7 @@ export struct AssistantAdvancedPage {
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
 
   aboutToAppear(): void {
-    // push 参数（getParamByName 取末条，ModelSettingsPage 同款姿势）：string id（分区卡
-    // push 必非空；空/缺参 = 异常路径弹回）
+    // push 参数（getParamByName 取末条）：string id（空/缺参 = 异常路径弹回）
     const params: Array<string> =
       this.pathStack.getParamByName(ROUTE_ASSISTANT_ADVANCED_PAGE) as Array<string>;
     const param: string | undefined = params.length > 0 ? params[params.length - 1] : undefined;
@@ -57,13 +57,16 @@ export struct AssistantAdvancedPage {
   private refreshSummary(): void {
     queryAssistant(this.rowId)
       .then((row): void => {
+        if (this.departed) {
+          return;
+        }
         if (row === null) {
           return; // 助手已删（异常路径）——保留当前摘要不炸链路
         }
         const parsed: AssistantAdvancedParams | null =
           parseAssistantAdvancedParams(row.advancedParams);
         let samplingText: string = '默认';
-        let contextText: string = '不限制 · 无限制';
+        let contextText: string = '不限制 · 不限制';
         if (parsed !== null) {
           const count: number =
             (parsed.temperature !== undefined ? 1 : 0) + (parsed.topP !== undefined ? 1 : 0) +
@@ -75,11 +78,14 @@ export struct AssistantAdvancedPage {
           const ctx: number = parsed.contextCount ?? 0;
           const out: number = parsed.maxOutput ?? 0;
           contextText = (ctx === 0 ? '不限制' : ctx + ' 条') + ' · ' +
-            (out === 0 ? '无限制' : formatTokenText(out));
+            (out === 0 ? '不限制' : formatTokenText(out));
         }
         this.summary = { samplingText: samplingText, contextText: contextText };
       })
       .catch((e: Object): void => {
+        if (this.departed) {
+          return;
+        }
         this.getUIContext().getPromptAction().showToast({ message: '高级设定摘要读取失败：' + (e as Error).message });
       });
   }
@@ -97,71 +103,92 @@ export struct AssistantAdvancedPage {
     });
   }
 
-  // 采样参数行卡（★ 无参 @Builder 内直读 this.summary——坑16 值参快照不自刷，@State 变更
-  // 须驱动重建）
+  // 采样参数行卡（★ 无参 @Builder 内直读 this.summary——坑16 值参快照不自刷）。
+  // ★ 蒙层边距统一：卡底 Column + 四周 padding 4，蒙层距卡外圈 4vp（与组卡口径一致；
+  // 下同，两卡同笔）
   @Builder
   SamplingCard() {
-    Row({ space: 12 }) {
-      SymbolGlyph($r('sys.symbol.thermometer'))
-        .fontSize(20)
-        .fontColor([cardTitleColor()])
-      Column({ space: 4 }) {
-        Text('采样参数')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(cardTitleColor())
-          .width('100%')
-        Text(this.summary.samplingText)
-          .fontSize(13)
-          .fontColor(cardDescColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
+    Column() {
+      Button() {
+        Row({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.thermometer'))
+            .fontSize(20)
+            .fontColor([cardTitleColor()])
+          Column({ space: 4 }) {
+            Text('采样参数')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .width('100%')
+            Text(this.summary.samplingText)
+              .fontSize(13)
+              .fontColor(cardDescColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .padding(12)
+        .alignItems(VerticalAlign.Center)
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .type(ButtonType.Normal)
+      .width('100%')
+      .backgroundColor(Color.Transparent)
+      .borderRadius(CARD_RADIUS)
+      .onClick((): void => {
+        this.openSamplingPage();
+      })
     }
     .width(CARD_PANEL_WIDTH)
-    .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
-    .alignItems(VerticalAlign.Center)
-    .onClick((): void => {
-      this.openSamplingPage();
-    })
+    .borderRadius(CARD_RADIUS)
+    .padding(4)
   }
 
   // 上下文与输出行卡（形制同上）
   @Builder
   ContextCard() {
-    Row({ space: 12 }) {
-      SymbolGlyph($r('sys.symbol.text_alignleft'))
-        .fontSize(20)
-        .fontColor([cardTitleColor()])
-      Column({ space: 4 }) {
-        Text('上下文与输出')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(cardTitleColor())
-          .width('100%')
-        Text(this.summary.contextText)
-          .fontSize(13)
-          .fontColor(cardDescColor())
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
+    Column() {
+      Button() {
+        Row({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.text_alignleft'))
+            .fontSize(20)
+            .fontColor([cardTitleColor()])
+          Column({ space: 4 }) {
+            Text('上下文与输出')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(cardTitleColor())
+              .width('100%')
+            Text(this.summary.contextText)
+              .fontSize(13)
+              .fontColor(cardDescColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .padding(12)
+        .alignItems(VerticalAlign.Center)
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .type(ButtonType.Normal)
+      .width('100%')
+      .backgroundColor(Color.Transparent)
+      .borderRadius(CARD_RADIUS)
+      .onClick((): void => {
+        this.openContextPage();
+      })
     }
     .width(CARD_PANEL_WIDTH)
-    .padding(16)
     .backgroundColor(cardBg(this.appColorMode))
-    .borderRadius(16)
-    .alignItems(VerticalAlign.Center)
-    .onClick((): void => {
-      this.openContextPage();
-    })
+    .borderRadius(CARD_RADIUS)
+    .padding(4)
   }
 
   @Builder
@@ -179,6 +206,7 @@ export struct AssistantAdvancedPage {
     .height('100%')
     .align(Alignment.TopStart)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .scrollBar(BarState.Off)
   }
 
   build() {
@@ -194,5 +222,9 @@ export struct AssistantAdvancedPage {
         this.Content();
       }
     })
+  }
+
+  aboutToDisappear(): void {
+    this.departed = true;
   }
 }

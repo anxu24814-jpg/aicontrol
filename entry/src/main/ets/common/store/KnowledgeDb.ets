@@ -1,43 +1,37 @@
-// 知识库存储域（2026-09-21 世界书知识库首版，任务书-世界书知识库-20260921 执行）：三张表
-// 的行读写——knowledge_books（库本体，一行一本）与 knowledge_entries（条目，一行一条）与
-// knowledge_files（条目附件，见下「条目附件」条）。
-// 表结构/迁移在 ChatDbMigrate.ets（v43）。**用户可见名一律「知识库」**，「世界书 / World
-// Book / Lorebook」只出现在文档与代码注释里，不上屏。
-//
+// 知识库存储域：三张表行读写——knowledge_books（一行一本）/ knowledge_entries（一行一条）
+// / knowledge_files（条目附件，见下「条目附件」条）。表结构/迁移在 ChatDbMigrate.ets（v43）。
+// **用户可见名一律「知识库」**，「世界书 / World Book / Lorebook」只出现在文档与注释里，不上屏。
 // 语义：
-// · 绑定粒度 = 全局库 + 助手引用：库与条目都存全局（本域三表），助手只存「启用了哪几本」的
-//   id 集合（assistants.knowledge 列，解析/序列化在 KnowledgeText）。一本书可被多个助手复用。
-// · 条目三字段 = 名称 title + 关键词 keywords（可选）+ 正文 content（v39 另加来源标签
-//   source：'user' 用户写 / 'assistant' 助手写，只在 create 时定；UI 只标非默认行）。关键词
-//   **只参与检索加权与展示，不接触发逻辑**——本版姿态是工具化检索（模型经 search_knowledge
-//   按需查阅），没有关键词自动注入；字段先备好，将来若做关键词触发姿态免二次迁移。
-// · ★ 条目附件（2026-09-23 知识库文件笔）：knowledge_files 第三张表，**一行一个条目的纯文本
-//   附件**（挂条目不挂库，与技能附件挂技能行同构；件名条目内唯一，是模型取件的唯一定位键）。
-//   三条边界与建表 SQL 注释互指：只存文本 / 不进检索索引与注入块 / 归属用 entryId。级联两路
-//   都同事务：deleteEntry（单条）与 deleteBookCascade（整库，先预取条目 id 再 IN 删件）。
-// · 写入口两路（2026-09-21 知识库第二笔下本起）：条目编辑页（source='user'）与
-//   manage_knowledge 工具（source='assistant'）——两路共用下列原语，**本层不判权限也不判
-//   上限**（页面与工具各自拦，见「上限与校验一律在调用方」条）。附件同理：写口 = 文件编辑页
-//   与上传链（均在设置页），工具面只读（read_file）。
-// · 本层只存取，**上限与内容校验一律在调用方**（页面拦新建、工具侧不判）——两处判定 =
-//   两处漂移面，是既有域件（MemoryDb/SkillDb）已立的注释纪律。★ 例外 = 附件写入侧的两道硬拒
-//  （件名查重 + 件数上限）：件名唯一是「模型按名取件」的正确性前提，不能靠调用方自觉
-//  （SkillDb.insertSkillFile 同款口径）。
+// · 绑定粒度 = 全局库 + 助手引用：库与条目都存全局，助手只存「启用了哪几本」的 id 集合
+//   （assistants.knowledge 列，解析/序列化在 KnowledgeText）；一本书可被多个助手复用。
+// · 条目三字段 = title + keywords（可选）+ content（v39 另加来源标签 source：'user' 用户写 /
+//   'assistant' 助手写，只在 create 时定，UI 只标非默认行）。关键词**只参与检索加权与展示，
+//   不接触发逻辑**——本版姿态是工具化检索（search_knowledge 按需查阅），字段先备好免二次迁移。
+// · ★ 条目附件：knowledge_files 一行一个条目的纯文本附件（挂条目不挂库；件名条目内唯一 =
+//   模型取件唯一定位键）。三条边界与建表 SQL 注释互指：只存文本 / 不进检索索引与注入块 /
+//   归属用 entryId。级联两路都同事务：deleteEntry 与 deleteBookCascade（先预取条目 id 再 IN 删件）。
+// · 写入口两路：条目编辑页（source='user'）与 manage_knowledge 工具（source='assistant'）——
+//   两路共用下列原语；附件写口 = 文件编辑页与上传链（均在设置页），工具面只读（read_file）。
+// · 本层只存取，**上限与内容校验一律在调用方**（两处判定 = 两处漂移面，MemoryDb/SkillDb 同款
+//   纪律）。★ 例外 = 写入侧完整性硬拒（件名查重 + 件数上限 + insertEntry 父书校验——子行写入
+//   前校验父行在场，防悬空孤儿行）：正确性前提不能靠调用方自觉。
 // · 删库级联：deleteBookCascade 在**一个事务**内删该书全部条目 + 其附件 + 清各助手 knowledge
-//   列的引用 + 删书行（clearKnowledgeRefInAssistants 是模块内私有件、带 db 句柄、**不另起事务**
-//   ——照 SkillDb.clearSkillRefInAssistants 形态；嵌套事务语义不赌）。
+//   列引用 + 删书行（clearKnowledgeRefInAssistants 是模块内私有件、带 db 句柄、不另起事务——
+//   嵌套事务语义不赌）。
 // · 纪元键 KNOWLEDGE_LIST_TICK_KEY：写点 = 本域各写函数收口处（增删改保存后广播）；
-//   读点 = 库页 @StorageProp @Watch 重拉（SKILL_LIST_TICK_KEY 同款先例）。
+//   读点 = 库页 @StorageProp @Watch 重拉。
 import { relationalStore } from '@kit.ArkData';
 import { nextMessageId, sharedRdbStore } from './ChatDb';
+import { runWriteQueued } from './DbWriteQueue';
 import { KNOWLEDGE_FILE_MAX_COUNT, KnowledgeBookItem, KnowledgeEntryItem,
   parseEnabledKnowledgeIds,
   serializeEnabledKnowledgeIds } from '../KnowledgeText';
+// 库页搜索的 LIKE 模式构造（零 import 叶子件；本域只用它的转义——模式唯一来源，禁本层另写一份）
+import { buildLikePattern } from '../LibrarySearch';
 
 // 库总数上限（宪法「数据有界」；库页「＋」新建键 push 前拦截 + 中文提示）
 export const KNOWLEDGE_BOOK_MAX: number = 20;
-// 单库条目数上限（书详情页「＋」拦截；100 × 单条 6000 字 = 单库正文上界 60 万字符——正文
-// 上限 2026-09-21 第二笔放宽至 6000 后的随形口径）
+// 单库条目数上限（书详情页「＋」拦截；100 × 单条 6000 字 = 单库正文上界 60 万字符）
 export const KNOWLEDGE_ENTRY_MAX: number = 100;
 // 单助手可启用知识库数上限（启用页第 11 个开关面直接拒；照 SKILL_ENABLED_MAX 口径）
 export const KNOWLEDGE_ENABLED_MAX: number = 10;
@@ -60,30 +54,66 @@ export interface KnowledgeEntryRow {
   title: string;
   keywords: string; // 可选；'' = 只按名称与正文检索
   content: string;
-  // 来源标签（v39，2026-09-21 知识库第二笔下本）：'user' = 用户写 / 'assistant' = 助手写。
-  // ★ 只在 create 时定（insertEntry 第三形参），update 不改（来源不随后续编辑翻转——技能库
-  // skills.source 同口径）。★ 本列**只活在行层与 UI 层**：纯函数域的 KnowledgeEntryItem
-  // 刻意不带它（那是检索打分与拼装的最小形态，来源字段与打分无关），故 toEntryItem 不透传
+  // 来源标签（v39）：'user' = 用户写 / 'assistant' = 助手写。★ 只在 create 时定（insertEntry
+  // 第三形参），update 不改（来源不随编辑翻转）。★ 本列**只活在行层与 UI 层**：纯函数域的
+  // KnowledgeEntryItem 刻意不带它（来源字段与打分无关），故 toEntryItem 不透传
   source: string;
+  // 注入三配置（v51，与 prompt_templates v7 三列同形制，值域常量单源 = RequestInject 的
+  // INJECT_*）：injectRole = 注入身份（'system'/'user'/'assistant'——★ system 恒系统位，
+  // position 对该身份无消费意义）；injectPosition = 注入位置（'head' 系统位 / 'depth' 深度位，
+  // 仅非 system 身份消费）；injectDepth = 深度 0~4。默认 system/head/0 = 升级后零注入差异
+  injectRole: string;
+  injectPosition: string;
+  injectDepth: number;
+  // 条目启用开关（v51）：1 = 启用（默认）/ 0 = 整条停用——自动注入与 search_knowledge 检索
+  // 双隐藏；manage_knowledge 管理清单不过滤（管理面要看得见停用条目）。本列在行层、UI 层与
+  // 纯函数域三处透传（清单页角标与条目卡开关消费；编辑页不载入/写回本列）
+  enabled: number;
+  // 触发精度四列（v63）：matchCase / matchWhole（0/1，=== 1 视为真）/ priority（0~9999，默认
+  // 100）/ scanDepth（1~20，默认 8）。值域与归一单源 = KnowledgeText 常量族与 clampKnowledge*
+  //（本层不另持第二份上限）；写入侧入参可选带默认（manage_knowledge 不传即落默认），脏值
+  // 归一位 = ChatSnapshotCtrl 构造 candidate 时 clampKnowledgeScan
+  matchCase: number;
+  matchWhole: number;
+  priority: number;
+  scanDepth: number;
   createdAt: number;
   updatedAt: number;
   sortOrder: number;
 }
 
-// 条目写入入参（id/时间戳/归属由本域生成或调用方传入；title 必填由页面校验——本层不判）
+// 条目写入入参（id/时间戳/归属由本域生成；title 必填由页面校验——本层不判）。★ v51 四字段
+// 与 v63 四键**可选带默认**：不传即落默认（manage_knowledge 工具链零改动兼容）；enabled 由
+// 条目卡 setEntryEnabled 单列写入——编辑页不传该字段，updateEntry 见 undefined 即保留原值。
+// 默认值兜底在写入侧（insertEntry/updateEntry），调用方不必重复判空
 export interface KnowledgeEntryInput {
   title: string;
   keywords: string;
   content: string;
+  injectRole?: string;
+  injectPosition?: string;
+  injectDepth?: number;
+  enabled?: number;
+  // 触发精度四键（v63）可选带默认：不传即落 0/0/100/8；updateEntry 同 v51 姿势「在场才入
+  // bucket」——缺这一层会让「工具面只改标题」的调用把其余配置冲成 undefined
+  matchCase?: number;
+  matchWhole?: number;
+  priority?: number;
+  scanDepth?: number;
 }
 
-// ── 纯函数域形态适配（知识库文本域是零 import 域——不引 DB 类型是它的可测性前提，而 ArkTS
-//    禁结构类型（arkts-no-structural-typing）故行不能直喂纯函数；本组 = 单点适配，
-//    ToolMemoryManage.toManageItems / SkillBriefItem 同款口径）──
+// ── 纯函数域形态适配（知识库文本域是零 import 域，ArkTS 禁结构类型故行不能直喂纯函数；
+//    本组 = 单点适配，ToolMemoryManage.toManageItems 同款口径）──
 export function toEntryItem(row: KnowledgeEntryRow): KnowledgeEntryItem {
   return {
     id: row.id, bookId: row.bookId, title: row.title, keywords: row.keywords,
-    content: row.content, createdAt: row.createdAt, sortOrder: row.sortOrder
+    content: row.content, createdAt: row.createdAt, sortOrder: row.sortOrder,
+    // v51 注入配置与启用开关透传（source 仍不透传——刻意最小形态的边界不变）
+    injectRole: row.injectRole, injectPosition: row.injectPosition,
+    injectDepth: row.injectDepth, enabled: row.enabled,
+    // 触发精度四字段透传：导出链 serializeKnowledgeBook 消费，漏传 =「编辑页配好了，导出文件里没有」
+    matchCase: row.matchCase, matchWhole: row.matchWhole,
+    priority: row.priority, scanDepth: row.scanDepth
   };
 }
 
@@ -105,6 +135,8 @@ export function toBookItems(rows: KnowledgeBookRow[]): KnowledgeBookItem[] {
 
 const BOOK_COLUMNS: string[] = ['id', 'name', 'createdAt', 'updatedAt', 'sortOrder'];
 const ENTRY_COLUMNS: string[] = ['id', 'bookId', 'title', 'keywords', 'content', 'source',
+  'injectRole', 'injectPosition', 'injectDepth', 'enabled',
+  'matchCase', 'matchWhole', 'priority', 'scanDepth',
   'createdAt', 'updatedAt', 'sortOrder'];
 
 function requireStore(): relationalStore.RdbStore {
@@ -129,6 +161,14 @@ function readEntryRow(result: relationalStore.ResultSet): KnowledgeEntryRow {
     keywords: result.getString(result.getColumnIndex('keywords')),
     content: result.getString(result.getColumnIndex('content')),
     source: result.getString(result.getColumnIndex('source')),
+    injectRole: result.getString(result.getColumnIndex('injectRole')),
+    injectPosition: result.getString(result.getColumnIndex('injectPosition')),
+    injectDepth: result.getLong(result.getColumnIndex('injectDepth')),
+    enabled: result.getLong(result.getColumnIndex('enabled')),
+    matchCase: result.getLong(result.getColumnIndex('matchCase')),
+    matchWhole: result.getLong(result.getColumnIndex('matchWhole')),
+    priority: result.getLong(result.getColumnIndex('priority')),
+    scanDepth: result.getLong(result.getColumnIndex('scanDepth')),
     createdAt: result.getLong(result.getColumnIndex('createdAt')),
     updatedAt: result.getLong(result.getColumnIndex('updatedAt')),
     sortOrder: result.getLong(result.getColumnIndex('sortOrder'))
@@ -190,9 +230,9 @@ export async function queryBook(id: string): Promise<KnowledgeBookRow | null> {
   }
 }
 
-// 新建知识库（库页「＋」→ 命名弹窗保存；上限守卫与名称非空校验在调用方——本层不判）。
-// sortOrder = 当前 max + 1 落卡底（★ COALESCE 显式兜底空表：MAX 空表返回一行 NULL，
-// 值读取对 NULL 行为官方无文档——不赌未文档化行为，SQL 层显式归 0，insertMemory 同款）
+// 新建知识库（上限守卫与名称非空校验在调用方——本层不判）。sortOrder = 当前 max + 1 落卡底
+//（★ COALESCE 显式兜底空表——MAX 空表返回一行 NULL，值读取对 NULL 行为官方无文档，不赌，
+// insertMemory 同款）
 export async function insertBook(name: string): Promise<KnowledgeBookRow> {
   const now: number = Date.now();
   const maxResult: relationalStore.ResultSet = await requireStore().querySql(
@@ -233,49 +273,52 @@ export async function renameBook(id: string, name: string): Promise<void> {
   }
 }
 
-// 删除知识库并级联（库页行菜单「删除」→ 确认弹窗后）：同一事务内 = 删该书全部条目 + 其
-// 附件（knowledge_files，2026-09-23 文件笔接线）+ 清各助手 knowledge 列对该书的引用 + 删书行，
-// 保证「库与其条目、附件同生共死」不产生半删状态（deleteSkill 事务三件套同款）。留着引用 id
-// 会让启用页的计数指着不存在的东西——清列是主通道，读取侧「启用 ∩ 现存」过滤是第二道保险。
-// ★ 附件删除走「先预取条目 id（事务外一次只读）→ 事务内 in('entryId', ids) 删」：谓词层没有
-// JOIN，两段式是既有先例（AssistantDb.deleteAssistantCascade 同款形态）；条目 id 数量上界 =
-// 单库 100 条，IN 列表代价可忽略
+// 删除知识库并级联（确认弹窗后）：同一事务内 = 删该书全部条目 + 其附件 + 清各助手 knowledge
+// 列对该书的引用 + 删书行，保证「库与条目、附件同生共死」不产生半删状态。留着引用 id 会让
+// 启用页计数指着不存在的东西——清列是主通道，读取侧「启用 ∩ 现存」过滤是第二道保险。
+// ★ 附件删除走「事务内先预取条目 id → in('entryId', ids) 删」（预取在 beginTransaction 之后
+//——删的是同一事务快照内的条目集，消「预取后开事务前有新条目写入」漏删窗口；谓词层无
+// JOIN，两段式保留）；条目 id 上界 = 单库 100 条，IN 列表代价可忽略。本域附件是纯文本行、
+// 无盘上文件（content 列）——不涉「文件须 commit 后删」红线
 export async function deleteBookCascade(id: string): Promise<void> {
-  const db: relationalStore.RdbStore = requireStore();
-  const entryPredicates: relationalStore.RdbPredicates =
-    new relationalStore.RdbPredicates('knowledge_entries');
-  entryPredicates.equalTo('bookId', id);
-  const entryResult: relationalStore.ResultSet = await db.query(entryPredicates, ['id']);
-  const entryIds: string[] = [];
-  try {
-    while (entryResult.goToNextRow()) {
-      entryIds.push(entryResult.getString(entryResult.getColumnIndex('id')));
+  // ★ 2026-09-29 写串行链入链（条目预取本就在事务内，整事务段入链）
+  return runWriteQueued('deleteBookCascade', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    db.beginTransaction();
+    try {
+      const entryPredicates: relationalStore.RdbPredicates =
+        new relationalStore.RdbPredicates('knowledge_entries');
+      entryPredicates.equalTo('bookId', id);
+      const entryResult: relationalStore.ResultSet = await db.query(entryPredicates, ['id']);
+      const entryIds: string[] = [];
+      try {
+        while (entryResult.goToNextRow()) {
+          entryIds.push(entryResult.getString(entryResult.getColumnIndex('id')));
+        }
+      } finally {
+        entryResult.close();
+      }
+      if (entryIds.length > 0) {
+        const filePredicates: relationalStore.RdbPredicates =
+          new relationalStore.RdbPredicates('knowledge_files');
+        filePredicates.in('entryId', entryIds);
+        await db.delete(filePredicates);
+      }
+      const entryDeletePredicates: relationalStore.RdbPredicates =
+        new relationalStore.RdbPredicates('knowledge_entries');
+      entryDeletePredicates.equalTo('bookId', id);
+      await db.delete(entryDeletePredicates);
+      const bookPredicates: relationalStore.RdbPredicates =
+        new relationalStore.RdbPredicates('knowledge_books');
+      bookPredicates.equalTo('id', id);
+      await db.delete(bookPredicates);
+      await clearKnowledgeRefInAssistants(db, id);
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
     }
-  } finally {
-    entryResult.close();
-  }
-  db.beginTransaction();
-  try {
-    if (entryIds.length > 0) {
-      const filePredicates: relationalStore.RdbPredicates =
-        new relationalStore.RdbPredicates('knowledge_files');
-      filePredicates.in('entryId', entryIds);
-      await db.delete(filePredicates);
-    }
-    const entryDeletePredicates: relationalStore.RdbPredicates =
-      new relationalStore.RdbPredicates('knowledge_entries');
-    entryDeletePredicates.equalTo('bookId', id);
-    await db.delete(entryDeletePredicates);
-    const bookPredicates: relationalStore.RdbPredicates =
-      new relationalStore.RdbPredicates('knowledge_books');
-    bookPredicates.equalTo('id', id);
-    await db.delete(bookPredicates);
-    await clearKnowledgeRefInAssistants(db, id);
-    db.commit();
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
-  }
+  });
 }
 
 // ── 条目 ──
@@ -315,11 +358,10 @@ export async function countEntries(bookId: string): Promise<number> {
   }
 }
 
-// 多库各自条数（**两处行副行**用：知识库库页行「N 条条目」+ 助手知识库页行副标题；一次
-// GROUP BY 查回，**禁逐库查**——P1-2 轻量检测纪律）。入参空数组直接返回空表（禁拼 IN ()
-// ——非法 SQL，同 queryEntriesByBookIds）。返回 Map<bookId, count>：查不到 = 该库 0 条
-//（调用方按 0 兜底）。★ 工具 list 动作**不消费本函数**（头行「共 M 条条目」的 M = 条目池
-// 行数，逐库明细只印书名与标题——2026-09-21 自检轮订正原注释的错挂消费方）
+// 多库各自条数（知识库库页行「N 条条目」+ 助手知识库页行副标题两处用；一次 GROUP BY 查回，
+// **禁逐库查**——P1-2）。入参空数组直接返回空表（禁拼 IN ()——非法 SQL）。返回
+// Map<bookId, count>：查不到 = 该库 0 条（调用方按 0 兜底）。★ 工具 list 动作**不消费本函数**
+//（头行 M = 条目池行数，逐库明细只印书名与标题）
 export async function countEntriesOfBooks(bookIds: string[]): Promise<Map<string, number>> {
   const counts: Map<string, number> = new Map<string, number>();
   if (bookIds.length === 0) {
@@ -338,6 +380,29 @@ export async function countEntriesOfBooks(bookIds: string[]): Promise<Map<string
     result.close();
   }
   return counts;
+}
+
+// 关键词在**各库条目**上的命中统计（库页搜索第二路——「我记得写过 X，在哪本书里」；第一路 =
+// 书名内存匹配 LibrarySearch.filterBooksByKeyword）。一条 GROUP BY 查回每本命中条数，禁逐库查
+//（P1-2；书 ≤20、条目 ≤2000 有界）。命中字段三枚 = title / keywords / content——与内存侧口径
+// 一致，不是只搜正文。模式由 buildLikePattern 出（% _ \ 已转义，配对 ESCAPE '\'）；空词不查库
+// 由调用方决定。返回 Map<bookId, 命中条数>：缺席 = 该书 0 条命中（调用方按 0 兜底）
+export async function countEntryHitsByBook(keyword: string): Promise<Map<string, number>> {
+  const hits: Map<string, number> = new Map<string, number>();
+  const pattern: string = buildLikePattern(keyword);
+  const result: relationalStore.ResultSet = await requireStore().querySql(
+    "SELECT bookId, COUNT(*) AS n FROM knowledge_entries WHERE title LIKE ? ESCAPE '\\' " +
+    "OR keywords LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' GROUP BY bookId",
+    [pattern, pattern, pattern]);
+  try {
+    while (result.goToNextRow()) {
+      hits.set(result.getString(result.getColumnIndex('bookId')),
+        result.getLong(result.getColumnIndex('n')));
+    }
+  } finally {
+    result.close();
+  }
+  return hits;
 }
 
 // 单条条目（条目编辑页回填；查不到返回 null——调用方按新增兜底提示，queryMemory 同款）
@@ -359,17 +424,18 @@ export async function queryEntry(id: string): Promise<KnowledgeEntryRow | null> 
   }
 }
 
-// 多库条目池（工具检索面：一次 SQL 取启用知识库的全部条目——**禁逐库查**，P1-2）。
-// 排序三键与 queryEntries 同源（打分并列项要按卡序稳定）。★ 入参空数组直接返回空表：
-// 空 IN 列表在 SQL 层是**非法语句**会抛错，而「未启用任何知识库」是正常态（调用方另有
-// 引导串），不能让它变成异常路径
+// 多库条目池（工具检索面：一次 SQL 取启用知识库全部条目——禁逐库查，P1-2）。排序三键与
+// queryEntries 同源（打分并列项按卡序稳定）。★ 入参空数组直接返回空表：空 IN 列表是非法
+// 语句会抛错，而「未启用任何知识库」是正常态（调用方另有引导串），不能让它变异常路径
 export async function queryEntriesByBookIds(bookIds: string[]): Promise<KnowledgeEntryRow[]> {
   if (bookIds.length === 0) {
     return [];
   }
   const placeholders: string = bookIds.map((item: string): string => '?').join(',');
   const result: relationalStore.ResultSet = await requireStore().querySql(
-    'SELECT id, bookId, title, keywords, content, source, createdAt, updatedAt, sortOrder ' +
+    'SELECT id, bookId, title, keywords, content, source, injectRole, injectPosition, ' +
+    'injectDepth, enabled, matchCase, matchWhole, priority, scanDepth, ' +
+    'createdAt, updatedAt, sortOrder ' +
     'FROM knowledge_entries WHERE bookId IN (' + placeholders + ') ' +
     'ORDER BY sortOrder ASC, createdAt ASC, id ASC', bookIds);
   const rows: KnowledgeEntryRow[] = [];
@@ -383,13 +449,20 @@ export async function queryEntriesByBookIds(bookIds: string[]): Promise<Knowledg
   return rows;
 }
 
-// 新增条目（条目编辑页保存新增态，与 manage_knowledge 工具 create 共用本原语）：
-// sortOrder = **该库内** max + 1 落卡底（同 insertMemory 的 COALESCE 兜底与查后即写非事务
-// 窗口——并发极端下并列由三键兜底序收敛）。★ source 为第三形参**必传**（'user' = 用户在
-// 编辑页写 / 'assistant' = 助手经工具写）：不给默认值 = 每个调用点都必须显式表态来源，
-// 防新人加调用点时静默落一个错来源（取值面与语义见 KnowledgeEntryRow.source 注释）
+// 新增条目（条目编辑页保存新增态与 manage_knowledge 工具 create 共用）：
+// ★ 父书校验（形制照 insertEntryFile）：书可能在编辑页/工具轮打开期间被删（deleteBookCascade），
+// 此时写入会落一行无父悬空条目——删库级联只按现存书清行，这行此后没有任何删除链能清掉，
+// 宁可在写入前拒。
+// sortOrder = **该库内** max + 1 落卡底（同 insertMemory 的 COALESCE 兜底与非事务窗口——并发
+// 极端下并列由三键兜底序收敛）。★ source 为第三形参**必传**（'user' 用户在编辑页写 /
+// 'assistant' 助手经工具写）：不给默认值 = 每个调用点都必须显式表态来源，防新人加调用点时
+// 静默落错来源
 export async function insertEntry(bookId: string, input: KnowledgeEntryInput,
   source: string): Promise<KnowledgeEntryRow> {
+  const owner: KnowledgeBookRow | null = await queryBook(bookId);
+  if (owner === null) {
+    throw new Error('知识库不存在或已删除，写入未生效');
+  }
   const now: number = Date.now();
   const maxResult: relationalStore.ResultSet = await requireStore().querySql(
     'SELECT COALESCE(MAX(sortOrder), 0) AS m FROM knowledge_entries WHERE bookId = ?', [bookId]);
@@ -408,28 +481,67 @@ export async function insertEntry(bookId: string, input: KnowledgeEntryInput,
     keywords: input.keywords,
     content: input.content,
     source: source,
+    // v51 注入配置四值：入参可选带默认（缺省 system/head/0/1——工具链零改动即落默认）
+    injectRole: input.injectRole ?? 'system',
+    injectPosition: input.injectPosition ?? 'head',
+    injectDepth: input.injectDepth ?? 0,
+    enabled: input.enabled ?? 1,
+    // 触发精度四值（v63）：入参可选带默认（缺省 0/0/100/8——默认值即旧行为，方案 §一）
+    matchCase: input.matchCase ?? 0,
+    matchWhole: input.matchWhole ?? 0,
+    priority: input.priority ?? 100,
+    scanDepth: input.scanDepth ?? 8,
     createdAt: now,
     updatedAt: now,
     sortOrder: nextOrder
   };
   const bucket: relationalStore.ValuesBucket = {
     'id': full.id, 'bookId': full.bookId, 'title': full.title, 'keywords': full.keywords,
-    'content': full.content, 'source': full.source, 'createdAt': full.createdAt,
-    'updatedAt': full.updatedAt, 'sortOrder': full.sortOrder
+    'content': full.content, 'source': full.source,
+    'injectRole': full.injectRole, 'injectPosition': full.injectPosition,
+    'injectDepth': full.injectDepth, 'enabled': full.enabled,
+    'matchCase': full.matchCase, 'matchWhole': full.matchWhole,
+    'priority': full.priority, 'scanDepth': full.scanDepth,
+    'createdAt': full.createdAt, 'updatedAt': full.updatedAt, 'sortOrder': full.sortOrder
   };
   await requireStore().insert('knowledge_entries', bucket);
   return full;
 }
 
-// 修改条目（条目编辑页保存编辑态，与 manage_knowledge 工具 update 共用本原语；卡序下编辑
-// 原地不动——sortOrder 不写，updatedAt 仅刷新为数据字段）。★ **不写 source**（bucket 恰四键
-// ——来源标签只在 create 时定，编辑不翻转；技能库 updateSkill 同款）。0 行 affected 抛中文错
-// = P0-1 假成功防御（updateMemoryContent 同款）
+// 修改条目（编辑页保存编辑态与 manage_knowledge 工具 update 共用；卡序下编辑原地不动——
+// sortOrder 不写）。★ **不写 source**（来源只在 create 时定，编辑不翻转）。★ v51 四注入键
+// **入参在场才入 bucket**（工具链不传 = 原值保留；页面编辑链显式传 = 全量更新）。0 行 affected
+// 抛中文错 = P0-1 假成功防御
 export async function updateEntry(id: string, input: KnowledgeEntryInput): Promise<void> {
   const bucket: relationalStore.ValuesBucket = {
     'title': input.title, 'keywords': input.keywords, 'content': input.content,
     'updatedAt': Date.now()
   };
+  if (input.injectRole !== undefined) {
+    bucket['injectRole'] = input.injectRole;
+  }
+  if (input.injectPosition !== undefined) {
+    bucket['injectPosition'] = input.injectPosition;
+  }
+  if (input.injectDepth !== undefined) {
+    bucket['injectDepth'] = input.injectDepth;
+  }
+  if (input.enabled !== undefined) {
+    bucket['enabled'] = input.enabled;
+  }
+  // 触发精度四键同 v51 姿势：在场才入 bucket（工具面不传 = 保留原值；页面/导入链显式传）
+  if (input.matchCase !== undefined) {
+    bucket['matchCase'] = input.matchCase;
+  }
+  if (input.matchWhole !== undefined) {
+    bucket['matchWhole'] = input.matchWhole;
+  }
+  if (input.priority !== undefined) {
+    bucket['priority'] = input.priority;
+  }
+  if (input.scanDepth !== undefined) {
+    bucket['scanDepth'] = input.scanDepth;
+  }
   const predicates: relationalStore.RdbPredicates =
     new relationalStore.RdbPredicates('knowledge_entries');
   predicates.equalTo('id', id);
@@ -439,34 +551,48 @@ export async function updateEntry(id: string, input: KnowledgeEntryInput): Promi
   }
 }
 
-// 删除单条条目（书详情页行菜单「删除」→ 确认弹窗后；manage_knowledge 的 delete 动作同用）：
-// 同一事务内 = 删该条目的附件（knowledge_files 级联，2026-09-23 文件笔接线）+ 删条目行——
-// 条目没了附件就是孤儿（既不进任何清单，也再没有取件入口：件名定位要先定位到条目），
-// 与删技能级联删附件同款语义
-export async function deleteEntry(id: string): Promise<void> {
-  const db: relationalStore.RdbStore = requireStore();
-  const filePredicates: relationalStore.RdbPredicates =
-    new relationalStore.RdbPredicates('knowledge_files');
-  filePredicates.equalTo('entryId', id);
-  const entryPredicates: relationalStore.RdbPredicates =
+// 条目卡启用开关（自编辑页迁入条目卡）：单列 UPDATE 不整行重写——避免与编辑页保存并发时
+// 覆盖 title/keywords/content；0 行 affected 抛中文错 = P0-1 假成功防御
+export async function setEntryEnabled(id: string, enabled: boolean): Promise<void> {
+  const bucket: relationalStore.ValuesBucket = { 'enabled': enabled ? 1 : 0 };
+  const predicates: relationalStore.RdbPredicates =
     new relationalStore.RdbPredicates('knowledge_entries');
-  entryPredicates.equalTo('id', id);
-  db.beginTransaction();
-  try {
-    await db.delete(filePredicates);
-    await db.delete(entryPredicates);
-    db.commit();
-  } catch (e) {
-    db.rollBack();
-    throw e as Error;
+  predicates.equalTo('id', id);
+  const affected: number = await requireStore().update(bucket, predicates);
+  if (affected === 0) {
+    throw new Error('目标条目不存在（已被删除），操作未生效');
   }
 }
 
-// ── 条目附件文件（knowledge_files，2026-09-23 知识库文件笔）──
-// 一行一个条目的纯文本附件。写入口 = 文件编辑页（新建/上传两条路都经它保存）；**工具面只读**
-// （manage_knowledge 的 read_file）。与技能附件族（SkillDb 附件节）刻意各持一份：形态同、
-// 域不同（件名查重的范围是「本条目内」，上限常量、行形状、级联点都各自一套）。
-// 上限 KNOWLEDGE_FILE_MAX_COUNT / 内容 KNOWLEDGE_FILE_CONTENT_MAX 同 KnowledgeText 常量单源。
+// 删除单条条目（书详情页行菜单「删除」与 manage_knowledge delete 同用）：同一事务内删该条目
+// 的附件 + 删条目行——条目没了附件就是孤儿（不进任何清单，也没有取件入口：件名定位要先定位
+// 到条目），与删技能级联删附件同款语义
+export async function deleteEntry(id: string): Promise<void> {
+  // ★ 2026-09-29 写串行链入链
+  return runWriteQueued('deleteEntry', async (): Promise<void> => {
+    const db: relationalStore.RdbStore = requireStore();
+    const filePredicates: relationalStore.RdbPredicates =
+      new relationalStore.RdbPredicates('knowledge_files');
+    filePredicates.equalTo('entryId', id);
+    const entryPredicates: relationalStore.RdbPredicates =
+      new relationalStore.RdbPredicates('knowledge_entries');
+    entryPredicates.equalTo('id', id);
+    db.beginTransaction();
+    try {
+      await db.delete(filePredicates);
+      await db.delete(entryPredicates);
+      db.commit();
+    } catch (e) {
+      db.rollBack();
+      throw e as Error;
+    }
+  });
+}
+
+// ── 条目附件文件（knowledge_files）──
+// 一行一个条目的纯文本附件。写入口 = 文件编辑页（新建/上传两路都经它保存）；**工具面只读**
+//（manage_knowledge 的 read_file）。与技能附件族刻意各持一份：形态同、域不同（件名查重范围 =
+// 本条目内，上限常量、行形状、级联点都各自一套）。上限/内容常量同 KnowledgeText 单源。
 
 export const KNOWLEDGE_FILE_FULL_TIP: string = '每个条目最多附 ' + KNOWLEDGE_FILE_MAX_COUNT +
   ' 个文件，请先删除不再需要的文件。';
@@ -549,14 +675,13 @@ export async function countEntryFiles(entryId: string): Promise<number> {
   }
 }
 
-// 新增附件（文件编辑页「新建文件」保存 /「上传文件」入库）：先校验父条目仍在 → 查同名
-//（excludeId='' = 不排除自己）→ 件数上限 → sortOrder = 卡底。三处拒绝都抛中文错，调用方
-// toast（P0-1 不静默）。
-// ★ 父条目校验（2026-09-23 自检补）：条目可能在文件编辑页打开期间被别处删掉（工具轮
-// manage_knowledge 的 delete 等，页内栈挡不住），此时写入会落一行无父的悬空附件行——删条目与
-// 删库都只按「现存条目 id」清件，这行此后没有任何删除链能清掉，故宁可在写入前拒。
-// ★ 另两道硬拒放在本层而不在页面：件名是本条目内「模型按名取件」的唯一定位键，同名两件会让
-// 「取到哪一份」不可预期（SkillDb.insertSkillFile 同款理由）；页面只做入口拦截与文案提示
+// 新增附件（文件编辑页「新建文件」/「上传文件」保存）：先校验父条目仍在 → 查同名（excludeId=''
+// = 不排除自己）→ 件数上限 → sortOrder = 卡底。三处拒绝都抛中文错（P0-1 不静默）。
+// ★ 父条目校验：条目可能在文件编辑页打开期间被别处删掉（工具轮 delete 等，页内栈挡不住），
+// 此时写入会落悬空附件行——删条目与删库都只按「现存条目 id」清件，这行此后没有任何删除链
+// 能清掉，宁可在写入前拒。★ 件名查重与件数上限放本层不放页面：件名是「模型按名取件」唯一
+// 定位键，同名两件会让「取到哪一份」不可预期（SkillDb.insertSkillFile 同款理由）；页面只做
+// 入口拦截与文案提示
 export async function insertEntryFile(entryId: string, name: string,
   content: string): Promise<KnowledgeFileRow> {
   const owner: KnowledgeEntryRow | null = await queryEntry(entryId);
@@ -644,11 +769,10 @@ async function assertEntryFileNameFree(entryId: string, name: string,
   }
 }
 
-// 清助手引用（调用方须在事务内调——本函数不自开事务，便于与删库同一原子单位；
-// SkillDb.clearSkillRefInAssistants 同款形态）：全表读 assistants 的 (id, knowledge) →
-// 逐行解析剔除目标 id → **仅命中行**回写（未命中不写：删库不该动没启用过它的助手行）。
-// JSON 列无法用 SQL 谓词下推「是否含该 id」，故只能全表遍历——助手数是用户手建小数据集
-//（个位到十位），代价可忽略
+// 清助手引用（调用方须在事务内调——本函数不自开事务，便于与删库同一原子单位）：全表读
+// assistants 的 (id, knowledge) → 逐行解析剔除目标 id → **仅命中行**回写（未命中不写：删库
+// 不该动没启用过它的助手行）。JSON 列无法用 SQL 谓词下推「是否含该 id」，只能全表遍历——
+// 助手数是用户手建小数据集，代价可忽略
 async function clearKnowledgeRefInAssistants(db: relationalStore.RdbStore,
   bookId: string): Promise<void> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('assistants');

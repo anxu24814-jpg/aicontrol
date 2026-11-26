@@ -1,12 +1,15 @@
-// 推荐问题 chips 行（2026-09-19 推荐问题功能，任务书-推荐问题-20260919；挂点 =
-// ChatMessageItem 助手气泡体 Column 内、底栏之后——底栏挂气泡体 Column 内、双渲染器之后
-// 同位）：横排可换行，胶囊形制照 ModelCapsCard chips 先例（选项类 chips 非按钮，不适用
-// 行内按钮形制条款——宪法「行内操作按钮官方形制」条 chips 豁免口径）。纯展示 + 点击上行
-//（onPick → ChatMessageItem.onSuggestSend → ChatPageContent 复用 onSend(text, []) 直接
-// 发送，决策 2；发送后建议随「发送即清空」收起）。无选中态——点击即发送的一次性选项，
-// 与 ModelCapsCard 能力多选 chips 的「选中固定」语义不同，故不接 @Link 双态
+// 推荐问题 chips 行（挂点 = ChatMessageItem 助手气泡体 Column 内、底栏之后同位）：横排可
+// 换行，胶囊形制照 ModelCapsCard chips 先例（选项类 chips 非按钮，不适用行内按钮形制条款
+// ——宪法「行内操作按钮官方形制」条 chips 豁免口径）；底色与助手气泡统一同取 cardBg
+//（挂点在气泡卡外下方，同底色即同族观感；原 badgeBg 灰底已退役）。纯展示 + 点击上行
+//（onPick → ChatMessageItem.onSuggestSend → ChatPageContent 复用 onSend(text, []) 直接发送；
+// 发送后建议随「发送即清空」收起）。无选中态——点击即发送的一次性选项，与 ModelCapsCard
+// 能力多选 chips 的「选中固定」语义不同，故不接 @Link 双态
 import { ConfigurationConstant } from '@kit.AbilityKit';
-import { badgeBg, cardDescColor } from '../../common/Theme';
+import { cardBg, cardDescColor } from '../../common/Theme';
+import { PREF_CARD_ALPHA_LEVEL_KEY, CARD_ALPHA_DEFAULT } from '../../common/AppPreferences';
+import { FONT_BODY_DEFAULT, PREF_FONT_BODY_KEY, PREF_FONT_LIB_KEY, bodyFontFamily }
+  from '../../common/ChatFont';
 
 @Component
 export struct ChatSuggestBar {
@@ -17,19 +20,30 @@ export struct ChatSuggestBar {
   onPick: (text: string) => void = () => {
   };
   @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
+  // 卡底透明度档位只读订阅：胶囊底色表达式显式传参建依赖
+  @StorageProp(PREF_CARD_ALPHA_LEVEL_KEY) cardAlphaLevel: number = CARD_ALPHA_DEFAULT;
+  // 正文字体两键 @StorageProp 自订阅：推荐语属会话页消息显示面，随正文字体选择即时变化；
+  // 家族串推导单源 = ChatFont.bodyFontFamily
+  @StorageProp(PREF_FONT_BODY_KEY) fontBodyValue: string = FONT_BODY_DEFAULT;
+  @StorageProp(PREF_FONT_LIB_KEY) fontLibJson: string = '';
+
+  private resolveBodyFamily(): string {
+    return bodyFontFamily(this.fontBodyValue, this.fontLibJson);
+  }
 
   build() {
     Flex({ wrap: FlexWrap.Wrap }) {
-      // 键 = 下标 + 原文（★ 2026-09-20 修复 D2-2）：原文来自模型输出，解析链只压空白与
-      // 截 10 字、零去重（两条不同建议可被归并成同一串），裸原文作键可重复——ArkUI 要求
-      // ForEach 键唯一；键内保原文 = 原文变则键变（不复用旧组件，避免下标键的陈旧渲染）
+      // 键 = 下标 + 原文（修复 D2-2）：原文来自模型输出，解析链只压空白与截 10 字、零去重
+      //（两条不同建议可被归并成同一串），裸原文作键可重复——ArkUI 要求 ForEach 键唯一；
+      // 键内保原文 = 原文变则键变（不复用旧组件，避免下标键的陈旧渲染）
       ForEach(this.suggestions, (item: string) => {
         Text(item)
           .fontSize(13)
+          .fontFamily(this.resolveBodyFamily())
           .fontColor(cardDescColor())
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           .borderRadius(14)
-          .backgroundColor(badgeBg(this.appColorMode))
+          .backgroundColor(cardBg(this.appColorMode, this.cardAlphaLevel))
           .margin({ right: 8, bottom: 4 })
           .onClick((): void => {
             this.onPick(item);

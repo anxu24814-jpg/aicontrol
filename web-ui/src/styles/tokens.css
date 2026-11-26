@@ -1,0 +1,220 @@
+/* 设计 token 单源（2026-10-22 视觉重做版）。
+   色值来源 = docs/规范-视觉色板与徽标.md（身份六色 × 双档）与手机端 Theme.ets 的中性面；
+   本文件是 Web 端唯一允许出现 hex 的地方（markdown.css 只引变量）。
+
+   主题解析：index.html 的内联脚本在首帧前把 data-theme 落成 light / dark（cookie 记忆 +
+   系统偏好兜底），因此这里三块各司其职——
+     :root                       → 浅色默认值
+     @media (prefers-color-scheme: dark) + :not([data-theme='light'])
+                                 → 无脚本 / 首帧前的深色兜底
+     :root[data-theme='dark']    → 用户显式选深色
+   语义变量（第二段）只写一次，深浅差异全部收敛在原始色块里。 */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --c-bg: #ffffff;
+  --c-side: #f7f7f9;
+  --c-elevated: #ffffff;
+  --c-subtle: #f4f4f6;
+  --c-input: #f2f2f5;
+  --c-hover: rgba(15, 15, 20, 0.055);
+  --c-active: rgba(15, 15, 20, 0.09);
+  --c-border: rgba(15, 15, 20, 0.1);
+  --c-border-soft: rgba(15, 15, 20, 0.06);
+  --c-text-1: #17171a;
+  --c-text-2: #5e5e66;
+  --c-text-3: #8e8e96;
+  --c-accent: #1d4ed8;
+  --c-accent-strong: #1740b6;
+  --c-accent-soft: #e8eeff;
+  --c-accent-soft-2: #dce8ff;
+  --c-on-accent: #ffffff;
+  --c-user-bubble: #e6edff;
+  --c-user-text: #16233c;
+  --c-danger: #b03a66;
+  --c-danger-soft: #fbe4ec;
+  --c-ok: #0e7c86;
+  --c-warn: #a85b1e;
+  --c-warn-soft: #fdebd5;
+  --c-code-bg: #f7f7f9;
+  --c-code-head: #efeff2;
+  --c-scrim: rgba(12, 12, 16, 0.32);
+
+  --identity-0-bg: #e3ecff; --identity-0-fg: #2c5fd6;
+  --identity-1-bg: #e9e3ff; --identity-1-fg: #5c46c8;
+  --identity-2-bg: #d9f2ee; --identity-2-fg: #0e7c86;
+  --identity-3-bg: #fdebd5; --identity-3-fg: #a85b1e;
+  --identity-4-bg: #fbe4ec; --identity-4-fg: #b03a66;
+  --identity-5-bg: #e8ebef; --identity-5-fg: #4e5a69;
+
+  --hl-keyword: #5c46c8;
+  --hl-string: #0e7c86;
+  --hl-comment: #8e8e96;
+  --hl-number: #a85b1e;
+  --hl-title: #2c5fd6;
+  --hl-attr: #b03a66;
+  --hl-built: #4e5a69;
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-2: 0 6px 20px rgba(16, 24, 40, 0.07), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-3: 0 18px 48px rgba(16, 24, 40, 0.14), 0 2px 6px rgba(16, 24, 40, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --c-bg: #1b1b1e;
+    --c-side: #141416;
+    --c-elevated: #232326;
+    --c-subtle: #26262a;
+    --c-input: #26262a;
+    --c-hover: rgba(255, 255, 255, 0.06);
+    --c-active: rgba(255, 255, 255, 0.1);
+    --c-border: rgba(255, 255, 255, 0.12);
+    --c-border-soft: rgba(255, 255, 255, 0.07);
+    --c-text-1: #f2f2f4;
+    --c-text-2: #a8a8b0;
+    --c-text-3: #7c7c85;
+    --c-accent: #8faeff;
+    --c-accent-strong: #aec4ff;
+    --c-accent-soft: #1e2740;
+    --c-accent-soft-2: #26324f;
+    --c-on-accent: #0b1526;
+    --c-user-bubble: #2a3550;
+    --c-user-text: #eaf0ff;
+    --c-danger: #f3a3be;
+    --c-danger-soft: #351a24;
+    --c-ok: #6fd8cb;
+    --c-warn: #f0b477;
+    --c-warn-soft: #33230f;
+    --c-code-bg: #202024;
+    --c-code-head: #28282d;
+    --c-scrim: rgba(0, 0, 0, 0.55);
+
+    --identity-0-bg: #1b2a4a; --identity-0-fg: #a8c7ff;
+    --identity-1-bg: #241e3d; --identity-1-fg: #c3b2ff;
+    --identity-2-bg: #10302e; --identity-2-fg: #6fd8cb;
+    --identity-3-bg: #33230f; --identity-3-fg: #f0b477;
+    --identity-4-bg: #351a24; --identity-4-fg: #f3a3be;
+    --identity-5-bg: #23282f; --identity-5-fg: #b6c0cc;
+
+    --hl-keyword: #c3b2ff;
+    --hl-string: #6fd8cb;
+    --hl-comment: #7c7c85;
+    --hl-number: #f0b477;
+    --hl-title: #a8c7ff;
+    --hl-attr: #f3a3be;
+    --hl-built: #b6c0cc;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --c-bg: #1b1b1e;
+  --c-side: #141416;
+  --c-elevated: #232326;
+  --c-subtle: #26262a;
+  --c-input: #26262a;
+  --c-hover: rgba(255, 255, 255, 0.06);
+  --c-active: rgba(255, 255, 255, 0.1);
+  --c-border: rgba(255, 255, 255, 0.12);
+  --c-border-soft: rgba(255, 255, 255, 0.07);
+  --c-text-1: #f2f2f4;
+  --c-text-2: #a8a8b0;
+  --c-text-3: #7c7c85;
+  --c-accent: #8faeff;
+  --c-accent-strong: #aec4ff;
+  --c-accent-soft: #1e2740;
+  --c-accent-soft-2: #26324f;
+  --c-on-accent: #0b1526;
+  --c-user-bubble: #2a3550;
+  --c-user-text: #eaf0ff;
+  --c-danger: #f3a3be;
+  --c-danger-soft: #351a24;
+  --c-ok: #6fd8cb;
+  --c-warn: #f0b477;
+  --c-warn-soft: #33230f;
+  --c-code-bg: #202024;
+  --c-code-head: #28282d;
+  --c-scrim: rgba(0, 0, 0, 0.55);
+
+  --identity-0-bg: #1b2a4a; --identity-0-fg: #a8c7ff;
+  --identity-1-bg: #241e3d; --identity-1-fg: #c3b2ff;
+  --identity-2-bg: #10302e; --identity-2-fg: #6fd8cb;
+  --identity-3-bg: #33230f; --identity-3-fg: #f0b477;
+  --identity-4-bg: #351a24; --identity-4-fg: #f3a3be;
+  --identity-5-bg: #23282f; --identity-5-fg: #b6c0cc;
+
+  --hl-keyword: #c3b2ff;
+  --hl-string: #6fd8cb;
+  --hl-comment: #7c7c85;
+  --hl-number: #f0b477;
+  --hl-title: #a8c7ff;
+  --hl-attr: #f3a3be;
+  --hl-built: #b6c0cc;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+/* ── 语义面（深浅共用，只引上面的原始色） ── */
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --bg: var(--c-bg);
+  --bg-side: var(--c-side);
+  --bg-elevated: var(--c-elevated);
+  --bg-subtle: var(--c-subtle);
+  --bg-input: var(--c-input);
+  --bg-hover: var(--c-hover);
+  --bg-active: var(--c-active);
+
+  --border: var(--c-border);
+  --border-soft: var(--c-border-soft);
+  --text-1: var(--c-text-1);
+  --text-2: var(--c-text-2);
+  --text-3: var(--c-text-3);
+  --accent: var(--c-accent);
+  --accent-strong: var(--c-accent-strong);
+  --accent-soft: var(--c-accent-soft);
+  --accent-soft-2: var(--c-accent-soft-2);
+  --on-accent: var(--c-on-accent);
+  --user-bubble: var(--c-user-bubble);
+  --user-text: var(--c-user-text);
+  --danger: var(--c-danger);
+  --danger-soft: var(--c-danger-soft);
+  --ok: var(--c-ok);
+  --warn: var(--c-warn);
+  --warn-soft: var(--c-warn-soft);
+  --code-bg: var(--c-code-bg);
+  --code-head: var(--c-code-head);
+  --scrim: var(--c-scrim);
+
+  /* 品牌渐变（强调蓝 → 身份紫，同族不引新语义色） */
+  --brand-grad: linear-gradient(135deg, #2c5fd6 0%, #5c46c8 100%);
+  --send-grad: linear-gradient(140deg, #3a63e0 0%, #5c4fd0 100%);
+
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  --side-w: 276px;
+  --read-w: 760px;
+  --dur: 160ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}

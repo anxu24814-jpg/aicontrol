@@ -1,23 +1,21 @@
-// MeoW 反馈推送通道（2026-09-07 应用内反馈新增）：用户在反馈页提交的文本经第三方推送
-// 服务 MeoW（api.chuckfang.com）直达开发者手机——零自有服务器方案（调研与 Cube 逆向
-// 底账 = docs/调研-应用内反馈方案与Cube-Meow链路逆向-20260907.md；决明指令「先测试
-// 给我推一条，成功后再进应用」，测试推送当日业务码 200 实证后接入）。
-// 接口形态（MeoW 官方 api_doc + meow-push-skill 快照口径，2026-09-07 实测验证）：
+// MeoW 反馈推送通道：用户在反馈页提交的文本经第三方推送服务 MeoW（api.chuckfang.com）
+// 直达开发者手机——零自有服务器方案（调研与 Cube 逆向底账 = docs/调研-应用内反馈方案与
+// Cube-Meow链路逆向-20260907.md）。
+// 接口形态（MeoW 官方 api_doc + meow-push-skill 快照口径，实测验证）：
 // · 推荐 POST /{昵称} + JSON body { title, msg }（官方「普通消息优先采用 POST JSON」）；
-// · title = 推送卡片标题，固定「AI控制台用户反馈」（2026-09-07 决明校正：用户简述的
-//   问题类型不进 title——标题行拼在 msg 正文首行，见下方组装）；
+// · title = 推送卡片标题，固定「AI控制台用户反馈」（决明校正：用户简述的问题类型不进
+//   title——标题行拼在 msg 正文首行，见下方组装）；
 // · 昵称在 URL 路径段且含中文——必须逐段 encodeURIComponent（encodeURIComponent 官方
 //   全局函数，TitleApi model 名同款用法），禁整串编码；
 // · ★ HTTP 状态码恒 200，成功与否看响应体业务码 status（200=成功 / 404=昵称未注册 /
 //   429=超限「3 秒 1 条、分钟 15、小时 60、日 1000」/ 403=风控）；
 // · 无 SDK 无鉴权，昵称即地址；推送不幂等，超时/异常不自动重试（官方 skill 明示）。
 // 本层只报事实不决策（TitleApi 同款口径）：不 toast 不跳页，结果交 FeedbackPage 呈报。
-// ★ 请求日志（2026-09-24 扩面笔）：本链五条返回路径（HTTP 非 200 / 响应非 JSON / 业务码非
-// 200 / 成功 / 网络异常）逐条手写收尾必漏，故收敛到 settle 一处。★ 状态码口径：日志的
-// status 恒记**HTTP 码**（本链成功与业务失败都是 200），业务码只进 error 文案——ReqLog 的
-// 「正数 = HTTP 响应码」不变量不可破（reqLogAdvice 按 HTTP 码给建议）。代价 = 业务失败在
-// 列表不标红（详情面板 error 行照实显示），与 metaso 的「HTTP 200 + 内嵌 errCode」同族，
-// 已在变更记录技术债务清单登记
+// ★ 请求日志：本链五条返回路径（HTTP 非 200 / 响应非 JSON / 业务码非 200 / 成功 / 网络异常）
+// 收敛到 settle 一处（逐条手写收尾必漏）。★ 状态码口径：日志的 status 恒记 HTTP 码（本链
+// 成功与业务失败都是 200），业务码只进 error 文案——ReqLog 的「正数 = HTTP 响应码」不变量
+// 不可破（reqLogAdvice 按 HTTP 码给建议）。代价 = 业务失败在列表不标红（详情面板 error 行
+// 照实显示），已在变更记录技术债务清单登记
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from './ReqLog';
@@ -27,8 +25,8 @@ import { reqLogBegin, reqLogEnd, reqLogSetResponseHeaders } from './ReqLog';
 // 昵称的人都可向该昵称发消息，泄露后果 = 开发者收骚扰推送（MeoW 服务端限频兜底）。
 const MEOW_FEEDBACK_NICKNAME: string = 'Pluto的AI控制台';
 const MEOW_PUSH_BASE: string = 'https://api.chuckfang.com/';
-// 推送标题固定——开发者侧一眼识别「这是用户反馈」（2026-09-07 决明校正：不拼用户简述，
-// 标题框内容走 msg 正文首行）
+// 推送标题固定——开发者侧一眼识别「这是用户反馈」（决明校正：不拼用户简述，标题框内容走
+// msg 正文首行）
 const FEEDBACK_TITLE: string = 'AI控制台用户反馈';
 const CONNECT_TIMEOUT_MS: number = 10000;
 const READ_TIMEOUT_MS: number = 15000;

@@ -15,10 +15,110 @@
       {
         "name": "ohos.permission.STORE_PERSISTENT_DATA"
       },
+      // 定位双权限（2026-09-25 获取位置工具笔，本仓首批 user_grant 开放权限——均 normal 级，
+      // 官方「应用权限列表 · 开放权限（用户授权）」实查）：精准位置必须与模糊位置同时申请
+      //（官方「申请位置权限开发指导」），运行期首次使用经 requestPermissionsFromUser 授权；
+      // user_grant 必须配 reason + usedScene，缺配即打包校验失败
       {
-        "name": "ohos.permission.ACCESS_BIOMETRIC"
+        "name": "ohos.permission.APPROXIMATELY_LOCATION",
+        "reason": "$string:location_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.LOCATION",
+        "reason": "$string:location_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      // 日历双权限（2026-10-05 日程工具笔，本仓第二批 user_grant 开放权限——均 normal 级，
+      // 官方「应用权限列表 · 开放权限（用户授权）」实查；来源 = docs/调研-日历与屏幕使用时间
+      // 能力边界-20261005.md）：普通权限下三方只能读写「本应用创建的」日程与账户（官方操作
+      // 范围表）；WHOLE 两项为受限权限不走本档（开发期声明即安装失败 9568289）。运行期首次
+      // 使用日程工具经 requestPermissionsFromUser 一次申请，user_grant 必须配 reason + usedScene
+      {
+        "name": "ohos.permission.READ_CALENDAR",
+        "reason": "$string:calendar_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.WRITE_CALENDAR",
+        "reason": "$string:calendar_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      // 文件夹挂载持久授权（2026-10-08 方案-文件夹挂载-20261008 笔 1）：fileShare 四个
+      // 持久化接口（persistPermission / revokePermission / activatePermission /
+      // checkPersistentPermission）的声明权限。本机 SDK 权限库实读
+      // （toolchains/lib/PermissionDefinitions.json）：availableLevel = normal（开放权限）+
+      // grantMode = system_grant（装机即授、无弹窗）——与 INTERNET 同级，非受限权限
+      // （system_basic 声明即安装失败 9568289 的红线不涉及本条）；官方《授权持久化》篇
+      // 「需要权限」节同源（线上权限列表复核件 = scripts/permission-sync-check.mjs
+      // KNOWN_SYSTEM_GRANT 表）
+      {
+        "name": "ohos.permission.FILE_ACCESS_PERSIST"
+      },
+      // 本机 WLAN IP 读取（2026-10-22 Web 服务与 WebUI 施工总案 U2）：wifiManager.getIpInfo
+      // 取本机局域网 IP（Web 服务地址行显示用，无它则地址行恒显引导文案）。本机 SDK 权限库
+      // 实读（toolchains/lib/PermissionDefinitions.json）：availableLevel = normal（开放权限）
+      // + grantMode = system_grant（装机即授、无弹窗）——与 INTERNET 同级，非受限权限
+      //（system_basic 声明即安装失败 9568289 的红线不涉及）；官方 FAQ faqs-connectivity-13
+      // 实查 getIpInfo 需本权限；线上权限列表复核件 = scripts/permission-sync-check.mjs
+      // KNOWN_SYSTEM_GRANT 表。★ 权限展示面（PermissionPage 条目 + HelpContent 中文名）已随
+      // U2 收口修复笔回填，permission-sync-check 检查 3/9 现绿
+      {
+        "name": "ohos.permission.GET_WIFI_INFO"
+      },
+      // 智感握姿（2026-10-25 悬浮新建键复活笔）：motion.on('holdingHandChanged') 的声明权限
+      // ——会话列表右下悬浮新建键跟随左右手握持换到同侧。本机 SDK 权限库实读
+      // （toolchains/lib/PermissionDefinitions.json）：availableLevel = normal（开放权限）+
+      // grantMode = system_grant（装机即授、无弹窗）+ since 20 + provisionEnable = false
+      //（无 AGC ACL 门槛，与 FILE_ACCESS_PERSIST 的「上架仍需按受限方式申请」不同——官方
+      // 受限开放权限表无本条）；官方权限列表复核件 = scripts/permission-sync-check.mjs
+      // KNOWN_SYSTEM_GRANT 表。接口侧依据 = @ohos.multimodalAwareness.motion.d.ts
+      //（holdingHandChanged 的 @permission 只有本权限，无 ACTIVITY_MOTION 替代路径）
+      {
+        "name": "ohos.permission.DETECT_GESTURE"
+      },
+      // 振动反馈（2026-11-25 思考档位滑轨逐档触觉笔）：Slider `enableHapticFeedback` 的声明权限
+      // ——面板每过一档一记触觉（消费方 = components/chat/ThinkingLevelPanel）。Slider 文档
+      //（slider.d.ts「enableHapticFeedback」注释）明示本权限为触觉前置，缺它静默不震。
+      // 本机 SDK 权限库实读（toolchains/lib/PermissionDefinitions.json）：availableLevel =
+      // normal（开放权限）+ grantMode = system_grant（装机即授、无弹窗）+ since 7 +
+      // provisionEnable = false（无 AGC ACL 门槛）；官方「开放权限（系统授权）」页实查同源
+      //（normal / 系统授权 / 起始 7，支持 Phone·Tablet），官方「受限开放权限」表无本条。
+      // 线上权限列表复核件 = scripts/permission-sync-check.mjs KNOWN_SYSTEM_GRANT 表；
+      // 权限展示面（PermissionPage 条目 + HelpContent 中文名）同笔回填。
+      {
+        "name": "ohos.permission.VIBRATE"
       }
     ],
+    // Node 运行时随包分发（2026-11-23 鸿蒙Node运行时门1笔，任务书-鸿蒙Node运行时门1-20261121
+    // §5）：libnode.so 133.7MB 不压缩则 HAP 直上 ~409MB 不可接受——两键让 .so 压缩存储、
+    // 安装期系统解压（调研档 §3.5 先例实证 dlopen 正常）。★ 作用域 = 本 module 全部 native
+    // 库：既有 80 件 Python 域 .so 同笔转为压缩存储 + 安装期解压（非只影响 libnode），Python
+    // 域回归一轮由真机清单第 8 项承接；回归红 = 撤两键改「仅接受大 HAP」重报裁量（现无部分
+    // 压缩能力，勿造）。必须写 module 级——写进 build-profile.json5 或 buildOption 会被 schema
+    // 拒（Schema validate failed，调研档 §3.5）
+    "compressNativeLibs": true,
+    "extractNativeLibs": true,
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
@@ -29,6 +129,14 @@
       {
         "name": "ohos.arkui.UIMaterial.state",
         "value": "enable"
+      },
+      // 持久化权限保留（2026-10-08 文件夹挂载笔 1，决明拍板 A 恒保留）：官方《授权持久化》
+      // 「持久化权限保留配置」节（API 24 起）——声明本标签后，应用卸载时系统保留持久授权，
+      // 同机重装自动恢复；不声明 = 卸载即清空全部授权、重装需逐个重新授权。标签为 module
+      // 级 metadata，**value 可缺省**（官方示例仅 name）；装机时定死，无运行时切换 API
+      // （方案 §4 拍板项已澄清「做不成应用内开关」）
+      {
+        "name": "ohos.fileshare.supportPreservePersistentPermission"
       }
     ],
     "abilities": [
@@ -39,8 +147,17 @@
         "icon": "$media:layered_image",
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:startIcon",
-        "startWindowBackground": "$color:start_window_background",
+        // 启动页底色与页面/窗口底色同源（page_bg）：系统启动页在应用首帧后 200ms 透明渐隐
+        // （官方《应用启动页简介》），底色同源才无白闪（2026-11-24 启动衔接笔；原
+        // start_window_background 色退役）
+        "startWindowBackground": "$color:page_bg",
         "exported": true,
+        // 首启隐私政策未同意的退出配套（2026-10-23 合规整改笔）：官方 FAQ faqs-appgallery-50
+        // 「方式二：用户选择不同意隐私政策，应用退出」原文要求——terminateSelf 终止实例的
+        // **同时**设置本属性，Ability 终止后从任务列表移除、不留任务快照。作用面 = 全部
+        // terminate 场景（含正常退出），对聊天类应用无功能损失（重开即冷启动）；移除后
+        // 最近任务列表不再残留空白快照，也不给「再次点开即绕过弹窗」留口子
+        "removeMissionAfterTerminate": true,
         "skills": [
           {
             "entities": [
@@ -48,6 +165,51 @@
             ],
             "actions": [
               "ohos.want.action.home"
+            ]
+          },
+          // 系统分享接收（2026-10-03 方案-系统分享接收附件-20261003 笔）：sendData = 系统
+          // 分享面板入口、viewData = 文件管理器「打开方式」入口（官方 FAQ faqs-pdf-6 同组
+          // 双 action 形态）。uris 穷举支持的 UTD（声明父类型即覆盖子类型——general.image /
+          // general.text 覆盖图片与文本全族），清单与工程附件三白名单对齐（AttachmentUtil
+          // IMAGE/TEXT/DOC_EXTS；视频音频压缩包不支持故不声明，面板自然不出现本应用）；
+          // maxFileSupported 与 AttachmentPickCtrl.MAX_ATTACHMENTS 同值 5。接收链零新增
+          // 权限（官方参考实现实锤，出处清单见方案档 §7）
+          {
+            "actions": [
+              "ohos.want.action.viewData",
+              "ohos.want.action.sendData"
+            ],
+            "uris": [
+              {
+                "scheme": "file",
+                "utd": "general.image",
+                "maxFileSupported": 5
+              },
+              {
+                "scheme": "file",
+                "utd": "general.text",
+                "maxFileSupported": 5
+              },
+              {
+                "scheme": "file",
+                "utd": "com.adobe.pdf",
+                "maxFileSupported": 5
+              },
+              {
+                "scheme": "file",
+                "utd": "org.openxmlformats.openxml",
+                "maxFileSupported": 5
+              },
+              {
+                "scheme": "file",
+                "utd": "com.microsoft.excel.xls",
+                "maxFileSupported": 5
+              },
+              {
+                "scheme": "file",
+                "utd": "general.ofd",
+                "maxFileSupported": 5
+              }
             ]
           }
         ]

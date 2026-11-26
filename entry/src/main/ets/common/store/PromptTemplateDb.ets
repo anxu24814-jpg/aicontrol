@@ -1,37 +1,55 @@
-// 提示词库存储域（2026-08-30 提示词注入新建，照 ProviderKeyDb 域拆先例——ChatDb 加模板
-// CRUD 必超 400 红线）：prompt_templates 表 CRUD + conversations.promptId 会话引用读写。
-// 语义（领导拍板；2026-08-31 修订——系统提示词与模板「分开」，独立页管理、库页不显示、
-// 内置默认可重置，细则见 docs/规范-数据存储获取刷新方案.md §3.5）：
+// 提示词库存储域（照 ProviderKeyDb 域拆先例）：prompt_templates 表 CRUD +
+// conversations.promptId 会话引用读写。
+// 语义（拍板；系统提示词与模板「分开」——独立页管理、库页不显示、内置默认可重置，细则见
+// docs/规范-数据存储获取刷新方案.md §3.5）：
 // ①系统提示词 = isGlobal=1 唯一行（固定 id 'prompt-global'，名「系统提示词」，启动兜底
 //   ensurePromptGlobal 幂等：无行插内置内容 / 存量空内容行填充内置——可更改可重置）；
-//   注入语义（★2026-09-04 归属与注入解耦，细则见 ChatPromptState 头注释）= 会话提示词 >
-//   助手提示词 > 系统提示词三级回退——系统提示词行是注入基座兜底；
+//   注入语义（归属与注入解耦，细则见 ChatPromptState 头注释）= 会话提示词 > 助手提示词 >
+//   系统提示词三级回退——系统提示词行是注入基座兜底；
 // ②引用跟随——会话存模板 id 引用，模板修改后所有引用会话自动用新版；③会话 promptId
-//   空 = 未启用注入（走归属助手/系统提示词回退链）；④删模板前查引用数（deleteTemplate 返回引用数——
-//   调用方确认文案含「N 个会话引用，删除后回退助手提示词」，不静默）；系统提示词行不可
-//   删（deleteTemplate 守卫——库页不再触达，作旧残留兜底）。
+//   空 = 未启用注入（走归属助手/系统提示词回退链）；④删模板前查引用数（deleteTemplate
+//   返回引用数——调用方确认文案含「N 个会话引用，删除后回退助手提示词」，不静默）；
+//   系统提示词行不可删（deleteTemplate 守卫——库页不再触达，作旧残留兜底）。
 import { relationalStore } from '@kit.ArkData';
 import { nextMessageId, sharedRdbStore } from './ChatDb';
 
-// 全局默认行固定 id（启动兜底与查询共用；2026-08-31 起仅 SystemPromptPage/注入链消费）
+// 全局默认行固定 id（启动兜底与查询共用；仅 SystemPromptPage/注入链消费）
 export const PROMPT_GLOBAL_ID: string = 'prompt-global';
-// 系统提示词内置默认（2026-08-31 领导给定原文；「恢复」键回此文本 + 注入配置默认
-// system+head+0——可更改可重置）
-// ★ 2026-09-01 更新：追加时间/日期变量描述（{{date}}/{{time}}/{{weekday}}/{{datetime}}
-//   ——变量替换见 providers/PromptVariables.ets，发送前应用层字符串替换）；旧版全文保留在
-//   SYSTEM_PROMPT_DEFAULT_LEGACY_V1 供迁移判定（ensurePromptGlobal：行内容 == 旧默认 =
-//   用户从未改过的默认态 → 更新为新默认；用户改过的内容零覆盖）
+// 系统提示词内置默认（「恢复」键回此文本 + 注入配置默认 system+head+0——可更改可重置）。
+// 默认值演进（每版理由压一行）：①原版；②+时间/日期变量描述；③去时刻修订——删
+//   {{time}}/{{datetime}} 说明（分钟粒度变量发送时实时替换，system 每轮前缀都变 ⇒ 提示词
+//   缓存跨分钟必 miss，Anthropic 通道还付缓存写入费；{{date}}/{{weekday}} 天粒度保留）；
+// ④语言规则修订（决明拍板，kel/rik 源码对标）——开头补「默认使用与用户相同的语言回复」，
+//   中文 system 文案下模型偶发坚持中文回复。每版旧全文保留在
+//   SYSTEM_PROMPT_DEFAULT_LEGACY_V1/V2/V3 供迁移判定（行内容 == 旧默认 = 用户从未改过的
+//   默认态 → 更新为新默认；用户改过的内容零覆盖）。变量替换见
+//   providers/PromptVariables.ets（发送前应用层字符串替换）
 export const SYSTEM_PROMPT_DEFAULT: string =
+  '你是一个严谨、友好的助手，默认使用与用户相同的语言回复，除非用户另有要求。' +
+  '复杂先给结论再展开；公式用 LaTeX，代码可直接运行；' +
+  '信息不足/不确定就明说，禁止编造，关键事实注明来源；篇幅以解决问题为限。' +
+  '需要日期时使用提示词变量：{{date}} 为当前日期（如 2026-09-01），' +
+  '{{weekday}} 为星期（如 星期二）；涉及日期请优先引用变量，不要凭空编造。' +
+  '需要精确到时刻时，先查询再作答，不要凭空编造。';
+// 旧版内置默认（原版——仅迁移判定用：行内容等于它 = 用户从未改过 = 默认态）
+export const SYSTEM_PROMPT_DEFAULT_LEGACY_V1: string =
+  '你是一个严谨、友好的助手。复杂先给结论再展开；公式用 LaTeX，代码可直接运行；' +
+  '信息不足/不确定就明说，禁止编造，关键事实注明来源；篇幅以解决问题为限。';
+// 旧版内置默认（+时间变量版，仅迁移判定用：行内容等于它 = 用户从未改过 = 默认态）
+export const SYSTEM_PROMPT_DEFAULT_LEGACY_V2: string =
   '你是一个严谨、友好的助手。复杂先给结论再展开；公式用 LaTeX，代码可直接运行；' +
   '信息不足/不确定就明说，禁止编造，关键事实注明来源；篇幅以解决问题为限。' +
   '需要当前时间/日期时使用提示词变量：{{date}} 为当前日期（如 2026-09-01），' +
   '{{time}} 为当前时间（如 14:30），{{weekday}} 为星期（如 星期二），' +
   '{{datetime}} 为日期时间（如 2026-09-01 14:30）；示例：「现在是 {{time}}，' +
   '今天是 {{date}}（{{weekday}}）」。涉及时间请优先引用变量，不要凭空编造。';
-// 旧版内置默认（2026-08-31 原文——仅迁移判定用：行内容等于它 = 用户从未改过 = 默认态）
-export const SYSTEM_PROMPT_DEFAULT_LEGACY_V1: string =
+// 旧版内置默认（去时刻版，仅迁移判定用：行内容等于它 = 用户从未改过 = 默认态）
+export const SYSTEM_PROMPT_DEFAULT_LEGACY_V3: string =
   '你是一个严谨、友好的助手。复杂先给结论再展开；公式用 LaTeX，代码可直接运行；' +
-  '信息不足/不确定就明说，禁止编造，关键事实注明来源；篇幅以解决问题为限。';
+  '信息不足/不确定就明说，禁止编造，关键事实注明来源；篇幅以解决问题为限。' +
+  '需要日期时使用提示词变量：{{date}} 为当前日期（如 2026-09-01），' +
+  '{{weekday}} 为星期（如 星期二）；涉及日期请优先引用变量，不要凭空编造。' +
+  '需要精确到时刻时，先查询再作答，不要凭空编造。';
 // 模板名称/内容长度上限（编辑页 maxLength 同值；有界红线：模板内容 = 注入上下文体积，
 // 防无界增长——2000 字符已远超日常人设/指令）
 export const TEMPLATE_NAME_MAX: number = 50;
@@ -53,8 +71,7 @@ export interface PromptTemplateRow {
   injectDepth: number;
 }
 
-// 后置占位（未调 ensurePromptGlobal 时的查询兜底——空全局行 isGlobal=true；
-// 2026-08-30 改名行名 = 「系统提示词」，与 DB 行名对齐）
+// 后置占位（未调 ensurePromptGlobal 时的查询兜底——空全局行 isGlobal=true；行名与 DB 对齐）
 const GLOBAL_EMPTY_ROW: PromptTemplateRow = {
   id: PROMPT_GLOBAL_ID, name: '系统提示词', content: '', isGlobal: true, createdAt: 0,
   injectRole: 'system', injectPosition: 'head', injectDepth: 0
@@ -64,8 +81,8 @@ function requireStore(): relationalStore.RdbStore {
   return sharedRdbStore();
 }
 
-// 全量模板（库页 = 用户模板清单——★ 2026-08-31 起过滤 isGlobal=0：系统提示词行不入库页，
-// 与模板「分开」由独立页管理；其余创建先后序；用户手建小数据集自然有界）
+// 全量模板（库页 = 用户模板清单——★ 过滤 isGlobal=0：系统提示词行不入库页，与模板「分开」
+// 由独立页管理；创建先后序；用户手建小数据集自然有界）
 export async function queryTemplates(): Promise<PromptTemplateRow[]> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('prompt_templates');
   predicates.equalTo('isGlobal', 0);
@@ -94,8 +111,8 @@ export async function queryTemplates(): Promise<PromptTemplateRow[]> {
 }
 
 // 系统提示词行（独立页回填 / 注入链 ChatSendCtrl.loadPromptState 读取；isGlobal=1 唯一；
-// 2026-08-31 起谓词直查——不依赖 queryTemplates（后者已过滤全局行）；兜底失败/未初始化
-// = 空内容占位——不炸 UI）
+// 谓词直查——不依赖 queryTemplates〔后者已过滤全局行〕；兜底失败/未初始化 = 空内容占位
+// 不炸 UI）
 export async function queryGlobalTemplate(): Promise<PromptTemplateRow> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('prompt_templates');
   predicates.equalTo('isGlobal', 1);
@@ -146,11 +163,9 @@ export async function queryTemplate(id: string): Promise<PromptTemplateRow | nul
 }
 
 // 系统提示词行兜底（启动一次性，幂等——失败下次启动重试）：①已有 isGlobal=1 行——行名
-// 不对齐「系统提示词」则修正（2026-08-30 改名）；内容为空 = 旧版/改名期空行 → 一次性填充
-// 内置默认（2026-08-31 内置化；用户已改过非空 = 零覆盖不丢失；「恢复」键重置亦走
-// updateTemplate）；★ 2026-09-01 默认值更新：行内容 == 旧版默认（SYSTEM_PROMPT_DEFAULT_
-// LEGACY_V1——用户从未改过的默认态）→ 同步为新默认（默认值演进 = 存量默认行跟进，用户
-// 自定义内容不覆盖）；②无行（新装）→ 插内置内容「系统提示词」行（不再空行）。
+// 不对齐「系统提示词」则修正；内容四态判定（空 / 旧默认 V1/V2/V3 = 用户从未改过的默认态）
+// → 同步为新默认（默认值演进 = 存量默认行跟进，用户自定义内容零覆盖，红线）；「恢复」键
+// 重置亦走 updateTemplate；②无行（新装）→ 插内置内容「系统提示词」行（不再空行）。
 export async function ensurePromptGlobal(): Promise<void> {
   const predicates: relationalStore.RdbPredicates = new relationalStore.RdbPredicates('prompt_templates');
   predicates.equalTo('isGlobal', 1);
@@ -175,7 +190,11 @@ export async function ensurePromptGlobal(): Promise<void> {
       bucket['name'] = '系统提示词';
       touch = true;
     }
-    if (rowContent === '' || rowContent === SYSTEM_PROMPT_DEFAULT_LEGACY_V1) {
+    // 四态判定（空 / V1 / V2 / V3 旧默认）= 用户从未改过的默认态 → 更新为新默认；
+    // 用户改过的内容零覆盖（红线——用户内容与任何默认版本不完全相等即不动）
+    if (rowContent === '' || rowContent === SYSTEM_PROMPT_DEFAULT_LEGACY_V1 ||
+      rowContent === SYSTEM_PROMPT_DEFAULT_LEGACY_V2 ||
+      rowContent === SYSTEM_PROMPT_DEFAULT_LEGACY_V3) {
       bucket['content'] = SYSTEM_PROMPT_DEFAULT;
       touch = true;
     }
@@ -216,9 +235,9 @@ export async function insertTemplate(name: string, content: string,
 }
 
 // 更新模板（名称/内容/注入配置；引用跟随语义——所有引用会话下次发送自动用新版）。
-// ★ 2026-08-31 存储链路复查：update 返回行数校验——目标行不存在（系统提示词行未及启动
-// 兜底/被误删）时原生 update 静默 0 行，调用方 toast「已保存」= 假成功（P0-1 诚实反馈）；
-// 0 行 throw → 调用方既有 catch 通道呈报「保存失败」（零调用方改动）
+// ★ update 返回行数校验——目标行不存在（系统提示词行未及启动兜底/被误删）时原生 update
+// 静默 0 行，调用方 toast「已保存」= 假成功（P0-1 诚实反馈）；0 行 throw → 调用方既有
+// catch 通道呈报「保存失败」（零调用方改动）
 export async function updateTemplate(id: string, name: string, content: string,
   injectRole: string, injectPosition: string, injectDepth: number): Promise<void> {
   const bucket: relationalStore.ValuesBucket = {

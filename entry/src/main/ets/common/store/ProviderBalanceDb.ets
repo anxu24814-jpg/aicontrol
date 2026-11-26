@@ -1,4 +1,4 @@
-// 服务商余额域存储层（2026-08-30 详情页改版新建）：providers 表 balance_* 九列的读写。
+// 服务商余额域存储层：providers 表 balance_* 九列的读写。
 // 自 ProviderDb.ets 域级拆出（宪法 400 行红线——ProviderDb 322 行 + 余额读写函数必超线；
 // 余额是独立功能域，表结构/迁移在 ChatDbMigrate.ets（DB 单一初始化源），本文件复用
 // sharedRdbStore 同一 DB 句柄，红线同源：ResultSet 用完 close / 行级查询天然有界）。

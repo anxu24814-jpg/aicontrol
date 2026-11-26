@@ -1,64 +1,66 @@
-// 聊天输入框内附件条（2026-08-24 四十六改新增，决明需求「附件放输入框内、类参考图效果」）：
-// 原「胶囊外附件 chip 行」（ChatInputBar AttachmentRow，三十一改初版）重做为参考图形态——
-// · 图片 = 真缩略图方块（PixelMap 内存小图，KimiAttachmentCtrl 上传后解码自沙箱副本、
-//   随即删除——「手机端不驻留本体」存储决策不变，仅多一张内存小图）；解码失败降级图标卡。
-//   四十七改：缩略图改从模块级仓库 AttachmentThumbStore 按 fileId 直取——@Prop 深拷贝
-//   会破坏 PixelMap（真机空白实锤），PixelMap 不走组件参数（详见仓库头注释）。
-// · 文件 = 图标卡（类型图标 + 文件名 + 「EXT, 16.39 KB」副行，参考图样式）。★ 2026-09-17
-//   全面自检第4轮笔2：原「视频」图标支随附件类型收窄成死支——入列白名单（classifyByName
-//   全集 image/text/doc，AttachmentPickCtrl 不产生 kind='video'）后该判据不可达，已退役
-//   （断言 67 组负向钉全仓守）。
-// · 删除 = 右上角深色 x 徽标（向上骑跨卡片顶边，参考图同款）。四十七改：徽标水平方向
-//   收回卡片内（原向右半探出 9vp——横滑至最右时与胶囊右上圆角裁剪区相碰/视觉重叠，
-//   决明真机反馈；现只向上探出，由条顶部留白承接，任何滚动位置都不碰胶囊边缘）。
-//   ★ 2026-09-09 决明真机「删除按钮错位、锚点不在附件右上角而是略左偏」：收回过度——
-//   热区（26）比可视圆（18）宽出的半差使圆右缘内缩 4vp，现右移该半差、右缘与卡片右缘
-//   齐平（仍不探出卡片，四十七改结论不破）。
-// 横滑：官方 Scroll 横向 + BarState.Off（隐藏滚动条）——数量超宽不换行（主流聊天 App 形态，
-// 决明需求「附件过多横滑切换」）；Scroll 通用 align 默认 Center，须显式 Start 左对齐
-//（2026-08-20 列表卡片规范同款踩坑）。
-// 高度：本组件不设高度——内容自适应（输入框整体高度自适应由外层胶囊 Column 承担，
-// 决明需求「输入框高度自适应」）。
-// 材质红线：附件项只用语义色填充（comp_background_tertiary 卡底），不设材质/边框/阴影——
-// 胶囊外层已有 systemMaterial，「同一子树最外层只设一次材质」（沉浸光感性能十诫，
-// 见 docs/沉浸光感适配规范.md）；深色/浅色由官方语义色自动适配。
+// 聊天输入框内附件条（决明需求「附件放输入框内、类参考图效果」）：
+// · 图片 = 真缩略图方块（PixelMap 内存小图，KimiAttachmentCtrl 上传后解码自沙箱副本、随即
+//   删除——「手机端不驻留本体」存储决策不变；缩略图从模块级仓库 AttachmentThumbStore 按
+//   fileId 直取——@Prop 深拷贝会破坏 PixelMap〔真机空白实锤〕，PixelMap 不走组件参数）；
+//   解码失败降级图标卡。
+// · 文件 = 图标卡（类型图标 + 文件名 + 「EXT, 16.39 KB」副行）。原「视频」图标支随附件类型
+//   收窄成死支已退役（classifyByName 白名单不产生 video，断言 67 组负向钉全仓守）。
+// · 删除 = 右上角深色 x 徽标：只向上骑跨卡片顶边（水平收回卡片内——向右探出会与胶囊右上
+//   圆角裁剪区相碰，决明真机反馈），热区比可视圆宽出的半差右移补偿、可视圆右缘与卡片右缘
+//   齐平（决明真机「锚点略左偏」实锤，右缘不再内缩）。
+// · 横滑：官方 Scroll 横向 + BarState.Off（隐藏滚动条），数量超宽不换行；Scroll 通用 align
+//   默认 Center，须显式 Start 左对齐（列表卡片规范同款踩坑）。
+// · 高度：本组件不设高度——内容自适应（输入框整体高度自适应由外层胶囊 Column 承担）。
+// · 材质红线：附件项只用语义色填充（comp_background_tertiary 卡底），不设材质/边框/阴影
+//   ——胶囊外层已有 systemMaterial，「同一子树最外层只设一次材质」（沉浸光感性能十诫）。
 import { image } from '@kit.ImageKit';
 import { PendingAttachment } from '../../common/providers/AiTypes';
 import { extLabel, formatFileSize, ATTACH_SHARED_ID_KEY, sharedGeomId,
   ATTACH_PREVIEW_ANIM } from '../../common/AttachmentUtil';
 import { getThumb } from './AttachmentThumbStore';
+// 二期 S4 #12：单件重试点击通道（零 import 叶子件的事件口——ChatPage 构造期登记，
+// 本件只发一条「这一件要重试」，不新增组件入参、不动 InputBar/PageContent 入参面）
+import { requestAttachmentRetry } from '../../common/chat/AttachmentRetrySupport';
 
 // 几何常量（参考图（1080 宽屏 ≈ 360vp）换算取整；调样式只改这里）
 const ITEM_SIZE: number = 64; // 附件项高 = 图片缩略图边长 = 文件卡高
 const ITEM_RADIUS: number = 12; // 附件项圆角
 const ITEM_SPACE: number = 12; // 附件项间距
 const CARD_ICON_SIZE: number = 30; // 文件卡类型图标
-const CARD_TEXT_MAX_WIDTH: number = 112; // 文件卡文字列最大宽（文件名超出省略号；
-// 四十七改自 132 调短——决明反馈文件名显示过长，截断限制收紧）
+const CARD_TEXT_MAX_WIDTH: number = 112; // 文件卡文字列最大宽（文件名超出省略号）
 const BADGE_VISUAL: number = 18; // 删除徽标可视圆径
 const BADGE_HIT: number = 26; // 删除徽标热区边长（透明底扩触——18 可视圆太小不够点）
 const STRIP_HPAD: number = 12; // 附件条左右留白
 const STRIP_TOP: number = 12; // 附件条顶部留白（≥ 徽标上探出 9，防探出部分被胶囊裁剪）
 const STRIP_BOTTOM: number = 4; // 附件条底部留白（输入行 TextArea 上 padding 补足与文字的间距）
 
-// 文件副行扩展名段与大小段：2026-09-15 预览笔上收 AttachmentUtil（extLabel /
-// formatFileSize 单源——附件气泡与输入栏附件条两消费方同口径，断言钉同源；本文件原
-// 本地实现已删）。docStateLabel（解析态段）仍留本文件——输入栏独有语义。
+// 文件副行扩展名段与大小段单源 = AttachmentUtil（extLabel / formatFileSize，附件气泡与
+// 输入栏附件条两消费方同口径）；docStateLabel（解析态段）为输入栏独有语义留本文件。
 
-// 文档附件副行解析态段（2026-09-03 第三批②）：覆盖大小段——解析中/失败/过大是用户当下
-// 最关心的信息；done 与未开始的 idle 仍显示大小（解析完成无需打扰）。
-// ★ 2026-09-15 附件 PDF 页渲染一期新增页图档（档序 = 现有三档之后、回落大小段之前）：
-// 扫描件 PDF 已转页图，用户看到的「这条附件发了什么」由大小改为页数口径；页数超上限
-// （RENDER_MAX_PAGES）时补「共 N 页」——N = 全量页数，M = 实发页图数
+// 文档附件副行解析态段：解析中/失败/过大覆盖大小段（用户当下最关心），done 与未开始的
+// idle 仍显示大小；扫描件 PDF 已转页图时由大小改页数口径（超 RENDER_MAX_PAGES 补
+//「共 N 页」——N = 全量页数，M = 实发页图数）。★ 附件官方标记笔：官方档上传中
+//（remotePending）显示「上传中…」与本地「解析中…」区分；官方件上传完成（remoteFileId
+// 在场）前缀「服务端 · 」——用户能看出这件走 DS 服务端解析而非本机
 function docStateLabel(att: PendingAttachment): string {
   if (att.parseState === 'parsing') {
-    return '解析中…';
+    return att.remotePending === true ? '上传中…' : '解析中…';
   }
   if (att.parseState === 'failed') {
     return '解析失败';
   }
   if (att.parseState === 'toolarge') {
     return '过大不支持';
+  }
+  // 官方档完成件：remoteFileId 在场 = 上传取回 file_id（官方件不走本地解析/降级链，
+  // 与下方 guide 件互斥——本地截断件恒无 remoteFileId）
+  if (att.parseState === 'done' && (att.remoteFileId ?? '') !== '') {
+    return '服务端 · ' + extLabel(att.name) + ', ' + formatFileSize(att.size);
+  }
+  // 指引件（★ 2026-10-31 重发降级笔）：解析完成且正文截断的重发件已把全文副本存入工作区，
+  // 本轮只发头部分 + 路径指引——副行给可辨标记，用户能看出这件与普通件的发送形态不同
+  if (att.parseState === 'done' && (att.guideWorkspacePath ?? '') !== '') {
+    return '过大 · 已存工作区';
   }
   const sentPages: number = att.pageImages !== undefined ? att.pageImages.length : 0;
   if (att.parseState === 'done' && sentPages > 0) {
@@ -77,23 +79,19 @@ export struct AttachmentStrip {
   // 删除（index 上行父组件从列表移除——本地状态独占，无网络副作用）
   onRemove: (index: number) => void = () => {
   };
-  // 点开预览（2026-09-15 预览第三轮，拍板 4：fileId 上行 → ChatInputBar 透传 →
-  // ChatPageContent 分派——图片/文本进查看器、文档走系统预览；解析中/失败/过大的文档
-  // 同样可预览——预览只看文件与解析无关）
+  // 点开预览：fileId 上行 → ChatInputBar 透传 → ChatPageContent 分派——图片/文本进查看器、
+  // 文档走系统预览；预览只看文件与解析无关
   onPreview: (fileId: string) => void = () => {
   };
-  // 共享元素广播键订阅（2026-09-15 预览升级笔；三处判据同源 sharedGeomId——本件 /
-  // 消息气泡缩略图 / 查看器图片页）
+  // 共享元素广播键订阅（三处判据同源 sharedGeomId——本件/消息气泡缩略图/查看器图片页）
   @StorageProp(ATTACH_SHARED_ID_KEY) sharedId: string = '';
 
-  // 删除徽标：18 可视深底圆 + 白 x（深浅色通用——叠在图片/卡片上的浮层 scrim 语义，参考图
-  // 同款），外层 26 透明热区（backgroundColor(Color.Transparent) 官方扩触姿势——无背景
-  // 容器空白区不响应触摸）；TopEnd 对齐 + offset((26−18)/2, -13)：垂直上移半热区 → 可视圆
-  // 骑跨卡片顶边（上探出 9 = 18/2，由 STRIP_TOP 承接）；水平右移热区比可视圆宽出的半差 4 →
-  // **可视圆右缘与卡片右缘齐平**（★ 2026-09-09 决明真机「锚点略左偏」——原 x=0 使右缘内缩
-  // 4vp；四十七改的 offset(13, -13) 右探出版会与胶囊右上圆角裁剪区相碰，仍不取）。
-  // 入参传 att 不传 index：ForEach 键稳定的项在数组变更后复用旧子组件（index 闭包陈旧，
-  // 删中间项后再删会错位）——点击时按 fileId 实查当下索引（2026-09-04 解析自检笔）
+  // 删除徽标：18 可视深底圆 + 白 x（深浅色通用 scrim 语义）+ 外层 26 透明热区
+  //（backgroundColor(Color.Transparent) 官方扩触姿势）。TopEnd + offset：垂直上移半热区 →
+  // 可视圆骑跨卡片顶边（上探出 9 由 STRIP_TOP 承接）；水平右移热区半差 → 可视圆右缘与
+  // 卡片右缘齐平（右探出版会碰胶囊圆角裁剪区，不取）。入参传 att 不传 index：键稳定项在
+  // 数组变更后复用旧子组件（index 闭包陈旧，删中间项后再删会错位）——点击时按 fileId
+  // 实查当下索引
   @Builder
   RemoveBadge(att: PendingAttachment) {
     Stack() {
@@ -121,11 +119,10 @@ export struct AttachmentStrip {
     })
   }
 
-  // 图片附件项：真缩略图方块（Cover 裁满；thumb 从模块级仓库 AttachmentThumbStore 直取——
-  // @Prop 深拷贝会破坏 PixelMap，不走组件参数）。整卡点击上行预览（删除徽标在 Stack 上层
-  // 独立命中，点徽标不触发预览——两热区不串为真机验证项）。★ 2026-09-15 预览升级笔：
+  // 图片附件项：真缩略图方块（Cover 裁满；仓库直取——@Prop 深拷贝会破坏 PixelMap，不走
+  // 组件参数）。整卡点击上行预览（删除徽标在 Stack 上层独立命中，两热区不串为真机验证项）。
   // 缩略图挂共享元素 out 侧（follow: true 官方口径；id 判据三处同源 sharedGeomId），
-  // transition 仅共享激活期挂（常挂会让条内缩略图随数组增删逐个淡入）
+  // transition 仅共享激活期挂（常挂会随数组增删逐个淡入）
   @Builder
   ImageItem(thumb: image.PixelMap, att: PendingAttachment) {
     Stack({ alignContent: Alignment.TopEnd }) {
@@ -162,11 +159,26 @@ export struct AttachmentStrip {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           // 副行：文档附件显示解析态（解析中/失败/过大），其余显示扩展名+大小
-          Text(att.kind === 'doc' ? docStateLabel(att) :
-            extLabel(att.name) + ', ' + formatFileSize(att.size))
-            .fontSize(13)
-            .fontColor($r('sys.color.font_secondary'))
-            .maxLines(1)
+          // ★ 失败态（二期 #12）：副行改为「解析失败，点此重试」并单独挂 onClick——
+          // 内层点击不触发外层预览（ArkUI onClick 不冒泡到父组件 onClick），用户点这行
+          // 字 = 重试，点卡片其余区域仍是预览。重试动作按当前连接档位分派（官方档重走
+          // 服务端上传；非官方档给出说明），实现位 = AttachmentPickCtrl.retryOne
+          if (att.kind === 'doc' && att.parseState === 'failed') {
+            Text('解析失败，点此重试')
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('sys.color.font_primary'))
+              .maxLines(1)
+              .onClick((): void => {
+                requestAttachmentRetry(att.fileId);
+              })
+          } else {
+            Text(att.kind === 'doc' ? docStateLabel(att) :
+              extLabel(att.name) + ', ' + formatFileSize(att.size))
+              .fontSize(13)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+          }
         }
         .alignItems(HorizontalAlign.Start)
         .constraintSize({ maxWidth: CARD_TEXT_MAX_WIDTH })
@@ -192,17 +204,21 @@ export struct AttachmentStrip {
           } else {
             this.FileItem(att)
           }
-          // 键须含 parseState：解析完成/失败经 patchAttachment 整数组替换上行但 fileId
-          // 不变——官方 ForEach「键已存在即复用旧组件」不重跑 itemGenerator，副行
-          // docStateLabel 会定格「解析中…」（2026-09-04 解析修复；5b418ff P1-1 同族）
-        }, (att: PendingAttachment) => att.fileId + '|' + (att.parseState ?? ''))
+          // 键须含 parseState：解析完成/失败经 patchAttachment 整数组替换上行但 fileId 不变
+          //——官方 ForEach「键已存在即复用旧组件」不重跑 itemGenerator，副行会定格
+          //「解析中…」（键纪律同族）。★ 同日重发降级笔：指引态（guideWorkspacePath 置位）
+          //发生在 done 之后、fileId 与 parseState 都不变——不进键则「已存工作区」标记静默冻结。
+          // ★ 附件官方标记笔：remotePending/remoteFileId 不进键——两字段全部写点都在
+          // uploadToDsServer 的三拍 patch 内、与 parseState 严格同拍变化（guide 那种 done 后
+          //再置位的独立窗口不存在），键的 parseState 段已覆盖每个变化点
+        }, (att: PendingAttachment) => att.fileId + '|' + (att.parseState ?? '') +
+          ((att.guideWorkspacePath ?? '') === '' ? '' : '|guide'))
       }
       .padding({ left: STRIP_HPAD, right: STRIP_HPAD, top: STRIP_TOP, bottom: STRIP_BOTTOM })
     }
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
-    // Scroll 通用 align 默认 Alignment.Center——内容不足一屏宽时必须显式左对齐（官方
-    // ts-universal-attributes-location 核实，项目列表卡片规范同款）
+    // Scroll 通用 align 默认 Center——内容不足一屏宽必须显式左对齐（列表卡片规范同款）
     .align(Alignment.Start)
     .width('100%')
   }

@@ -1,39 +1,26 @@
-// 提示词注入配置域件（2026-08-30 注入身份/位置/深度配置；提示词编辑页「内容」输入框下方
-// 装配——照领导拍板「分按钮点击弹菜单、选项放菜单、均官方材质」）：
-// · 两行内功能键（2026-09-02 沉浸光感化 + 2026-09-03 内容区回退双态：光感态 = resolvedButton
-//   四件套——材质 REGULAR 基准 + 按压形变/触点光效 + 官方浅灰配色，随沉浸光感总档，无
-//   光感档回退官方灰底；实底态 = fallbackButton* 官方实底（内容区非弹窗组件材质不生效时
-//   兜底，CONTENT_FALLBACK_KEY 驱动）；不覆盖官方默认形状/字号——「选项」但功能单选键，
-//   走功能键形制，非 chips）：「注入身份」
-//   （弹菜单：系统身份/用户身份/AI 回复身份）+「注入位置」（弹菜单：系统提示位/最新
-//   用户消息前/深度 1~4）；
-// · 菜单 = 官方 openMenu 编程式（照 PromptTemplateMenu/AppMenuHost 先例：ComponentContent
-//   成对 init/dispose、弹出前 rebuild、锚点 = 按钮自身 .id（编辑页单实例固定 id）、REGULAR
-//   官方材质随沉浸光感总档、选中项 symbolEndIcon 勾选 checkmark）；
-// · 联动（组合语义 = RequestInject.composeSendMessages 注释）：身份 system → 位置恒
-//   head（位置键禁用 + 官方 disabled 视觉）；身份 assistant → 位置不含「最新用户消息前」
-//   （= 深度 0 = 注入成末条：Anthropic=prefill 合法但 Gemini 末条必须 user 会 400 且跨
-//   模型行为不一致）→ 仅深度 1~4，选中 assistant 时 depth=0 自动钳位为 1；
-// · 取值上行两回调（父页 @State 持有，保存链落库用）；配置组合语义/协议适配见 RequestInject。
-import { ComponentContent, uiMaterial, SymbolGlyphModifier } from '@kit.ArkUI';
+// 提示词注入配置域件（注入身份/位置/深度配置）。三行常显形态（决明拍板）：身份 / 位置 / 深度各一行，
+// 左侧 13fp 灰标签、右侧官方分段胶囊（≤3 项纯文字走分段胶囊，见《规范-列表卡片与组卡》§4.13 分工判据）；
+// 原「身份」「位置」两枚弹菜单功能键已退役。
+// · 三行语义（与 RequestInject.composeSendMessages 一致，字段与保存链零改）：身份 = 系统 / 用户 / AI 回复；
+//   位置 = 开头（系统提示位）/ 消息前（深度位）；深度 = 消息前第 N 条用户消息之前（0 = 最近一条；AI 回复
+//   身份从 1 起，0 会注入成末条，Gemini 拒 + 跨模型不一致）。
+// · 联动：身份 system → 位置恒「开头」、深度不适用（显示固定说明，不给可点控件）；身份 assistant →
+//   深度只 1~4，切到消息前时深度 0 自动钳位 1。
+// · 取值上行两回调（父页 @State 持有，保存链落库用）；本件只读 @Link 三值、改动经回调上行，回到父侧赋值
+//   再经 @Link 回流——@Watch 只负责「父侧异步回填 → 本件分段下标」同步（坑16 家族：@Prop 首帧快照会让
+//   编辑既有模板时仍显示缺省 system/head/0）。
 import { ConfigurationConstant } from '@kit.AbilityKit';
-import { AppMenuHost } from '../../common/AppMenuHost';
+import { SegmentButtonV2Items } from '@kit.ArkUI';
+import { SegmentBar } from '../SegmentBar';
 import {
-  CONTENT_FALLBACK_KEY, IMMERSIVE_LEVEL_KEY, fallbackButtonBg,
-  fallbackButtonFont, fallbackButtonMaterial, fallbackButtonStateEffect, resolvedUiMaterial
-} from '../../common/ImmersiveLevel';
-import { cardDescColor, menuDividerColor } from '../../common/Theme';
+  SEGMENT_BAR_HEIGHT, cardBorderColor, cardDescColor, cardTitleColor
+} from '../../common/Theme';
 import {
   INJECT_DEPTH_MAX, INJECT_POSITION_DEPTH, INJECT_POSITION_HEAD,
   INJECT_ROLE_ASSISTANT, INJECT_ROLE_SYSTEM, INJECT_ROLE_USER
 } from '../../common/providers/RequestInject';
 
-// 锚点 id（编辑页单实例，固定 id 即可——勿加模板 id 后缀）
-export const PROMPT_INJECT_ROLE_ANCHOR_ID: string = 'promptInjectRoleBtn';
-export const PROMPT_INJECT_POSITION_ANCHOR_ID: string = 'promptInjectPositionBtn';
-
-// 注入配置脏值钳位（模块级，回填/保存链共用——2026-08-31 自 PromptEditPage 提取：
-// 编辑页与系统提示词页两处消费，P2-4 消重复；默认值 = 现状注入行为）
+// 注入配置脏值钳位（模块级，回填/保存链共用——编辑页与知识条目页两处消费；默认值 = 现状注入行为）
 export function sanitizeInjectRole(raw: string): string {
   return raw === INJECT_ROLE_USER || raw === INJECT_ROLE_ASSISTANT ? raw : INJECT_ROLE_SYSTEM;
 }
@@ -49,242 +36,206 @@ export function sanitizeInjectDepth(raw: number): number {
   return raw;
 }
 
-// 注入位置档显示（head/depth 两档 + 深度参数——label 与合成共用）
-function roleLabelOf(role: string): string {
-  if (role === INJECT_ROLE_USER) {
-    return '用户身份';
-  }
-  if (role === INJECT_ROLE_ASSISTANT) {
-    return 'AI 回复身份';
-  }
-  return '系统身份';
+// 分段下标 ↔ 域值（顺序契约：身份 0 系统 / 1 用户 / 2 AI 回复；位置 0 开头 / 1 消息前）
+const ROLE_ORDER: string[] = [INJECT_ROLE_SYSTEM, INJECT_ROLE_USER, INJECT_ROLE_ASSISTANT];
+const POSITION_ORDER: string[] = [INJECT_POSITION_HEAD, INJECT_POSITION_DEPTH];
+
+function roleIndexOf(role: string): number {
+  const i: number = ROLE_ORDER.indexOf(sanitizeInjectRole(role));
+  return i < 0 ? 0 : i;
 }
 
-function positionLabelOf(position: string, depth: number): string {
-  if (position === INJECT_POSITION_HEAD) {
-    return '系统提示位';
-  }
-  return depth <= 0 ? '最新用户消息前' : '深度 ' + depth;
+function positionIndexOf(position: string): number {
+  return sanitizeInjectPosition(position) === INJECT_POSITION_DEPTH ? 1 : 0;
 }
 
-// ── 注入身份菜单 ──
-export interface InjectRoleMenuCallbacks {
-  role: string;
-  onPick: (role: string) => void;
-}
-
-@Builder
-export function InjectRoleMenuBuilder(params: InjectRoleMenuCallbacks) {
-  Menu() {
-    MenuItem({
-      content: '系统身份',
-      symbolEndIcon: params.role === INJECT_ROLE_SYSTEM ? new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-    })
-      .onClick(() => {
-        params.onPick(INJECT_ROLE_SYSTEM);
-      })
-    MenuItem({
-      content: '用户身份',
-      symbolEndIcon: params.role === INJECT_ROLE_USER ? new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-    })
-      .onClick(() => {
-        params.onPick(INJECT_ROLE_USER);
-      })
-    MenuItem({
-      content: 'AI 回复身份',
-      symbolEndIcon: params.role === INJECT_ROLE_ASSISTANT ? new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-    })
-      .onClick(() => {
-        params.onPick(INJECT_ROLE_ASSISTANT);
-      })
+// 深度下标：非 AI 回复身份 0~4 五档；AI 回复身份 1~4 四档（域值 1 对应下标 0）
+function depthIndexOf(depth: number, assistant: boolean): number {
+  const d: number = sanitizeInjectDepth(depth);
+  if (assistant) {
+    return (d < 1 ? 1 : d) - 1;
   }
-  .menuItemDivider({
-    color: menuDividerColor(AppStorage.get<number>('appColorMode')),
-    mode: DividerMode.EMBEDDED_IN_MENU
-  })
-}
-
-export class InjectRoleMenuHost extends AppMenuHost<InjectRoleMenuCallbacks> {
-  protected buildNode(uiContext: UIContext,
-    callbacks: InjectRoleMenuCallbacks): ComponentContent<InjectRoleMenuCallbacks> {
-    return new ComponentContent(uiContext, wrapBuilder(InjectRoleMenuBuilder), callbacks,
-      { nestingBuilderSupported: true });
-  }
-
-  open(uiContext: UIContext, callbacks: InjectRoleMenuCallbacks, immersiveLevel: number): void {
-    this.rebuild(uiContext, callbacks);
-    this.show(uiContext, PROMPT_INJECT_ROLE_ANCHOR_ID,
-      // ★ 第三参 true = 交互形变 + 触点流光（2026-09-18 菜单光感笔；官方最佳实践口径，勿回改 false）
-      resolvedUiMaterial(uiMaterial.ImmersiveStyle.REGULAR, immersiveLevel, true));
-  }
-}
-
-// ── 注入位置菜单 ──
-export interface InjectPositionMenuCallbacks {
-  position: string;
-  depth: number;
-  assistantOnly: boolean; // 身份 assistant：菜单不含「最新用户消息前」（联动见头注释）
-  onPick: (position: string, depth: number) => void;
-}
-
-@Builder
-export function InjectPositionMenuBuilder(params: InjectPositionMenuCallbacks) {
-  Menu() {
-    MenuItem({
-      content: '系统提示位',
-      symbolEndIcon: params.position === INJECT_POSITION_HEAD ? new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-    })
-      .onClick(() => {
-        params.onPick(INJECT_POSITION_HEAD, 0);
-      })
-    if (!params.assistantOnly) {
-      MenuItem({
-        content: '最新用户消息前',
-        symbolEndIcon: params.position === INJECT_POSITION_DEPTH && params.depth <= 0 ?
-          new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-      })
-        .onClick(() => {
-          params.onPick(INJECT_POSITION_DEPTH, 0);
-        })
-    }
-    ForEach(depthItems(params.assistantOnly), (d: number) => {
-      MenuItem({
-        content: '深度 ' + d,
-        symbolEndIcon: params.position === INJECT_POSITION_DEPTH && params.depth === d ?
-          new SymbolGlyphModifier($r('sys.symbol.checkmark')) : undefined
-      })
-        .onClick(() => {
-          params.onPick(INJECT_POSITION_DEPTH, d);
-        })
-    }, (d: number): string => String(d))
-  }
-  .menuItemDivider({
-    color: menuDividerColor(AppStorage.get<number>('appColorMode')),
-    mode: DividerMode.EMBEDDED_IN_MENU
-  })
-}
-
-function depthItems(assistantOnly: boolean): number[] {
-  const items: number[] = [];
-  const from: number = assistantOnly ? 1 : 0;
-  for (let d = from; d <= INJECT_DEPTH_MAX; d++) {
-    items.push(d);
-  }
-  return items;
-}
-
-export class InjectPositionMenuHost extends AppMenuHost<InjectPositionMenuCallbacks> {
-  protected buildNode(uiContext: UIContext,
-    callbacks: InjectPositionMenuCallbacks): ComponentContent<InjectPositionMenuCallbacks> {
-    return new ComponentContent(uiContext, wrapBuilder(InjectPositionMenuBuilder), callbacks,
-      { nestingBuilderSupported: true });
-  }
-
-  open(uiContext: UIContext, callbacks: InjectPositionMenuCallbacks, immersiveLevel: number): void {
-    this.rebuild(uiContext, callbacks);
-    this.show(uiContext, PROMPT_INJECT_POSITION_ANCHOR_ID,
-      // ★ 第三参 true = 交互形变 + 触点流光（2026-09-18 菜单光感笔；官方最佳实践口径，勿回改 false）
-      resolvedUiMaterial(uiMaterial.ImmersiveStyle.REGULAR, immersiveLevel, true));
-  }
+  return d;
 }
 
 @Component
 export struct PromptInjectConfig {
-  // 当前配置（父页 @State 持有——保存链落库与回填走父；本域件单选改后上行）
-  @Prop role: string = INJECT_ROLE_SYSTEM;
-  // ★ 命名避坑：不能叫 position——CustomComponent 基类通用属性 position() 冲突
-  // （编译 10505001 实锤），改 injectPosition
-  @Prop injectPosition: string = INJECT_POSITION_HEAD;
-  @Prop depth: number = 0;
+  // 当前配置（父页 @State 持有；本件只读，改动经回调上行）。@Link 非 @Prop：本件挂 PageShell.content
+  //（@BuilderParam）内，@Prop 下发 = 坑16 家族首帧快照——异步回填在首帧后到达不达 UI。@Watch =
+  // 父侧回填时把分段下标同步回来
+  @Link @Watch('onRoleLinkChanged') role: string;
+  // 命名避坑：不能叫 position——CustomComponent 基类通用属性 position() 冲突（编译 10505001 实锤）
+  @Link @Watch('onPositionLinkChanged') injectPosition: string;
+  @Link @Watch('onDepthLinkChanged') depth: number;
+  // 深浅色（行间 hairline 取 cardBorderColor；@StorageProp 订阅，切换即刷）
+  @StorageProp('appColorMode') appColorMode: number =
+    ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   // 上行回调（父页覆写 @State 三字段）
   onRoleChanged: (role: string) => void = (): void => {
   };
   onPositionChanged: (position: string, depth: number) => void = (): void => {
   };
-  // 深浅色 + 菜单材质档位（@StorageProp 自订阅——AppMenuHost 弹出时解析）
-  @StorageProp('appColorMode') appColorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
-  @StorageProp(IMMERSIVE_LEVEL_KEY) immersiveLevel: number = 0;
-  // 内容区回退开关（2026-09-03）：true = 本键官方实底（新规范下内容区材质不生效）；
-  // false = 原材质光感；AppStorage 订阅式切换即刷（坑16 正解，同档位键契约）
-  @StorageProp(CONTENT_FALLBACK_KEY) contentFallback: boolean = true;
-  // 菜单节点宿主（init/open/dispose 成对——见 AppMenuHost 头注释）
-  private roleMenu: InjectRoleMenuHost = new InjectRoleMenuHost();
-  private positionMenu: InjectPositionMenuHost = new InjectPositionMenuHost();
+  // 分段下标（@State + @Watch：下标被点按改动 → 上行回调；父侧三值改动 → link watch 回灌）
+  @State @Watch('onRoleIndexChanged') roleIndex: number = 0;
+  @State @Watch('onPositionIndexChanged') positionIndex: number = 0;
+  @State @Watch('onDepthIndexChanged') depthIndex: number = 0;
+  // 分段选项（普通成员：选项集在页面生命周期内不变；深度两套按身份择一）
+  private roleItems: SegmentButtonV2Items = new SegmentButtonV2Items([
+    { text: '系统' },
+    { text: '用户' },
+    { text: 'AI 回复' }
+  ]);
+  private positionItems: SegmentButtonV2Items = new SegmentButtonV2Items([
+    { text: '开头' },
+    { text: '消息前' }
+  ]);
+  private depthItemsAll: SegmentButtonV2Items = new SegmentButtonV2Items([
+    { text: '0' }, { text: '1' }, { text: '2' }, { text: '3' }, { text: '4' }
+  ]);
+  private depthItemsAssistant: SegmentButtonV2Items = new SegmentButtonV2Items([
+    { text: '1' }, { text: '2' }, { text: '3' }, { text: '4' }
+  ]);
 
-  aboutToAppear(): void {
-    this.roleMenu.init(this.getUIContext(), this.roleCallbacks());
-    this.positionMenu.init(this.getUIContext(), this.positionCallbacks());
+  private onRoleLinkChanged(): void {
+    this.roleIndex = roleIndexOf(this.role);
+    this.positionIndex = positionIndexOf(this.injectPosition);
+    this.depthIndex = depthIndexOf(this.depth, this.role === INJECT_ROLE_ASSISTANT);
   }
 
-  aboutToDisappear(): void {
-    this.roleMenu.dispose();
-    this.positionMenu.dispose();
+  private onPositionLinkChanged(): void {
+    this.positionIndex = positionIndexOf(this.injectPosition);
+    this.depthIndex = depthIndexOf(this.depth, this.role === INJECT_ROLE_ASSISTANT);
   }
 
-  // 身份回调（简单透传；联动 = 位置键禁用/钳位在父侧由 onRoleChanged 覆写时收口）
-  private roleCallbacks(): InjectRoleMenuCallbacks {
-    return {
-      role: this.role,
-      onPick: (role: string): void => {
-        this.onRoleChanged(role);
-      }
-    };
+  private onDepthLinkChanged(): void {
+    this.depthIndex = depthIndexOf(this.depth, this.role === INJECT_ROLE_ASSISTANT);
   }
 
-  private positionCallbacks(): InjectPositionMenuCallbacks {
-    return {
-      position: this.injectPosition,
-      depth: this.depth,
-      assistantOnly: this.role === INJECT_ROLE_ASSISTANT,
-      onPick: (position: string, depth: number): void => {
-        this.onPositionChanged(position, depth);
-      }
-    };
+  private onRoleIndexChanged(): void {
+    const next: string = ROLE_ORDER[this.roleIndex] ?? INJECT_ROLE_SYSTEM;
+    if (next !== this.role) {
+      this.onRoleChanged(next);
+    }
   }
 
-  // 位置键禁用（身份 system 恒 head——组合语义见域件头注释）
-  private positionDisabled(): boolean {
-    return this.role === INJECT_ROLE_SYSTEM;
+  private onPositionIndexChanged(): void {
+    const next: string = POSITION_ORDER[this.positionIndex] ?? INJECT_POSITION_HEAD;
+    const d: number = next === INJECT_POSITION_HEAD ? 0 : this.depthValue();
+    if (next !== this.injectPosition || d !== this.depth) {
+      this.onPositionChanged(next, d);
+    }
+  }
+
+  private onDepthIndexChanged(): void {
+    if (this.injectPosition !== INJECT_POSITION_DEPTH) {
+      return;
+    }
+    const d: number = this.depthValue();
+    if (d !== this.depth) {
+      this.onPositionChanged(INJECT_POSITION_DEPTH, d);
+    }
+  }
+
+  // 下标 → 域深度（AI 回复身份从 1 起）
+  private depthValue(): number {
+    const base: number = this.role === INJECT_ROLE_ASSISTANT ? 1 : 0;
+    const v: number = base + this.depthIndex;
+    return v > INJECT_DEPTH_MAX ? INJECT_DEPTH_MAX : v;
+  }
+
+  // 联动说明（三态分支：系统固定 / 消息前可调 / 非消息前不适用）
+  private hintText(): string {
+    if (this.role === INJECT_ROLE_SYSTEM) {
+      return '系统身份固定注入系统提示位，不调深度。';
+    }
+    if (this.injectPosition !== INJECT_POSITION_DEPTH) {
+      return this.role === INJECT_ROLE_ASSISTANT ?
+        'AI 回复身份当前从开头注入。改为消息前可按深度 1~4 注入，部分模型会按 prefill 续写。' :
+        '用户身份当前从开头注入。改为消息前可紧邻目标用户消息。';
+    }
+    return this.role === INJECT_ROLE_ASSISTANT ?
+      'AI 回复身份按深度注入，深度 1 表示最近一条用户消息之前。部分模型会按 prefill 续写。' :
+      '按深度注入。深度 0 表示最近一条用户消息之前，数字越大越靠前。';
   }
 
   build() {
-    Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        Button('身份：' + roleLabelOf(this.role))
-          .fontColor(fallbackButtonFont(this.contentFallback, false))
-          .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
-          .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
-          .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
-          .id(PROMPT_INJECT_ROLE_ANCHOR_ID)
-          .onClick((): void => {
-            this.roleMenu.open(this.getUIContext(), this.roleCallbacks(),
-              this.immersiveLevel);
-          })
-        Button('位置：' + positionLabelOf(this.injectPosition, this.depth))
-          .fontColor(fallbackButtonFont(this.contentFallback, false))
-          .backgroundColor(fallbackButtonBg(this.contentFallback, this.immersiveLevel, false))
-          .systemMaterial(fallbackButtonMaterial(this.contentFallback, this.immersiveLevel, false))
-          .stateEffect(fallbackButtonStateEffect(this.contentFallback, this.immersiveLevel))
-          .enabled(!this.positionDisabled())
-          .id(PROMPT_INJECT_POSITION_ANCHOR_ID)
-          .onClick((): void => {
-            if (this.positionDisabled()) {
-              this.getUIContext().getPromptAction().showToast({ message: '系统身份固定注入系统提示位' });
-              return;
-            }
-            this.positionMenu.open(this.getUIContext(), this.positionCallbacks(),
-              this.immersiveLevel);
-          })
+    // 三行统一 40 行高（迁就最高的分段胶囊），行间 0.5vp hairline——纯文字分支不掉行高，标签列与内容列同网格
+    Column() {
+      Row({ space: 10 }) {
+        Text('身份')
+          .fontSize(13)
+          .fontColor(cardDescColor())
+          .width(64)
+        Column() {
+          SegmentBar({ items: this.roleItems, selectedIndex: $roleIndex })
+        }
+        .layoutWeight(1)
       }
       .width('100%')
+      .height(SEGMENT_BAR_HEIGHT)
       .alignItems(VerticalAlign.Center)
 
-      Text(this.role === INJECT_ROLE_ASSISTANT ?
-        'AI 回复身份以助手既往回复身份注入，部分模型按 prefill 续写。位置仅深度 1~4。' :
-        '系统身份注入系统提示位。用户身份紧邻目标用户消息，位置与深度可配。')
-        .fontSize(11)
+      Divider()
+        .strokeWidth(0.5)
+        .color(cardBorderColor(this.appColorMode))
+        .margin({ top: 6, bottom: 6 })
+
+      // 位置（系统身份固定开头，不给可点控件——避免点了不生效）
+      Row({ space: 10 }) {
+        Text('位置')
+          .fontSize(13)
+          .fontColor(cardDescColor())
+          .width(64)
+        if (this.role === INJECT_ROLE_SYSTEM) {
+          Text('系统提示位')
+            .fontSize(13)
+            .fontColor(cardTitleColor())
+            .layoutWeight(1)
+        } else {
+          Column() {
+            SegmentBar({ items: this.positionItems, selectedIndex: $positionIndex })
+          }
+          .layoutWeight(1)
+        }
+      }
+      .width('100%')
+      .height(SEGMENT_BAR_HEIGHT)
+      .alignItems(VerticalAlign.Center)
+
+      Divider()
+        .strokeWidth(0.5)
+        .color(cardBorderColor(this.appColorMode))
+        .margin({ top: 6, bottom: 6 })
+
+      Row({ space: 10 }) {
+        Text('深度')
+          .fontSize(13)
+          .fontColor(cardDescColor())
+          .width(64)
+        if (this.role !== INJECT_ROLE_SYSTEM && this.injectPosition === INJECT_POSITION_DEPTH) {
+          Column() {
+            SegmentBar({
+              items: this.role === INJECT_ROLE_ASSISTANT ? this.depthItemsAssistant : this.depthItemsAll,
+              selectedIndex: $depthIndex
+            })
+          }
+          .layoutWeight(1)
+        } else {
+          Text(this.role === INJECT_ROLE_SYSTEM ? '系统身份不调深度' : '位置为开头时不调深度')
+            .fontSize(13)
+            .fontColor(cardDescColor())
+            .layoutWeight(1)
+        }
+      }
+      .width('100%')
+      .height(SEGMENT_BAR_HEIGHT)
+      .alignItems(VerticalAlign.Center)
+
+      Text(this.hintText())
+        .fontSize(13)
         .fontColor(cardDescColor())
         .width('100%')
+        .margin({ top: 10 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

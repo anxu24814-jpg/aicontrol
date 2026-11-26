@@ -1,10 +1,12 @@
-// 模型引用检测（2026-09-17 服务商模型卡菜单与删除笔）：删除模型前的「有使用」检查——
+// 模型引用检测：删除模型前的「有使用」检查——
 // 模型卡菜单点「删除」时先探一遍，删除确认弹窗据此多提示一句，让用户看清删完谁受影响。
 // 检测三面（与 ProviderDb.deleteModel 的级联清两面 + 功能模型槽位面同源，改级联须回改本件）：
-// ①功能模型五槽（AppStorage 键对）：默认对话 / 标题生成 / 记忆提取 / 记忆优化 / 文字识别的
-//   视觉模型；★ 主动消息复用记忆提取两键（ProactiveGen），开关开着时标签并入点名——否则
-//   用户删完会发现主动消息也停了却没人告诉过他；★ OCR 面只按「已选模型」两键判定，引擎
-//   段位在系统识别/内置识别时该两键仍可能留着旧值，故标签按「文字识别」名义给出（段位
+// ①功能模型八槽（AppStorage 键对）：默认对话 / 标题生成 / 推荐问题 / 上下文压缩 / 记忆提取 /
+//   记忆优化 / 文字识别 / 命令审批（推荐问题与命令审批两槽系停用即解绑笔补齐——
+//   原只查六槽，删模型提示会漏报这两处；同笔起删除与停用都会真的清掉这些槽位，提示口径
+//   必须全量点名）；★ 主动消息复用记忆提取两键（ProactiveGen），开关开着时标签并入点名——
+//   否则用户删完会发现主动消息也停了却没人告诉过他；★ OCR 面只按「已选模型」两键判定，
+//   引擎段位在系统识别/内置识别时该两键仍可能留着旧值，故标签按「文字识别」名义给出（段位
 //   不查：段位是引擎选择不是引用关系，查了会把没在用的模型报成在用）。
 // ②助手绑定（assistants 表 providerId/modelId 两列，DB v10）。
 // ③会话级覆盖（conversations 表 modelProviderId/modelId 两列，DB v24）。
@@ -15,14 +17,16 @@
 // checkModelUsage 一函数内（规格表也就地构造，不在顶层读导入常量——坑50 家族口径）。
 // ★ 检测不拦删除：查失败由调用方 catch 兜底并降级为不提示（删除照常走完），别把一次
 // 读库失败变成删不掉模型（P0-1 的留痕在调用侧）。
-import { DEFAULT_MODEL_KEY, DEFAULT_PROVIDER_KEY, OCR_MODEL_KEY, OCR_PROVIDER_KEY,
+import { APPROVAL_MODEL_KEY, APPROVAL_PROVIDER_KEY, DEFAULT_MODEL_KEY, DEFAULT_PROVIDER_KEY,
+  OCR_MODEL_KEY, OCR_PROVIDER_KEY, SUGGEST_MODEL_KEY, SUGGEST_PROVIDER_KEY,
   TITLE_MODEL_KEY, TITLE_PROVIDER_KEY } from './ProviderDb';
 import { MEMORY_MODEL_KEY, MEMORY_PROVIDER_KEY } from '../MemoryGen';
 import { MEMORY_OPT_MODEL_KEY, MEMORY_OPT_PROVIDER_KEY } from '../MemoryOpt';
-import { PROACTIVE_ENABLED_KEY } from '../ProactiveGen';
+import { PROACTIVE_ENABLED_KEY } from '../ProactiveConfig';
 import { COMPRESS_MODEL_KEY, COMPRESS_PROVIDER_KEY } from '../CompressGen';
-import { SETTING_TITLE_COMPRESS, SETTING_TITLE_DEFAULT_MODEL, SETTING_TITLE_MEMORY_MODEL,
-  SETTING_TITLE_MEMORY_OPT_MODEL, SETTING_TITLE_OCR, SETTING_TITLE_TITLE_MODEL } from '../SettingSearch';
+import { SETTING_TITLE_APPROVAL, SETTING_TITLE_COMPRESS, SETTING_TITLE_DEFAULT_MODEL,
+  SETTING_TITLE_MEMORY_MODEL, SETTING_TITLE_MEMORY_OPT_MODEL, SETTING_TITLE_OCR,
+  SETTING_TITLE_SUGGEST, SETTING_TITLE_TITLE_MODEL } from '../SettingSearch';
 import { AssistantRow, queryAssistants } from './AssistantDb';
 import { countConversationsByModel } from './ChatDb';
 
@@ -85,16 +89,22 @@ export async function checkModelUsage(providerId: string,
         label: SETTING_TITLE_DEFAULT_MODEL },
       { providerKey: TITLE_PROVIDER_KEY, modelKey: TITLE_MODEL_KEY,
         label: SETTING_TITLE_TITLE_MODEL },
+      // 推荐问题槽（停用即解绑笔补齐）：两键齐 = 已配置；空槽不命中 modelPairHit
+      { providerKey: SUGGEST_PROVIDER_KEY, modelKey: SUGGEST_MODEL_KEY,
+        label: SETTING_TITLE_SUGGEST },
       { providerKey: MEMORY_PROVIDER_KEY, modelKey: MEMORY_MODEL_KEY,
         label: memorySlotLabel() },
       { providerKey: MEMORY_OPT_PROVIDER_KEY, modelKey: MEMORY_OPT_MODEL_KEY,
         label: SETTING_TITLE_MEMORY_OPT_MODEL },
       { providerKey: OCR_PROVIDER_KEY, modelKey: OCR_MODEL_KEY,
         label: SETTING_TITLE_OCR },
-      // 上下文压缩槽（2026-09-23 上下文压缩笔）：已配置才点名（modelPairHit 空对不命中）——
+      // 上下文压缩槽：已配置才点名（modelPairHit 空对不命中）——
       // 空槽回退当前会话模型，不构成「删模型影响面」
       { providerKey: COMPRESS_PROVIDER_KEY, modelKey: COMPRESS_MODEL_KEY,
-        label: SETTING_TITLE_COMPRESS }
+        label: SETTING_TITLE_COMPRESS },
+      // 命令审批槽（停用即解绑笔补齐）：空槽 = 回人工确认，不构成影响面
+      { providerKey: APPROVAL_PROVIDER_KEY, modelKey: APPROVAL_MODEL_KEY,
+        label: SETTING_TITLE_APPROVAL }
     ];
     for (const spec of specs) {
       const slotProviderId: string = AppStorage.get<string>(spec.providerKey) ?? '';
